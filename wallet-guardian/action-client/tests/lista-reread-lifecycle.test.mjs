@@ -149,6 +149,7 @@ async function preview(taskBody, onRpc) {
     onFetch: (path, init) => {
       const url = String(path);
       if (url === TRUSTED_LISTA.rpcUrl) return onRpc(init);
+      if (url.endsWith("/cancel")) return undefined;
       if (url.startsWith("/api/tasks/")) return jsonResponse(taskBody);
       return undefined;
     },

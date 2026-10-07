@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { clientConfirmDecision } from "./gate.mjs";
 import { LOGIN_STATEMENT } from "./login-statement.mjs";
-import { parsePrivateTaskRef, privateTaskSendAllowed } from "./private-task.mjs";
+import { parsePrivateTaskRef, privateTaskSendAllowed, readBoundedJson } from "./private-task.mjs";
 
 test("private task paths stay on /t/<ref>", () => {
   const ref = `ref_${"ab".repeat(16)}`;
@@ -52,8 +52,39 @@ test("client source does not fetch static tasks or send transactions", () => {
   assert.equal(source.includes("wallet_sendCalls"), false);
   assert.equal(source.includes("eth_signTypedData"), false);
   assert.equal(source.includes("personal_sign"), true);
-  assert.equal(source.includes("LOGIN_STATEMENT"), true);
-  assert.equal(source.includes("login-statement.mjs"), true);
+  assert.equal(source.includes("acceptLoginChallenge"), true);
+  assert.equal(source.includes("beginLogout"), true);
+  assert.equal(source.includes("noteAttemptCsrf"), true);
+  assert.equal(source.includes("canRedrawCapability"), true);
+  assert.equal(source.includes("resolveCancel"), true);
+  assert.equal(source.includes("stampMatches"), true);
+  assert.equal(source.includes(".includes(LOGIN_STATEMENT)"), false);
   assert.equal(LOGIN_STATEMENT.includes("does not authorize sending"), true);
   assert.equal(source.includes("parsePrivateTaskRef"), true);
+});
+
+test("readBoundedJson cancels and releases the reader when the body is too large", async () => {
+  let cancelled = false;
+  let released = false;
+  const response = {
+    headers: { get: () => "application/json" },
+    body: {
+      getReader() {
+        return {
+          async read() {
+            return { done: false, value: new Uint8Array(64) };
+          },
+          async cancel() {
+            cancelled = true;
+          },
+          releaseLock() {
+            released = true;
+          },
+        };
+      },
+    },
+  };
+  await assert.rejects(() => readBoundedJson(response, 32), /too large/);
+  assert.equal(cancelled, true);
+  assert.equal(released, true);
 });

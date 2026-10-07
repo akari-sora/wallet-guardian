@@ -8,6 +8,7 @@ import { onRequest } from "../../functions/api/[[path]].js";
 import { onRequest as apiMiddleware } from "../../functions/api/_middleware.js";
 import { handleApi } from "./handle.mjs";
 import { randomHex, sha256Hex } from "./http.mjs";
+import { acceptLoginChallenge } from "../siwe-gate.mjs";
 import { checksumAddress } from "./siwe.mjs";
 import { createPrimaryDatabase } from "./test-db.mjs";
 
@@ -137,6 +138,7 @@ async function login(box, privateKey, ip = "203.0.113.9") {
   const address = checksumAddress(addressOf(privateKey));
   const challenge = await take(box.env, "POST", "/api/auth/challenge", { json: { address }, ip });
   assert.equal(challenge.response.status, 200, challenge.text);
+  assert.equal(typeof acceptLoginChallenge(challenge.body, address, Date.now()), "string");
   assert.equal(challenge.body.erc1271, "unsupported");
   assert.equal(challenge.body.execution_authorized, false);
   assert.equal(challenge.body.send_authorized, false);
@@ -585,4 +587,40 @@ test("challenge is bound to domain, chain, and attempt, and is rate limited", as
   });
   assert.equal(noOrigin.response.status, 403);
   assert.equal(noOrigin.body.error, "origin_required");
+});
+
+test("expired challenges are removed before the global quota is applied", async () => {
+  const box = openEnv({ AUTH_CHALLENGE_GLOBAL_LIMIT: "1", AUTH_CHALLENGE_LIMIT: "10" });
+  const now = Math.floor(Date.now() / 1000);
+  await box.db().prepare(
+    `INSERT INTO challenges
+      (nonce, attempt_id, csrf_token, address, domain, uri, chain_id, message, expires_at, consumed)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+  ).bind(
+    randomHex(16),
+    randomHex(32),
+    randomHex(32),
+    `0x${"11".repeat(20)}`,
+    "wallet-guardian-action-client.pages.dev",
+    ORIGIN,
+    56,
+    "expired",
+    now - 5,
+  ).run();
+  await box.db().prepare(
+    "INSERT INTO rate_buckets (bucket_key, window_start, count) VALUES (?, ?, ?)",
+  ).bind("challenge:old", now - 10_000, 99).run();
+  const address = checksumAddress(addressOf(secp256k1.utils.randomPrivateKey()));
+  const issued = await take(box.env, "POST", "/api/auth/challenge", { json: { address }, ip: "203.0.113.77" });
+  assert.equal(issued.response.status, 200, issued.text);
+  const expired = await box.db().prepare("SELECT COUNT(*) AS n FROM challenges WHERE message = ?").bind("expired").first();
+  assert.equal(Number(expired.n), 0);
+  const staleBucket = await box.db().prepare("SELECT bucket_key FROM rate_buckets WHERE bucket_key = ?").bind("challenge:old").first();
+  assert.equal(staleBucket, null);
+  const other = checksumAddress(addressOf(secp256k1.utils.randomPrivateKey()));
+  const blocked = await take(box.env, "POST", "/api/auth/challenge", { json: { address: other }, ip: "203.0.113.78" });
+  assert.equal(blocked.response.status, 429);
+  assert.equal(blocked.body.error, "rate_limited");
+  const live = await box.db().prepare("SELECT COUNT(*) AS n FROM challenges WHERE consumed = 0").bind().first();
+  assert.equal(Number(live.n), 1);
 });

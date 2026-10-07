@@ -90,7 +90,8 @@ export async function harness({ onFetch, onWallet, initialSession = session(), p
     if (path === '/api/auth/verify') return jsonResponse(session());
     if (path === '/api/auth/logout') return jsonResponse({ authenticated: false, revoked: true });
     if (path.endsWith('/cancel')) return jsonResponse({ status:'cancelled', ref:REF, revision:1,
-      execution_authorized:false, send_authorized:false, tx_hash_verified:false, on_chain_revoked:false });
+      cancel_allowed:false, execution_authorized:false, send_authorized:false,
+      tx_hash_verified:false, on_chain_revoked:false });
     if (path.startsWith('/api/tasks/')) return jsonResponse(await envelope());
     throw new Error(`Unexpected network request: ${path}`);
   };

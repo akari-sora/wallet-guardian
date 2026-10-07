@@ -1,10 +1,24 @@
 import { digestBody } from "./canonical.mjs";
+import {
+  CANCEL_PENDING_CONFIRMATION,
+  beginLogin,
+  beginLogout,
+  canRedrawCapability,
+  createClientFlow,
+  endLogin,
+  finishLogout,
+  isCancelUnconfirmed,
+  mutationCsrf,
+  noteAttemptCsrf,
+  resolveCancel,
+  stampMatches,
+} from "./client-flow.mjs";
 import { clientConfirmDecision, eip5792Status, executionMode, simulationAllowsSend } from "./gate.mjs";
 import { emptyRereadView, REASON_TEXT, reverifyListaClaim, settleReread, statusLines } from "./lista-reread.mjs";
-import { LOGIN_STATEMENT } from "./login-statement.mjs";
 import { validateLoginChallenge } from "./login-challenge.mjs";
 import { assertInertPayload, assertTaskRef, boundedJson, units, validatePlan } from "./plan-validation.mjs";
 import { parsePrivateTaskRef, privateTaskSendAllowed, readBoundedJson } from "./private-task.mjs";
+import { acceptLoginChallenge } from "./siwe-gate.mjs";
 import { fetchTrustedRpc, TRUSTED_LISTA } from "./trusted-lista.mjs";
 
 const TASK_VERSION = "guardian.task.v1";
@@ -135,6 +149,41 @@ let walletAccount: string | null = null;
 let walletChainId: number | null = null;
 let watchedProvider: EthereumProvider | null = null;
 const walletHandlers: { event: string; handler: (value: unknown) => void }[] = [];
+const flow = createClientFlow();
+
+type ViewStamp = {
+  generation: number;
+  epoch: number;
+  ref: string | null;
+  revision: number | null;
+};
+
+function syncFlow(): void {
+  flow.loadGeneration = loadGeneration;
+  flow.sessionEpoch = authGeneration;
+  flow.lastPlan = lastPlan;
+  flow.lastTask = lastTask;
+  flow.observedCapability = observedCapability;
+  flow.sessionCsrf = csrfToken;
+  flow.privateRef = privateRef;
+  flow.privateRevision = privateRevision;
+  flow.privateCancelAllowed = privateCancelAllowed;
+}
+
+function applyFlowView(): void {
+  loadGeneration = flow.loadGeneration;
+  lastPlan = (flow.lastPlan as Plan | null) ?? null;
+  lastTask = (flow.lastTask as Task | null) ?? null;
+  observedCapability = flow.observedCapability;
+  csrfToken = flow.sessionCsrf;
+  privateRef = flow.privateRef;
+  privateRevision = flow.privateRevision;
+  privateCancelAllowed = flow.privateCancelAllowed;
+}
+
+function viewStamp(generation: number, epoch: number, ref: string | null, revision: number | null): ViewStamp {
+  return { generation, epoch, ref, revision };
+}
 
 function dropReread(reason: string | null = null): void {
   rereadSeq += 1;
@@ -653,6 +702,7 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
 
 async function queryCapability(chainId: number, generation: number): Promise<void> {
   if (generation !== loadGeneration) return;
+  const stamp = viewStamp(generation, authGeneration, privateRef, privateRevision);
   const ethereum = ethereumProvider();
   if (!ethereum) {
     banner.textContent = "找不到瀏覽器錢包，無法查詢 EIP-5792。維持模式 A，不會送出交易。";
@@ -660,10 +710,12 @@ async function queryCapability(chainId: number, generation: number): Promise<voi
   }
   try {
     const capabilities = await ethereum.request({ method: "wallet_getCapabilities" });
-    if (generation !== loadGeneration) return;
+    syncFlow();
+    if (!canRedrawCapability(flow, stamp) || generation !== loadGeneration) return;
     observedCapability = eip5792Status(capabilities, chainId);
   } catch {
-    if (generation !== loadGeneration) return;
+    syncFlow();
+    if (!canRedrawCapability(flow, stamp) || generation !== loadGeneration) return;
     observedCapability = "unknown";
     banner.textContent = "批次能力查詢失敗。維持模式 A，不會送出交易。";
   }
@@ -718,7 +770,11 @@ function api(path: string, init: RequestInit = {}): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
   if (method !== "GET" && method !== "HEAD") {
     if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
-    if (csrfToken && !headers.has("x-csrf-token")) headers.set("x-csrf-token", csrfToken);
+    if (!headers.has("x-csrf-token")) {
+      syncFlow();
+      const token = mutationCsrf(flow, path === "/api/auth/verify" ? "verify" : "session");
+      if (token) headers.set("x-csrf-token", token);
+    }
   }
   return fetch(path, {
     ...init,
@@ -742,11 +798,16 @@ function applySession(body: unknown): boolean {
   return valid;
 }
 
-async function loadPrivateTask(ref: string, generation: number): Promise<void> {
+async function loadPrivateTask(ref: string, generationOrStamp: number | ViewStamp): Promise<void> {
+  const generation = typeof generationOrStamp === "number" ? generationOrStamp : generationOrStamp.generation;
+  const stamp = typeof generationOrStamp === "number"
+    ? viewStamp(generation, authGeneration, ref, privateRevision)
+    : generationOrStamp;
   try {
     const response = await api(`/api/tasks/${ref}`, { signal: AbortSignal.timeout(10000) });
     const body = (await readBoundedJson(response)) as PrivateTaskBody;
-    if (generation !== loadGeneration) return;
+    syncFlow();
+    if (!stampMatches(flow, stamp) || generation !== loadGeneration) return;
     if (response.status === 401) {
       applySession(null);
       renderError("登入已失效。請重新登入。不會送出交易。");
@@ -784,7 +845,10 @@ async function loadPrivateTask(ref: string, generation: number): Promise<void> {
     syncAccountControls();
     await renderPayload(body.task, generation);
   } catch {
-    if (generation === loadGeneration) renderError("無法載入私人任務。不跟隨重新導向，也不會送出交易。");
+    syncFlow();
+    if (stampMatches(flow, stamp) && generation === loadGeneration) {
+      renderError("無法載入私人任務。不跟隨重新導向，也不會送出交易。");
+    }
   }
 }
 
@@ -812,6 +876,11 @@ async function login(): Promise<void> {
   const authEpoch = ++authGeneration;
   invalidatePrivateView();
   syncAccountControls();
+  if (beginLogin(flow) == null) {
+    authBusy = false;
+    syncAccountControls();
+    return;
+  }
   try {
     const accounts = await ethereum.request({ method: "eth_requestAccounts" });
     const address = Array.isArray(accounts) ? String(accounts[0] ?? "") : "";
@@ -827,7 +896,11 @@ async function login(): Promise<void> {
     const issued = await readBoundedJson(challengeResponse);
     if (authEpoch !== authGeneration) return;
     if (!challengeResponse.ok) throw new Error("無法取得這條鏈的唯讀登入挑戰。");
+    const rebuilt = acceptLoginChallenge(issued, address, Date.now());
     const challenge = validateLoginChallenge(issued, { origin: window.location.origin, address, chainId });
+    if (typeof rebuilt !== "string" || rebuilt !== challenge.message || !noteAttemptCsrf(flow, challenge.csrfToken)) {
+      throw new Error("登入訊息不是固定的讀取聲明。不會簽名。");
+    }
     // Also pin the wallet identity immediately before offering the message.
     const currentAccounts = await ethereum.request({ method: "eth_accounts" });
     const currentChain = await ethereum.request({ method: "eth_chainId" });
@@ -837,12 +910,13 @@ async function login(): Promise<void> {
     }
     // Keep the challenge CSRF local. A rejected login must not corrupt the
     // existing session's CSRF token used by logout and task cancellation.
-    const signature = await ethereum.request({ method: "personal_sign", params: [challenge.message, address] });
+    const signature = await ethereum.request({ method: "personal_sign", params: [rebuilt, address] });
     if (authEpoch !== authGeneration) return;
     if (typeof signature !== "string") throw new Error("未取得登入簽名。");
+    const verifyCsrf = mutationCsrf(flow, "verify");
     const verifyResponse = await api("/api/auth/verify", {
-      method: "POST", headers: { "x-csrf-token": challenge.csrfToken },
-      body: JSON.stringify({ message: challenge.message, signature }), signal: AbortSignal.timeout(10000),
+      method: "POST", headers: { "x-csrf-token": verifyCsrf ?? "" },
+      body: JSON.stringify({ message: rebuilt, signature }), signal: AbortSignal.timeout(10000),
     });
     const verified = await readBoundedJson(verifyResponse);
     if (authEpoch !== authGeneration) return;
@@ -856,6 +930,7 @@ async function login(): Promise<void> {
   } catch {
     if (authEpoch === authGeneration) banner.textContent = "登入未完成；既有登入不會因此獲得新權限。可重試或登出，不會送出交易。";
   } finally {
+    endLogin(flow);
     authBusy = false;
     syncAccountControls();
   }
@@ -867,7 +942,12 @@ async function logout(): Promise<void> {
   if (authBusy) return;
   authBusy = true;
   ++authGeneration;
-  invalidatePrivateView(false);
+  syncFlow();
+  beginLogout(flow);
+  applyFlowView();
+  dropReread();
+  hideCancel();
+  renderEmpty();
   syncAccountControls();
   try {
     const response = await api("/api/auth/logout", {
@@ -877,6 +957,8 @@ async function logout(): Promise<void> {
     if (response.status !== 401 && (!response.ok || result.authenticated !== false || result.revoked !== true)) {
       throw new Error("logout unconfirmed");
     }
+    finishLogout(flow);
+    applyFlowView();
     applySession(null);
     banner.textContent = "已登出。此工作階段已失效。不會送出交易。";
   } catch {
@@ -891,29 +973,52 @@ async function cancelPrivateTask(): Promise<void> {
   if (authBusy || !privateRef || privateRevision == null || !privateCancelAllowed || !csrfToken) return;
   const ref = privateRef;
   const revision = privateRevision;
-  const generation = invalidatePrivateView();
+  const generation = loadGeneration;
+  const stamp = viewStamp(generation, authGeneration, ref, revision);
   try {
     const response = await api(`/api/tasks/${ref}/cancel`, {
       method: "POST",
       body: JSON.stringify({ revision }),
       signal: AbortSignal.timeout(10000),
     });
-    const body = (await readBoundedJson(response)) as PrivateTaskBody;
-    if (generation !== loadGeneration) return;
-    if (body.on_chain_revoked === true || body.tx_hash_verified === true || body.send_authorized === true || body.execution_authorized === true) {
-      renderError("取消回應試圖宣稱鏈上撤銷或授權送出。已拒絕。");
+    let body: unknown;
+    try {
+      body = await readBoundedJson(response);
+    } catch (error) {
+      syncFlow();
+      if (!stampMatches(flow, stamp)) return;
+      if (isCancelUnconfirmed(error)) {
+        banner.textContent = CANCEL_PENDING_CONFIRMATION;
+        await loadPrivateTask(ref, stamp);
+        return;
+      }
+      banner.textContent = "取消結果未確認，請重新讀取任務狀態。不會送出交易。";
       return;
     }
-    if (!response.ok) {
-      banner.textContent = "取消未確認，請重新讀取任務狀態。不會送出交易。";
+    syncFlow();
+    if (!stampMatches(flow, stamp)) return;
+    const outcome = resolveCancel(flow, stamp, { ok: response.ok, body });
+    if (outcome === "cancelled") {
+      applyFlowView();
+      dropReread();
+      hideCancel();
+      view.className = "card";
+      view.textContent = "未執行任務已取消。這只更新讀取紀錄，不是鏈上撤銷，也沒有送出交易。";
+      banner.textContent = "主網送出保持關閉。取消不是交易。";
+      paintVerification(emptyRereadView(undefined));
       return;
     }
-    hideCancel();
-    view.className = "card";
-    view.textContent = "未執行任務已取消。這只更新讀取紀錄，不是鏈上撤銷，也沒有送出交易。";
-    banner.textContent = "主網送出保持關閉。取消不是交易。";
-  } catch {
-    if (generation === loadGeneration) banner.textContent = "取消結果未確認，請重新讀取任務狀態。不會送出交易。";
+    if (outcome === "stale") return;
+    banner.textContent = "任務沒有取消。取消回應不符合已取消的格式。不會把它當成已取消，也不會送出交易。";
+  } catch (error) {
+    syncFlow();
+    if (!stampMatches(flow, stamp)) return;
+    if (isCancelUnconfirmed(error)) {
+      banner.textContent = CANCEL_PENDING_CONFIRMATION;
+      await loadPrivateTask(ref, stamp);
+      return;
+    }
+    banner.textContent = "任務沒有取消。不會送出交易。";
   }
 }
 
@@ -940,13 +1045,16 @@ function inspectLocation(): void {
 
 async function restoreSession(): Promise<boolean> {
   const authEpoch = authGeneration;
+  const stamp = viewStamp(loadGeneration, authEpoch, privateRef, privateRevision);
   try {
     const response = await api("/api/session", { signal: AbortSignal.timeout(10000) });
     const body = await readBoundedJson(response);
-    if (authEpoch !== authGeneration || authBusy) return false;
+    syncFlow();
+    if (!stampMatches(flow, stamp) || authEpoch !== authGeneration || authBusy) return false;
     applySession(response.ok ? body : null);
   } catch {
-    if (authEpoch !== authGeneration || authBusy) return false;
+    syncFlow();
+    if (!stampMatches(flow, stamp) || authEpoch !== authGeneration || authBusy) return false;
     applySession(null);
   }
   return true;

@@ -44,6 +44,10 @@ export async function readBoundedJson(response, limit = 256 * 1024) {
     return JSON.parse(new TextDecoder().decode(bytes));
   } finally {
     await reader.cancel().catch(() => {});
-    reader.releaseLock();
+    try {
+      reader.releaseLock();
+    } catch {
+      // Some streams release the lock when cancel finishes.
+    }
   }
 }
