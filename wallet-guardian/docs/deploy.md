@@ -1,6 +1,6 @@
 # 固定 HTTPS 任務頁
 
-狀態：**BLOCKED**。這個環境沒有 Vercel、Cloudflare 或 GitLab 的寫入憑證，所以沒有已驗證的公開網址。`fixed_https_origin` 仍是 false。任務連結不會發行，直到下面其中一個步驟由專案擁有者完成並回讀到 HTTPS 200。
+狀態：**VERIFIED_ORIGIN（2026-10-07）**。公開固定來源已上線：https://wallet-guardian-action-client.pages.dev/（Cloudflare Pages Direct Upload，HTTP 200 已回讀）。套件內 `workbench` 預設 `fixed_https_origin` 仍是程式常數 `False`，要發行任務連結還需把 origin 接進設定／環境（見下方「已驗證固定 HTTPS」）。主網送出預設關閉。
 
 固定客戶端是 `action-client@0.3.0`。它只接受 `guardian.task.v1`。網址只允許 `?ref=ref_` 加 32 個十六進位字，再向同一個來源讀 `/tasks/<ref>.json`。網址不放地址、金額或金鑰。
 
@@ -30,7 +30,7 @@ npm run build
 - 離線：`pytest` **180 passed**；`action-client` build／gate／canonical **通過**。
 - GitLab CI／Pages：**失敗**，原因 `ci_quota_exceeded`（共享 runner 額度）。在額度恢復前，預期 Pages 網址 `https://aa22396584.gitlab.io/wallet-guardian/` **不是**已上線來源。
 - Vercel MCP：讀專案列表可用；**建立專案／部署**需要 team scope `aa22396584-6131s-projects` 的寫入授權。目前被 403，需擁有者在聊天裡完成 Vercel 重新授權後再部署。
-- `fixed_https_origin` 仍是 **false**。主網送出預設關閉；這不是主網交易授權。
+- （歷史）部署當下曾標 false；之後已驗證 Cloudflare Pages origin，見下一節。主網送出預設關閉；這不是主網交易授權。
 
 ## 已驗證固定 HTTPS（2026-10-07）
 
