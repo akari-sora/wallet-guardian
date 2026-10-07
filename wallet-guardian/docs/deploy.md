@@ -32,3 +32,11 @@ npm run build
 - Vercel MCP：讀專案列表可用；**建立專案／部署**需要 team scope `aa22396584-6131s-projects` 的寫入授權。目前被 403，需擁有者在聊天裡完成 Vercel 重新授權後再部署。
 - `fixed_https_origin` 仍是 **false**。主網送出預設關閉；這不是主網交易授權。
 
+## 已驗證固定 HTTPS（2026-10-07）
+
+- 主機：Cloudflare Pages Direct Upload（非 Git 整合）
+- 專案：`wallet-guardian-action-client`
+- 正式網址：https://wallet-guardian-action-client.pages.dev/
+- 本次部署預覽：https://5a09b4e6.wallet-guardian-action-client.pages.dev/
+- `fixed_https_origin` 可用此 origin（HTTPS、非 localhost）。主網送出仍預設關閉。
+
