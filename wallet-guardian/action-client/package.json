@@ -7,7 +7,8 @@
     "dev": "vite --host 127.0.0.1 --port 43127 --strictPort",
     "build": "tsc --noEmit && vite build",
     "test:canonical": "node src/canonical.test.mjs",
-    "test:validation": "node --test src/plan-validation.test.mjs"
+    "test:validation": "node --test src/plan-validation.test.mjs",
+    "test:gate": "node src/gate.test.mjs"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

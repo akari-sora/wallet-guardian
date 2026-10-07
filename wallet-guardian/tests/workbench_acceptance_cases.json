@@ -12,7 +12,7 @@
   {"id": "W11", "group": "workbench", "title": "不支援批次時退回模式 A", "layer": "offline"},
   {"id": "W12", "group": "workbench", "title": "已查到同鏈批次能力可選模式 B，但不送出，真錢包未測", "layer": "offline"},
   {"id": "W13", "group": "workbench", "title": "跨鏈或未知能力不進入批次", "layer": "offline"},
-  {"id": "W14", "group": "workbench", "title": "模式 C 只有鏈上強制機制驗證通過才啟用", "layer": "offline"},
+  {"id": "W14", "group": "workbench", "title": "沒有鏈上權限合約時模式 C 保持關閉，呼叫端自述不算強制", "layer": "offline"},
   {"id": "W15", "group": "workbench", "title": "限制欄位不全不能啟用模式 C", "layer": "offline"},
   {"id": "W16", "group": "workbench", "title": "新智慧帳戶不能操作原地址既有部位", "layer": "offline"},
   {"id": "W17", "group": "workbench", "title": "單步 Lista 即使錢包支援批次仍留在模式 A", "layer": "offline"},

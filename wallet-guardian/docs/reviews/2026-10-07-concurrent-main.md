@@ -1,5 +1,7 @@
 # Concurrent main update discovered at review close-out
 
+Reconciliation of this addendum is recorded in `2026-10-07-reconcile-main.md`. The findings below are the pre-merge review, not a claim that the branch is mainnet-ready.
+
 This addendum is part of MR !1. It supersedes statements about the current target branch that were made from the original reviewed base.
 
 - Original review base: `61885b98f8fb3b162e667a72849dd3fbd9bd4e93`.

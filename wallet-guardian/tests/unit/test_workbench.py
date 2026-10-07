@@ -187,13 +187,16 @@ def test_w13_cross_chain_or_unknown_capability_does_not_batch():
 
 def test_w14_mode_c_requires_on_chain_enforcement():
     assert mode_c_decision(None)["fallback"] == "A"
-    assert mode_c_decision({"verified": True, "enforces_on_chain": True, "enforced_by": "ui", "enforced_fields": []})[
-        "reason"
-    ] == "off_chain_check_is_not_enforcement"
+    ui_claim = mode_c_decision({"verified": True, "enforces_on_chain": True, "enforced_by": "ui", "enforced_fields": []})
+    assert ui_claim["enabled"] is False
+    assert ui_claim["reason"] == "no_verified_on_chain_enforcer"
     full = _enforcer(
         ["task", "chain", "original_account", "contract", "method", "asset", "amount", "recipient", "deadline", "count", "fee"]
     )
-    assert mode_c_decision(full)["enabled"] is True
+    decision = mode_c_decision(full)
+    assert decision["enabled"] is False
+    assert decision["reason"] == "no_verified_on_chain_enforcer"
+    assert decision["caller_claim_ignored"] is True
 
 
 def test_w15_partial_enforcer_cannot_enable_mode_c():

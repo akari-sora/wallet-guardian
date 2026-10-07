@@ -12,7 +12,7 @@ from guardian.actions.workbench import workbench_status
 from guardian.domain import format_alert
 from guardian.errors import GuardianError
 from guardian.security.redact import redact
-from guardian.service import ROOT, doctor, load_config, operation_coverage, rescue_doctor, run_once, self_check
+from guardian.service import ROOT, doctor, load_config, load_local_env, operation_coverage, rescue_doctor, run_once, self_check
 from guardian.storage import Database
 from guardian.read_views import latest_items, resolve_tenant
 
@@ -253,6 +253,7 @@ def _action(args: argparse.Namespace) -> tuple[dict, int]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_local_env()
     parser = build_parser()
     try:
         args = parser.parse_args(argv)

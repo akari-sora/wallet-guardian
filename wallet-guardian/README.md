@@ -20,7 +20,7 @@
 - 沒有 DeBank、Zerion、Alchemy、Tenderly、GoPlus key 時，不能宣稱全鏈 discovery 或保證模擬。
 - 官方 BSC dataseed 停用 `eth_getLogs`，沒有 Etherscan key 就無法回補歷史領取。
 - 沒有公開 webhook、沒有付費套餐、沒有持續監控。`monitoring_active` 是 false。
-- 沒有固定 HTTPS 網域，所以不會發行可在手機錢包開啟的公開任務連結。localhost 不是你手機上的 localhost。
+- Cloudflare Pages 已有公開來源，見 `docs/deploy.md`。程式常數 `fixed_https_origin` 仍是 false，所以這個套件不會發行公開任務連結。localhost 不是手機上的 localhost。網址回 200 不是執行授權。
 - 模式 B 只在查到錢包的 EIP-5792 能力、而且是同鏈多筆操作時才考慮。這個建置沒有對真錢包送出 `wallet_sendCalls`，證據是未測。
 - 模式 C 不支援。沒有已驗證、能在鏈上強制任務／鏈／原帳戶／合約／方法／資產／金額／接收人／期限／次數／費用的權限機制。Prompt、畫面或後端 if 不能代替。
 - 新的智慧帳戶不能拿來假裝能操作原地址上既有的 Lista 部位。
@@ -30,7 +30,7 @@
 
 監控程式只做讀取與 typed 任務資料。禁止的 RPC 方法包含 `eth_sendTransaction`、`eth_sendRawTransaction`、`wallet_sendCalls`、`eth_sign`、`personal_sign`、`eth_signTypedData`。
 
-Grok 只產生 `guardian.task.v1`。它不能在運行時產生並執行任意簽名 JavaScript。任務連結只帶 `ref_` 參考碼，本身不是執行授權，也不能帶其他使用者的私人資料。沒有固定 HTTPS 網域時，公開連結不會發行。
+Grok 只產生 `guardian.task.v1`。它不能在運行時產生並執行任意簽名 JavaScript。任務連結只帶 `ref_` 參考碼，本身不是執行授權，也不能帶其他使用者的私人資料。`fixed_https_origin` 仍是 false 時，公開連結不會發行。部署紀錄裡的 Pages 網址還沒寫進這個常數。
 
 主錢包私鑰留在使用者的錢包。限定執行憑證是秘密，不要放進這個共用工作區、任務 JSON 或對話。
 
@@ -64,18 +64,21 @@ uv run guardian alerts test --dry-run
 
 ## API key
 
-只從環境變數讀取，不要寫進檔案或 README：
+範例名稱在 `config/env.example`。把值寫進 gitignore 的 `.env.local`，或匯出到環境。已存在的環境變數優先。doctor 只報告 `configured` 或 `not_configured`，不會印出值。
+
+Etherscan V2 只用一把 `ETHERSCAN_API_KEY`，涵蓋 chainlist 以及之後的帳戶、交易與日誌。沒有第二把鏈別金鑰。有 key 且 chainlist 回傳資料列時，doctor 才標 `LIVE_PASS`。沒有 key 時是 `LIMITED_DISCOVERY`，不會把未認證的呼叫當成通過。
 
 | 變數 | 用途 | 沒有 key 時 |
 |---|---|---|
-| `ETHERSCAN_API_KEY` | Etherscan V2 交易、ABI、日誌 | chainlist 仍會試；地址歷史為 LIMITED |
+| `ETHERSCAN_API_KEY` | Etherscan V2 chainlist、交易、ABI、日誌 | `LIMITED_DISCOVERY`，chainlist 不是 LIVE_PASS |
 | `GOPLUS_API_KEY` | 地址／授權風險補充 | `LIMITED_DISCOVERY`，不會假裝已篩過 |
 | `DEBANK_ACCESS_KEY` | DeFi discovery | `BLOCKED` |
-| `ZERION_API_KEY` | 替代 discovery／webhook | `BLOCKED`；本建置也不開放 webhook |
+| `ZERION_API_KEY` | 替代 discovery | `BLOCKED`；本建置也不開放 webhook |
 | `ALCHEMY_API_KEY` | Portfolio token | `BLOCKED` |
-| `TENDERLY_ACCESS_KEY` | 可選模擬 | `BLOCKED`；沒有它就不能把模擬當成可簽名證據 |
+| `TENDERLY_ACCESS_KEY` | 可選模擬 | `BLOCKED` |
+| `GUARDIAN_MAINNET_SEND` | 使用者錢包的主網送出開關，預設 `false` | 確認鈕即使可按也不會呼叫錢包 |
 
-設定後重新執行 doctor。日誌會把 key 遮成 `***`。不要購買套餐，除非另外授權。
+`GUARDIAN_MAINNET_SEND=true` 也不會讓監控程式簽名或廣播。`mainnet_test_transactions_authorized` 在這個建置仍必須是 false。不要購買套餐，除非另外授權。
 
 ## 任務工作台
 
@@ -87,17 +90,19 @@ npm run dev
 
 開發伺服器是 `http://127.0.0.1:43127`。可開啟任務檔，或載入頁面上的合成範例。合成範例不是你的餘額。`?ref=` 只接受 `ref_` 加 32 個十六進位字，並且只向同一個來源要 `/tasks/<ref>.json`。它不會跟隨任務資料裡的網址，也不會把地址或金額放進網址。
 
-頁面會重算 digest。金額、收款地址與計畫不一致就拒絕。連接錢包、登入簽名、代幣授權、批次確認、限定執行權限、帳戶升級與「確認這筆領取」分開列出。Lista 原地址單步領取只有最後一項需要確認。`在我的錢包確認` 目前禁用，因為：
+頁面會重算 digest。金額、收款地址與計畫不一致就拒絕。連接錢包、登入簽名、代幣授權、批次確認、限定執行權限、帳戶升級與「確認這筆領取」分開列出。Lista 原地址單步領取只有最後一項需要確認。
 
-1. 主網簽名未授權。
-2. 沒有固定 HTTPS 網域，公開任務連結不會發行。
-3. `eth_call` 成功看不到 BNB 餘額與領取事件，模擬不完整。
-4. 設定中的地址仍是 watch-only。
-5. 模式 C 沒有可強制限制的鏈上機制；模式 B 還沒有真錢包測試。
+`在我的錢包確認` 不會因為任務 JSON 自述 `preflight_ok` 而送出。計畫 `wallet_request_allowed=false`、未完成模擬或阻塞原因都會關掉送出。這個預覽沒有客戶端鏈上重讀，所以按鈕保持關閉，也不會呼叫 `eth_sendTransaction` 或 `wallet_sendCalls`。`VITE_GUARDIAN_MAINNET_SEND` 預設不設定。監控程式永遠不能簽名。
 
-即使執行前重讀沒有變化，這個建置的 preflight 仍是 `continue_to_wallet=false`。交易雜湊不算完成。
+`查詢批次能力` 是另一個按鈕。它只在你按下時讀 `wallet_getCapabilities`。不支援、查到別的鏈、或狀態是 `ready`，都留在模式 A。同鏈而且多於一筆、能力是 `supported`，畫面才標模式 B。真錢包批次未測。這個預覽不呼叫 `wallet_sendCalls`。
 
-剩餘工作：固定 HTTPS 網域與固定版本發布、手機錢包內建瀏覽器實測、模式 A 的真錢包拒絕／送出不明／替代／完成核對、先查能力再決定要不要做模式 B、以及一個真的能在鏈上強制限制的模式 C。完成前不能說領取功能已上線。
+模式 C 保持關閉。程式裡沒有權限合約。任務資料自己宣稱已驗證，不算鏈上強制。
+
+重讀通過時 `preflight_ok` 為 true，但 `continue_to_wallet` 仍是 false。交易雜湊不算完成。拒絕、送出不明、替代與完成核對有離線狀態機測試。
+
+固定 HTTPS 來源見 `docs/deploy.md`。套件常數 `fixed_https_origin` 仍是 false，所以不會發行任務連結，這也不是主網執行授權。
+
+剩餘工作：把已驗證 origin 接進連結發行設定；手機錢包內建瀏覽器實測；模式 A 的真錢包拒絕與完成核對；模式 B 的真錢包批次；以及一個真的鏈上權限合約。完成前不能說領取功能已上線。已上線的 Pages 套件是合併前的建置，這次沒有重新部署。
 
 ## 測試
 

@@ -163,7 +163,11 @@ def assert_original_account(*, original: str, proposed_sender: str, position_hol
         raise PolicyError("a new smart account cannot operate a position held by the original address")
 
 
-def mode_c_decision(enforcer: dict[str, Any] | None) -> dict[str, Any]:
+# This repository does not ship a permission contract. A caller-supplied dict is not enforcement.
+ON_CHAIN_PERMISSION_ENFORCER = None
+
+
+def _assess_enforcer(enforcer: dict[str, Any] | None) -> dict[str, Any]:
     if not enforcer or not enforcer.get("verified") or not enforcer.get("enforces_on_chain"):
         return {"enabled": False, "fallback": "A", "reason": "no_verified_on_chain_enforcer"}
     if enforcer.get("enforced_by") in {"prompt", "ui", "backend_if"}:
@@ -173,6 +177,19 @@ def mode_c_decision(enforcer: dict[str, Any] | None) -> dict[str, Any]:
     if missing:
         return {"enabled": False, "fallback": "A", "reason": "limits_not_enforced", "missing": missing}
     return {"enabled": True, "fallback": None, "reason": None}
+
+
+def mode_c_decision(enforcer: dict[str, Any] | None) -> dict[str, Any]:
+    assessed = _assess_enforcer(enforcer)
+    if ON_CHAIN_PERMISSION_ENFORCER is None:
+        return {
+            "enabled": False,
+            "fallback": "A",
+            "reason": "no_verified_on_chain_enforcer",
+            "missing": assessed.get("missing"),
+            "caller_claim_ignored": True,
+        }
+    return assessed
 
 
 def choose_mode(
@@ -231,8 +248,92 @@ def preflight_lista(plan: dict[str, Any], fresh: dict[str, Any]) -> dict[str, An
     if not fresh.get("claimable", True):
         changes.append("not_claimable")
     if changes:
-        return {"continue_to_wallet": False, "revision_required": True, "changes": changes}
-    return {"continue_to_wallet": False, "revision_required": False, "changes": [], "reason": "wallet_release_disabled"}
+        return {"continue_to_wallet": False, "preflight_ok": False, "revision_required": True, "changes": changes}
+    return {
+        "continue_to_wallet": False,
+        "preflight_ok": True,
+        "revision_required": False,
+        "changes": [],
+        "reason": "state_reread_matches",
+    }
+
+
+def confirm_gate(
+    *,
+    requires_user_wallet_confirmation: bool,
+    preflight_ok: bool,
+    mainnet_send: bool,
+    wallet_request_allowed: bool = False,
+    simulation_complete: bool = False,
+    plan_blocked: bool = True,
+) -> dict[str, Any]:
+    """The button is separate from the send flag. Python never signs or broadcasts.
+
+    ``preflight_ok`` is not send authority. A false wallet-request flag, incomplete
+    simulation, or outstanding block reasons deny send even when preflight and the
+    mainnet flag are both true. Defaults fail closed.
+    """
+    if not requires_user_wallet_confirmation or not preflight_ok:
+        reason = "requires_user_wallet_confirmation_false" if not requires_user_wallet_confirmation else "preflight_not_ok"
+        return {"button_enabled": False, "send_allowed": False, "reason": reason, "agent_may_sign": False}
+    if wallet_request_allowed is not True:
+        return {"button_enabled": False, "send_allowed": False, "reason": "wallet_request_denied", "agent_may_sign": False}
+    if simulation_complete is not True:
+        return {"button_enabled": False, "send_allowed": False, "reason": "simulation_incomplete", "agent_may_sign": False}
+    if plan_blocked:
+        return {"button_enabled": False, "send_allowed": False, "reason": "plan_blocked", "agent_may_sign": False}
+    if not mainnet_send:
+        return {
+            "button_enabled": True,
+            "send_allowed": False,
+            "reason": "mainnet_send_disabled",
+            "agent_may_sign": False,
+        }
+    return {"button_enabled": True, "send_allowed": True, "reason": None, "agent_may_sign": False}
+
+
+def eip5792_status(capabilities: dict[str, Any] | None, chain_id: int) -> str:
+    """Read a wallet_getCapabilities result. This does not call a wallet."""
+    if capabilities is None:
+        return "unknown"
+    if not isinstance(capabilities, dict):
+        raise PolicyError("wallet capability must be an object")
+    entry = capabilities.get(hex(chain_id))
+    if entry is None:
+        entry = capabilities.get(str(chain_id))
+    if not isinstance(entry, dict):
+        return "unsupported"
+    atomic = entry.get("atomic")
+    if not isinstance(atomic, dict):
+        return "unsupported"
+    status = atomic.get("status")
+    if status not in {"supported", "ready", "unsupported"}:
+        return "unknown"
+    return str(status)
+
+
+def select_execution_mode(
+    *,
+    capabilities: dict[str, Any] | None,
+    chain_id: int,
+    same_chain: bool,
+    call_count: int,
+    enforcer: dict[str, Any] | None,
+    original: str,
+    proposed_sender: str,
+) -> dict[str, Any]:
+    status = eip5792_status(capabilities, chain_id)
+    chosen = choose_mode(
+        capability=status,
+        same_chain=same_chain,
+        call_count=call_count,
+        enforcer=enforcer,
+        original=original,
+        proposed_sender=proposed_sender,
+    )
+    chosen["capability"] = status
+    chosen["agent_may_sign"] = False
+    return chosen
 
 
 def track_wait(*, claimable: bool) -> dict[str, Any]:

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import time
@@ -13,6 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -46,6 +48,10 @@ SECRET_ENV = (
     "ALCHEMY_API_KEY",
     "TENDERLY_ACCESS_KEY",
 )
+# One Etherscan key covers V2 chainlist and later account/tx/log calls. Not a second key.
+MAINNET_SEND_ENV = "GUARDIAN_MAINNET_SEND"
+LOCAL_ENV_KEYS = SECRET_ENV + (MAINNET_SEND_ENV,)
+_ENV_LINE = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 BSC_RPC = "https://bsc-dataseed.bnbchain.org"
 OFAC_URL = "https://www.treasury.gov/ofac/downloads/sdn.csv"
 EXPECTED_TABLES = [
@@ -134,8 +140,74 @@ def _which(name: str) -> dict[str, Any]:
     return {"present": bool(path), "path": path}
 
 
+def load_local_env(path: Path | None = None) -> list[str]:
+    """Load gitignored .env.local. Existing process environment wins. Values are not logged."""
+    target = path if path is not None else ROOT / ".env.local"
+    loaded: list[str] = []
+    if not target.is_file():
+        return loaded
+    for raw in target.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _ENV_LINE.match(line)
+        if not match:
+            continue
+        key, value = match.group(1), match.group(2).strip()
+        if key not in LOCAL_ENV_KEYS or key in os.environ:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        os.environ[key] = value
+        loaded.append(key)
+    return loaded
+
+
 def _secret_flags() -> dict[str, str]:
     return {name: "configured" if os.environ.get(name) else "not_configured" for name in SECRET_ENV}
+
+
+def etherscan_chainlist_probe(get_text=safe_get_text) -> dict[str, Any]:
+    """V2 chainlist is LIVE_PASS only when ETHERSCAN_API_KEY is set and the call returns rows."""
+    key = (os.environ.get("ETHERSCAN_API_KEY") or "").strip()
+    if not key:
+        return {
+            "level": "LIMITED_DISCOVERY",
+            "queried": False,
+            "authenticated": False,
+            "reason": "ETHERSCAN_API_KEY not configured; chainlist is not LIVE_PASS without the V2 key",
+        }
+    url = "https://api.etherscan.io/v2/chainlist?" + urlencode({"apikey": key})
+    try:
+        status, text = get_text(url)
+    except Exception as exc:  # noqa: BLE001 - the key must not leak through the provider error
+        raise RuntimeError(redact(str(exc), extra_secrets=[key])) from None
+    if status != 200:
+        return {"level": "LIVE_FAIL", "http": status, "queried": True, "authenticated": True}
+    try:
+        body = json.loads(text)
+    except json.JSONDecodeError:
+        return {"level": "LIVE_FAIL", "http": status, "queried": True, "authenticated": True, "reason": "chainlist was not json"}
+    rows = body.get("result") if isinstance(body, dict) else None
+    if not isinstance(rows, list) or not rows:
+        return {
+            "level": "LIVE_FAIL",
+            "http": status,
+            "queried": True,
+            "authenticated": True,
+            "reason": "chainlist response had no rows",
+        }
+    mainnets = [row for row in rows if "testnet" not in str(row.get("chainname", "")).lower()]
+    return {
+        "level": "LIVE_PASS",
+        "http": status,
+        "queried": True,
+        "authenticated": True,
+        "reported_rows": len(rows),
+        "name_classified_mainnets": len(mainnets),
+        "enabled_for_monitoring": ["bnb-smart-chain:56"],
+        "note": "one ETHERSCAN_API_KEY covers V2; row count is not the number of monitored mainnets",
+    }
 
 
 def _pid1() -> str:
@@ -219,20 +291,7 @@ def provider_probes() -> list[dict[str, Any]]:
     flags = _secret_flags()
 
     def etherscan() -> dict[str, Any]:
-        status, text = safe_get_text("https://api.etherscan.io/v2/chainlist")
-        if status != 200:
-            return {"level": "LIVE_FAIL", "http": status}
-        body = json.loads(text)
-        rows = body.get("result") or []
-        mainnets = [row for row in rows if "testnet" not in str(row.get("chainname", "")).lower()]
-        return {
-            "level": "LIVE_PASS",
-            "http": status,
-            "reported_rows": len(rows),
-            "name_classified_mainnets": len(mainnets),
-            "enabled_for_monitoring": ["bnb-smart-chain:56"],
-            "note": "row count is not the number of monitored mainnets",
-        }
+        return etherscan_chainlist_probe()
 
     def bsc() -> dict[str, Any]:
         rpc = RpcClient(BSC_RPC)
@@ -322,6 +381,7 @@ def provider_probes() -> list[dict[str, Any]]:
 
 
 def doctor() -> dict[str, Any]:
+    load_local_env()
     env = environment_report()
     probes = provider_probes()
     report = {
@@ -334,6 +394,8 @@ def doctor() -> dict[str, Any]:
         "agent_forbidden_methods": sorted(FORBIDDEN_RPC_METHODS),
         "assisted_actions_enabled": False,
         "mainnet_test_transactions_authorized": False,
+        "agent_may_sign": False,
+        "user_mainnet_send_env": os.environ.get(MAINNET_SEND_ENV, "false").lower() == "true",
         "writes_enabled": False,
     }
     (ROOT / "environment_report.json").write_text(json.dumps(report["environment"], indent=2) + "\n", encoding="utf-8")
