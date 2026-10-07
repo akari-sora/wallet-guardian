@@ -1,0 +1,39 @@
+stages:
+  - test
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    - if: '$CI_COMMIT_BRANCH'
+
+default:
+  interruptible: true
+
+python-tests:
+  stage: test
+  image: python:3.12-slim
+  timeout: 10 minutes
+  variables:
+    UV_NO_PROGRESS: "1"
+    UV_PYTHON_DOWNLOADS: "never"
+  script:
+    - python -m pip install --disable-pip-version-check uv
+    - cd wallet-guardian
+    - uv sync --frozen --group dev
+    - uv run --frozen pytest -q --junitxml=test-results/python.xml
+  artifacts:
+    when: always
+    reports:
+      junit: wallet-guardian/test-results/python.xml
+
+client-tests:
+  stage: test
+  image: node:22.16.0-bookworm-slim
+  timeout: 10 minutes
+  script:
+    - cd wallet-guardian/action-client
+    - npm ci --ignore-scripts --no-audit --no-fund
+    - npm run test:canonical
+    - npm run build
