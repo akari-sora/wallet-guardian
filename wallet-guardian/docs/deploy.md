@@ -23,3 +23,12 @@ npm run build
 3. Cloudflare Pages。`npx wrangler login` 之後，在 `action-client` 執行 `npx wrangler pages deploy dist --project-name wallet-guardian`。
 
 完成後把實際 HTTPS origin 寫進部署紀錄，再讓 `issue_task_link` 使用那個 origin。localhost 與未經驗證的預覽網址都不能發行公開任務連結。
+
+## 部署現況（2026-10-07，本機核對）
+
+- 公開碼已在 GitLab `main`：`07e02cf`（含確認閘門、Pages/Vercel 設定、Etherscan SSRF 允許 WARP DNS）。
+- 離線：`pytest` **180 passed**；`action-client` build／gate／canonical **通過**。
+- GitLab CI／Pages：**失敗**，原因 `ci_quota_exceeded`（共享 runner 額度）。在額度恢復前，預期 Pages 網址 `https://aa22396584.gitlab.io/wallet-guardian/` **不是**已上線來源。
+- Vercel MCP：讀專案列表可用；**建立專案／部署**需要 team scope `aa22396584-6131s-projects` 的寫入授權。目前被 403，需擁有者在聊天裡完成 Vercel 重新授權後再部署。
+- `fixed_https_origin` 仍是 **false**。主網送出預設關閉；這不是主網交易授權。
+
