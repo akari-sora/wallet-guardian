@@ -279,7 +279,7 @@ async function renderPlan(plan: Plan, task: Task | null): Promise<void> {
   }
 
   const actions = document.createElement("div");
-  actions.className = "row";
+  actions.className = "row actions-bar";
   const confirm = document.createElement("button");
   confirm.type = "button";
   confirm.className = "primary";
@@ -301,7 +301,7 @@ async function renderPlan(plan: Plan, task: Task | null): Promise<void> {
   pre.textContent = JSON.stringify(task ?? plan, null, 2);
   details.append(summaryNode, pre);
 
-  view.append(mode, heading, list, stepHeading, steps, wait, reasonList, evidenceHeading, evidence, actions, details);
+  view.append(mode, heading, list, stepHeading, steps, wait, actions, reasonList, evidenceHeading, evidence, details);
 }
 
 async function renderPayload(payload: unknown): Promise<void> {
@@ -329,7 +329,8 @@ async function renderPayload(payload: unknown): Promise<void> {
 
 async function loadSameOriginTask(ref: string): Promise<void> {
   const response = await fetch(`/tasks/${ref}.json`, { credentials: "same-origin" });
-  if (!response.ok) {
+  const type = response.headers.get("content-type") ?? "";
+  if (!response.ok || !type.includes("json")) {
     renderError("這個來源沒有該任務的內容。參考碼不能換成其他網址，也不是執行授權。");
     return;
   }

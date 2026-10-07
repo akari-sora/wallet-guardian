@@ -52,6 +52,15 @@ header p, .status {
   margin-bottom: 16px;
 }
 
+.actions-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin: 8px 0 0;
+  padding: 12px 0;
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+}
+
 button, .file {
   min-height: 48px;
   border-radius: 10px;
