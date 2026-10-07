@@ -396,9 +396,15 @@ function boundEvidence(submission, mutate = {}) {
   const fee = gasUsed * price;
   const before = 5_000n;
   const delta = mutate.nativeDelta ?? (amount - fee);
+  const blockHash = mutate.blockHash ?? ("0x" + "11".repeat(32));
+  const blockNumber = mutate.blockNumber ?? 100;
+  const chainId = mutate.chainId ?? submission.chainId;
   const log = {
     address: mutate.logAddress ?? TRUSTED_LISTA.proxy,
     transactionHash: mutate.logHash ?? submission.txHash,
+    removed: mutate.removed === true,
+    blockHash: mutate.omitLogBlock ? undefined : (mutate.logBlockHash ?? blockHash),
+    blockNumber: mutate.omitLogBlock ? undefined : (mutate.logBlockNumber ?? blockNumber),
     topics: [
       CLAIM_WITHDRAWAL_TOPIC,
       addressTopic(mutate.logAccount ?? submission.account),
@@ -411,6 +417,9 @@ function boundEvidence(submission, mutate = {}) {
       status: mutate.status ?? "0x1",
       from: mutate.from ?? submission.account,
       to: mutate.to ?? TRUSTED_LISTA.proxy,
+      chainId: mutate.omitReceiptBlock ? undefined : (mutate.receiptChainId ?? chainId),
+      blockHash: mutate.omitReceiptBlock ? undefined : (mutate.receiptBlockHash ?? blockHash),
+      blockNumber: mutate.omitReceiptBlock ? undefined : blockNumber,
       gasUsed: "0x" + gasUsed.toString(16),
       effectiveGasPrice: mutate.omitPrice ? undefined : "0x" + price.toString(16),
       logs: mutate.logs ?? [log],
@@ -418,6 +427,9 @@ function boundEvidence(submission, mutate = {}) {
     balanceWindow: mutate.omitWindow ? undefined : {
       account: mutate.windowAccount ?? submission.account,
       txHash: submission.txHash,
+      chainId: mutate.windowChainId ?? chainId,
+      blockHash: mutate.omitWindowBlock ? undefined : (mutate.windowBlockHash ?? blockHash),
+      blockNumber: mutate.omitWindowBlock ? undefined : (mutate.windowBlockNumber ?? blockNumber),
       beforeWei: before.toString(),
       afterWei: (before + delta).toString(),
       otherTxHashes: mutate.otherTxHashes ?? [],
@@ -427,8 +439,18 @@ function boundEvidence(submission, mutate = {}) {
       account: mutate.requestAccount ?? submission.account,
       uuid: mutate.uuid ?? submission.uuid,
       idx: mutate.requestIdx ?? submission.idx,
+      chainId: mutate.requestChainId ?? chainId,
+      blockHash: mutate.omitRequestBlock ? undefined : (mutate.requestBlockHash ?? blockHash),
+      blockNumber: mutate.omitRequestBlock ? undefined : (mutate.requestBlockNumber ?? blockNumber),
     },
   };
+  if (mutate.contextChainId != null) {
+    evidence.context = {
+      chainId: mutate.contextChainId,
+      blockHash: mutate.contextBlockHash ?? blockHash,
+      blockNumber: mutate.contextBlockNumber ?? blockNumber,
+    };
+  }
   if (mutate.gasFeeWei != null) evidence.gasFeeWei = mutate.gasFeeWei;
   return evidence;
 }
@@ -614,6 +636,39 @@ test("a confirmed outcome binds this task receipt and does not treat gas units a
   );
   assert.equal(unbound.economicVerified, false);
   assert.equal(unbound.economicReason, "missing_submission");
+  const removed = recordEconomicOutcome(submitted, boundEvidence(submission, { removed: true }));
+  assert.equal(removed.status, "pending");
+  assert.equal(removed.done, false);
+  assert.equal(removed.economicVerified, false);
+  assert.equal(removed.economicReason, "provenance_mismatch");
+  const otherBlock = recordEconomicOutcome(submitted, boundEvidence(submission, { logBlockHash: "0x" + "22".repeat(32) }));
+  assert.equal(otherBlock.economicVerified, false);
+  assert.equal(otherBlock.economicReason, "provenance_mismatch");
+  const otherChain = recordEconomicOutcome(submitted, boundEvidence(submission, { contextChainId: 1 }));
+  assert.equal(otherChain.economicVerified, false);
+  assert.equal(otherChain.economicReason, "provenance_mismatch");
+  const requestChain = recordEconomicOutcome(submitted, boundEvidence(submission, { requestChainId: 1 }));
+  assert.equal(requestChain.economicVerified, false);
+  assert.equal(requestChain.economicReason, "provenance_mismatch");
+  const missingBlock = recordEconomicOutcome(submitted, boundEvidence(submission, { omitReceiptBlock: true }));
+  assert.equal(missingBlock.economicVerified, false);
+  assert.equal(missingBlock.economicReason, "block_unbound");
+  const missingLogBlock = recordEconomicOutcome(submitted, boundEvidence(submission, { omitLogBlock: true }));
+  assert.equal(missingLogBlock.economicReason, "block_unbound");
+  const earlierState = recordEconomicOutcome(submitted, boundEvidence(submission, {
+    requestBlockNumber: 99,
+    requestBlockHash: "0x" + "33".repeat(32),
+  }));
+  assert.equal(earlierState.economicVerified, false);
+  assert.equal(earlierState.economicReason, "provenance_mismatch");
+  const laterState = recordEconomicOutcome(submitted, boundEvidence(submission, {
+    windowBlockNumber: 101,
+    windowBlockHash: "0x" + "44".repeat(32),
+    requestBlockNumber: 101,
+    requestBlockHash: "0x" + "44".repeat(32),
+  }));
+  assert.equal(laterState.status, "confirmed");
+  assert.equal(laterState.hashIsDone, false);
 });
 
 test("the same task records one request and keeps an ambiguous outcome for verification", async () => {
@@ -663,9 +718,14 @@ test("the same task records one request and keeps an ambiguous outcome for verif
       to: TRUSTED_LISTA.proxy,
       gasUsed: "0x" + gasUsed.toString(16),
       effectiveGasPrice: "0x" + price.toString(16),
+      chainId: 56,
+      blockHash: "0x" + "11".repeat(32),
+      blockNumber: 100,
       logs: [{
         address: TRUSTED_LISTA.proxy,
         transactionHash: flow.outcome.txHash,
+        blockHash: "0x" + "11".repeat(32),
+        blockNumber: 100,
         topics: [CLAIM_WITHDRAWAL_TOPIC, addressTopic(ACCOUNT)],
         data: "0x" + word(0) + word(amount),
       }],
@@ -673,11 +733,22 @@ test("the same task records one request and keeps an ambiguous outcome for verif
     balanceWindow: {
       account: ACCOUNT,
       txHash: flow.outcome.txHash,
+      chainId: 56,
+      blockHash: "0x" + "11".repeat(32),
+      blockNumber: 100,
       beforeWei: before.toString(),
       afterWei: (before + amount - fee).toString(),
       otherTxHashes: [],
     },
-    request: { gone: true, account: ACCOUNT, uuid: "42", idx: 0 },
+    request: {
+      gone: true,
+      account: ACCOUNT,
+      uuid: "42",
+      idx: 0,
+      chainId: 56,
+      blockHash: "0x" + "11".repeat(32),
+      blockNumber: 100,
+    },
     gasFeeWei: fee.toString(),
   });
   assert.equal(watched.recorded.length, 0);
@@ -744,7 +815,7 @@ test("the clock is read again before the recorder, including once the plan TTL h
   const baseCall = input.call;
   input.call = async (method, params) => {
     const result = await baseCall(method, params);
-    if (chain.log.length >= 9) now = input.plan.local_ttl_unix;
+    if (chain.log.length >= 18) now = input.plan.local_ttl_unix;
     return result;
   };
   const expiredDuringSecond = await guideListaModeA(input);
@@ -764,12 +835,12 @@ test("the clock is read again before the recorder, including once the plan TTL h
         flow: held,
         clock: () => {
           samples += 1;
-          return samples >= 3 ? NOW + 10_000 : NOW;
+          return samples >= 5 ? NOW + 10_000 : NOW;
         },
       },
     }).input,
   });
-  assert.equal(samples, 3);
+  assert.equal(samples, 5);
   assert.equal(preSend.phase, "expired_before_wallet");
   assert.equal(preSend.second.reread, "pass");
   assert.equal(preSend.walletRequested, false);
@@ -809,6 +880,98 @@ test("identity sampled after both reads still blocks the recorder", async () => 
   assert.equal(provider.recorded.length, 0);
 });
 
+test("approval expiry before handoff is settled against the live clock and is not recorded", async () => {
+  const provider = recorder();
+  const flow = createModeAFlow();
+  const entry = approvedEntry();
+  entry.validUntilUnix = NOW + 1;
+  let ticks = 0;
+  const result = await guideListaModeA({
+    ...guideInput({
+      fields: {
+        testOnlyAllowWalletRequest: true,
+        provider,
+        flow,
+        testApprovals: [entry],
+        clock: () => {
+          ticks += 1;
+          return ticks >= 5 ? NOW + 2 : NOW;
+        },
+      },
+    }).input,
+  });
+  assert.equal(ticks, 5);
+  assert.equal(result.second.reread, "pass");
+  assert.equal(result.second.binding.freshUntil, NOW + 1);
+  assert.equal(result.phase, "expired_before_wallet");
+  assert.equal(result.settled.reasons.includes("approval_retired"), true);
+  assert.equal(result.walletRequested, false);
+  assert.equal(provider.recorded.length, 0);
+  assert.equal(flow.outcome.status, "idle");
+});
+
+test("clearing the task before handoff does not revive the closed-over plan", async () => {
+  const provider = recorder();
+  const flow = createModeAFlow();
+  const opened = plan();
+  const openedTask = { mode: "A", ref: "ref_" + "ab".repeat(16) };
+  let currentPlan = opened;
+  let currentTask = openedTask;
+  let generation = 1;
+  const viewed = 1;
+  const { input, chain } = guideInput({
+    plan: opened,
+    fields: {
+      testOnlyAllowWalletRequest: true,
+      provider,
+      flow,
+      task: openedTask,
+      identity: () => {
+        if (viewed !== generation || !currentPlan || !currentTask) return null;
+        return {
+          connectedAccount: ACCOUNT,
+          walletChainId: 56,
+          walletIdentityVerified: true,
+          revision: currentPlan.revision,
+          planDigest: currentPlan.digest,
+          taskRef: currentTask.ref,
+        };
+      },
+      isCurrent: () => viewed === generation && currentPlan != null && currentTask != null,
+    },
+  });
+  const baseCall = input.call;
+  input.call = async (method, params) => {
+    const result = await baseCall(method, params);
+    if (chain.log.length >= 18) {
+      currentPlan = null;
+      currentTask = null;
+      generation += 1;
+    }
+    return result;
+  };
+  const result = await guideListaModeA(input);
+  assert.equal(result.phase, "not_current");
+  assert.equal(result.second.reread, "pass");
+  assert.equal(result.walletRequested, false);
+  assert.equal(provider.recorded.length, 0);
+  assert.equal(flow.outcome.status, "idle");
+  flow.outcome = {
+    ...flow.outcome,
+    status: "unknown",
+    txHash: "0x" + "11".repeat(32),
+  };
+  const kept = await guideListaModeA({
+    ...guideInput({
+      fields: { testOnlyAllowWalletRequest: true, provider, flow, isCurrent: () => false },
+    }).input,
+  });
+  assert.equal(kept.phase, "verify_outcome");
+  assert.equal(kept.outcome.status, "unknown");
+  assert.equal(flow.outcome.status, "unknown");
+  assert.equal(provider.recorded.length, 0);
+});
+
 test("recipient confirmation is one claim, and the page keeps send closed", () => {
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
   const main = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
@@ -829,7 +992,12 @@ test("recipient confirmation is one claim, and the page keeps send closed", () =
   assert.match(main, /identity:\s*\(\)/);
   assert.match(main, /clock:\s*\(\)/);
   assert.match(main, /outcomeAfterReread\(\s*modeAFlow\s*\)/);
+  assert.match(main, /isCurrent:\s*\(\)\s*=>/);
+  assert.doesNotMatch(main, /lastPlan\?\.revision \?\? plan\.revision/);
+  assert.doesNotMatch(main, /lastPlan\?\.digest \?\? plan\.digest/);
+  assert.doesNotMatch(main, /lastTask\?\.ref \?\? task\?\.ref/);
   assert.doesNotMatch(main, /paintWalletOutcome\(\s*["']idle["']\s*\)/);
+  assert.match(guide, /settleReread/);
   assert.match(guide, /wallet_sendCalls/);
   assert.match(guide, /eth_sendTransaction/);
   assert.match(guide, /noBroadcast === true/);

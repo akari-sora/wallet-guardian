@@ -686,14 +686,18 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
           task,
           account: plan.sender,
           flow: modeAFlow,
-          identity: () => ({
-            connectedAccount: walletAccount,
-            walletChainId,
-            walletIdentityVerified: walletAccount != null && walletChainId === TRUSTED_LISTA.chainId,
-            revision: privateRevision ?? lastPlan?.revision ?? plan.revision ?? null,
-            planDigest: lastPlan?.digest ?? plan.digest,
-            taskRef: lastTask?.ref ?? task?.ref ?? null,
-          }),
+          identity: () => {
+            if (!lastPlan || !lastTask) return null;
+            return {
+              connectedAccount: walletAccount,
+              walletChainId,
+              walletIdentityVerified: walletAccount != null && walletChainId === TRUSTED_LISTA.chainId,
+              revision: privateRevision ?? lastPlan.revision,
+              planDigest: lastPlan.digest,
+              taskRef: lastTask.ref,
+            };
+          },
+          isCurrent: () => clickGeneration === loadGeneration && lastPlan != null && lastTask != null,
           clock: () => Math.floor(Date.now() / 1000),
           call: (method: string, params: unknown[]) => fetchTrustedRpc(method, params, { fetchImpl: fetch }),
           testOnlyAllowWalletRequest: false,

@@ -8,7 +8,7 @@
  */
 
 import { CLAIM_WITHDRAWAL_TOPIC, claimCalldata, sameAddress, TRUSTED_LISTA } from "./trusted-lista.mjs";
-import { reverifyListaClaim } from "./lista-reread.mjs";
+import { reverifyListaClaim, settleReread } from "./lista-reread.mjs";
 
 export const POISON_NOTE =
   "確認這次領到自己的原地址，只代表這一筆。不是永遠信任這個地址，也不是通訊錄。";
@@ -203,6 +203,50 @@ function unverified(reason, failed) {
   return { verified: false, failed: failed === true, reason, listDisappearanceIsEnough: false };
 }
 
+function blockHashOf(value) {
+  return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value) ? value.toLowerCase() : null;
+}
+
+function blockNumberOf(value) {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  if (typeof value === "bigint") {
+    if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+    return Number(value);
+  }
+  if (typeof value !== "string") return null;
+  if (/^0x[0-9a-fA-F]+$/.test(value) || /^(0|[1-9][0-9]*)$/.test(value)) {
+    try {
+      const parsed = Number(BigInt(value));
+      return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Receipt, logs, post-state, and the balance window share one chain and compatible blocks. */
+function receiptBackground(receipt, submission) {
+  const chainId = blockNumberOf(receipt.chainId);
+  const blockHash = blockHashOf(receipt.blockHash);
+  const blockNumber = blockNumberOf(receipt.blockNumber);
+  if (chainId == null || blockHash == null || blockNumber == null) return unverified("block_unbound", false);
+  if (chainId !== submission.chainId) return unverified("provenance_mismatch", false);
+  return { chainId, blockHash, blockNumber };
+}
+
+function observationBackground(part, receiptBlock) {
+  if (!part || typeof part !== "object") return "block_unbound";
+  const chainId = blockNumberOf(part.chainId);
+  const blockHash = blockHashOf(part.blockHash);
+  const blockNumber = blockNumberOf(part.blockNumber);
+  if (chainId == null || blockHash == null || blockNumber == null) return "block_unbound";
+  if (chainId !== receiptBlock.chainId) return "provenance_mismatch";
+  if (blockNumber < receiptBlock.blockNumber) return "provenance_mismatch";
+  if (blockNumber === receiptBlock.blockNumber && blockHash !== receiptBlock.blockHash) return "provenance_mismatch";
+  return null;
+}
+
 /**
  * A confirmed claim is this task's successful receipt, matching claim event,
  * original account, request id, and received amount. Caller totals are ignored.
@@ -222,6 +266,8 @@ export function verifyClaimEconomics(track, evidence) {
   if (!sameAddress(receipt.from, submission.account) || !sameAddress(receipt.to, submission.to)) {
     return unverified("provenance_mismatch", false);
   }
+  const receiptBlock = receiptBackground(receipt, submission);
+  if (receiptBlock.reason) return receiptBlock;
   if (receipt.status === "0x0") return unverified("receipt_failed", true);
   if (receipt.status !== "0x1") return unverified("receipt_pending", false);
   if (!Array.isArray(receipt.logs)) return unverified("missing_claim_event", false);
@@ -232,8 +278,15 @@ export function verifyClaimEconomics(track, evidence) {
   const expectedData = "0x" + word(submission.idx) + word(submission.amountOut);
   const expectedAccount = addressTopic(submission.account);
   for (const log of claimLogs) {
+    if (log.removed === true) return unverified("provenance_mismatch", false);
     if (!sameAddress(log.address, submission.to)) return unverified("provenance_mismatch", false);
     if (!hashText(log.transactionHash) || log.transactionHash.toLowerCase() !== submission.txHash) {
+      return unverified("provenance_mismatch", false);
+    }
+    const logHash = blockHashOf(log.blockHash);
+    const logNumber = blockNumberOf(log.blockNumber);
+    if (logHash == null || logNumber == null) return unverified("block_unbound", false);
+    if (logHash !== receiptBlock.blockHash || logNumber !== receiptBlock.blockNumber) {
       return unverified("provenance_mismatch", false);
     }
     if (String(log.topics[1] || "").toLowerCase() !== expectedAccount) return unverified("provenance_mismatch", false);
@@ -263,6 +316,14 @@ export function verifyClaimEconomics(track, evidence) {
   if (!sameAddress(request.account, submission.account)) return unverified("provenance_mismatch", false);
   if (!sameUint(request.uuid, submission.uuid) || !sameUint(request.idx, submission.idx)) {
     return unverified("provenance_mismatch", false);
+  }
+  const windowBlock = observationBackground(window, receiptBlock);
+  if (windowBlock) return unverified(windowBlock, false);
+  const requestBlock = observationBackground(request, receiptBlock);
+  if (requestBlock) return unverified(requestBlock, false);
+  if (evidence.context) {
+    const contextBlock = observationBackground(evidence.context, receiptBlock);
+    if (contextBlock) return unverified(contextBlock, false);
   }
   return { verified: true, failed: false, reason: null, listDisappearanceIsEnough: false };
 }
@@ -486,17 +547,37 @@ function taskKeyOf(input, identity) {
 }
 
 function sampleIdentity(input) {
-  const live = typeof input.identity === "function" ? input.identity() : null;
-  const source = live && typeof live === "object" ? live : {};
-  const pick = (field, fallback) => (Object.prototype.hasOwnProperty.call(source, field) ? source[field] : fallback);
+  if (typeof input.identity !== "function") {
+    return {
+      connectedAccount: input.connectedAccount,
+      walletChainId: input.walletChainId,
+      walletIdentityVerified: input.walletIdentityVerified,
+      revision: input.revision,
+      planDigest: input.planDigest ?? input.plan.digest,
+      taskRef: input.task && input.task.ref ? input.task.ref : null,
+    };
+  }
+  const live = input.identity();
+  if (!live || typeof live !== "object") return null;
   return {
-    connectedAccount: pick("connectedAccount", input.connectedAccount),
-    walletChainId: pick("walletChainId", input.walletChainId),
-    walletIdentityVerified: pick("walletIdentityVerified", input.walletIdentityVerified),
-    revision: pick("revision", input.revision),
-    planDigest: pick("planDigest", input.planDigest ?? input.plan.digest),
-    taskRef: pick("taskRef", input.task && input.task.ref ? input.task.ref : null),
+    connectedAccount: live.connectedAccount ?? null,
+    walletChainId: live.walletChainId ?? null,
+    walletIdentityVerified: live.walletIdentityVerified === true,
+    revision: live.revision ?? null,
+    planDigest: typeof live.planDigest === "string" ? live.planDigest : null,
+    taskRef: typeof live.taskRef === "string" && live.taskRef ? live.taskRef : null,
   };
+}
+
+function currentTask(identity) {
+  return Boolean(identity)
+    && identity.taskRef != null
+    && identity.revision != null
+    && identity.planDigest != null;
+}
+
+function stillCurrent(input) {
+  return typeof input.isCurrent !== "function" || input.isCurrent() === true;
 }
 
 function sampleNow(input) {
@@ -537,7 +618,7 @@ function readBody(input, call, identity, nowUnix) {
     revision: identity.revision,
     nowUnix,
     startedAt: nowUnix,
-    clock: () => nowUnix,
+    clock: typeof input.clock === "function" ? input.clock : () => nowUnix,
   };
 }
 
@@ -614,6 +695,9 @@ export async function guideListaModeA(input) {
       return input.call(method, params);
     };
     const firstIdentity = sampleIdentity(input);
+    if (!stillCurrent(input) || (typeof input.identity === "function" && !currentTask(firstIdentity))) {
+      return closedGuide({ phase: "not_current", reads: rpcCalls, outcome: publish(flow.outcome) });
+    }
     flow.taskKey = taskKeyOf(input, firstIdentity) || flow.taskKey;
     const firstNow = sampleNow(input);
     const first = await readOnce(readBody(input, counting, firstIdentity, firstNow));
@@ -623,6 +707,9 @@ export async function guideListaModeA(input) {
     }
     const secondIdentity = sampleIdentity(input);
     const secondNow = sampleNow(input);
+    if (!stillCurrent(input) || (typeof input.identity === "function" && !currentTask(secondIdentity))) {
+      return closedGuide({ phase: "not_current", first, second: null, reads: rpcCalls, outcome: publish(flow.outcome) });
+    }
     const drifted = identityDrift(firstIdentity, secondIdentity);
     if (drifted) {
       return closedGuide({ phase: drifted, first, second: null, reads: rpcCalls, outcome: publish(flow.outcome) });
@@ -652,6 +739,17 @@ export async function guideListaModeA(input) {
     }
     const liveIdentity = sampleIdentity(input);
     const liveNow = sampleNow(input);
+    if (!stillCurrent(input) || !currentTask(liveIdentity)) {
+      return closedGuide({
+        phase: "not_current",
+        first,
+        second,
+        revision,
+        prepared,
+        reads: rpcCalls,
+        outcome: publish(flow.outcome),
+      });
+    }
     const liveDrift = identityDrift(secondIdentity, liveIdentity);
     if (liveDrift) {
       return closedGuide({
@@ -664,14 +762,23 @@ export async function guideListaModeA(input) {
         outcome: publish(flow.outcome),
       });
     }
-    const ttl = input.plan.local_ttl_unix;
-    if (!Number.isSafeInteger(liveNow) || !Number.isSafeInteger(ttl) || liveNow >= ttl) {
+    const settled = settleReread(second, {
+      simulation: input.plan.simulation,
+      account: liveIdentity.connectedAccount,
+      chainId: liveIdentity.walletChainId,
+      planDigest: liveIdentity.planDigest,
+      taskRef: liveIdentity.taskRef,
+      revision: liveIdentity.revision,
+      nowUnix: liveNow,
+    });
+    if (settled.reread !== "pass") {
       return closedGuide({
         phase: "expired_before_wallet",
         first,
         second,
         revision,
         prepared,
+        settled,
         reads: rpcCalls,
         outcome: publish(flow.outcome),
       });
