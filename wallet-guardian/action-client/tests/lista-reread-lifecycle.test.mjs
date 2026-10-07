@@ -52,6 +52,7 @@ async function richTask(revision = 1) {
     bounds: { min_out_raw: "6", slippage_bps: null },
     max_fee_wei: null,
     simulation: { status: "INCOMPLETE", effects_checked: false, source: "not_run" },
+    local_ttl_unix: Math.floor(Date.now() / 1000) + 3600,
     wallet_request_allowed: false,
     block_reasons: ["synthetic"],
     human_summary: {
@@ -104,7 +105,8 @@ function approvalFixture() {
     implementationCodeSha256: sha(IMPL_CODE),
     provenance: "test-only injection, not a production pin",
     validFromUnix: 0,
-    validUntilUnix: null,
+    validUntilUnix: Math.floor(Date.now() / 1000) + 3600,
+    permanent: false,
     retired: false,
   }];
 }
@@ -364,4 +366,37 @@ test("disconnect and provider replacement invalidate a stored pass", async () =>
   assert.equal(h.elements.get("verify-reread").textContent.includes("pass"), false);
   assert.equal(h.app.getState().reread.reasons.includes("provider_replaced"), true);
   assert.equal(h.app.getState().reread.allowSend, "closed");
+});
+
+test("WG-P2-R2-03 a later wallet chain failure does not keep the previous pass", async () => {
+  const taskBody = await richTask();
+  let chainReads = 0;
+  const h = await harness({
+    onWallet: (args) => {
+      if (args.method === "eth_accounts" || args.method === "eth_requestAccounts") return [ACCOUNT];
+      if (args.method === "eth_chainId") {
+        chainReads += 1;
+        if (chainReads > 1) throw new Error("chain unavailable");
+        return "0x38";
+      }
+      return undefined;
+    },
+    onFetch: (path, init) => {
+      const url = String(path);
+      if (url === TRUSTED_LISTA.rpcUrl) return rpcResponse(chainResult(JSON.parse(init.body)));
+      if (url.startsWith("/api/tasks/")) return jsonResponse(taskBody);
+      return undefined;
+    },
+  });
+  for (let i = 0; i < 500 && !h.elements.get("view").textContent.includes("Lista"); i += 1) await tick();
+  await h.app.reverifyCurrent(approvalFixture());
+  assert.equal(h.app.getState().reread.reread, "pass");
+  await h.app.reverifyCurrent(approvalFixture());
+  assert.notEqual(h.app.getState().reread.reread, "pass");
+  assert.equal(h.app.getState().reread.reread, "insufficient");
+  assert.equal(h.app.getState().reread.reasons.includes("wallet_unverified"), true);
+  assert.equal(h.elements.get("verify-reread").textContent.includes("pass"), false);
+  assert.equal(h.elements.get("verify-send").textContent.includes("closed"), true);
+  assert.equal(h.walletCalls.some((call) => /send/i.test(call.method)), false);
+  assert.equal(taskBody.task.preflight.preflight_ok, true);
 });

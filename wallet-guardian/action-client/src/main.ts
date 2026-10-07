@@ -308,24 +308,37 @@ async function reverifyCurrent(testApprovals?: unknown[]): Promise<void> {
   watchWallet();
   const still = () => seq === rereadSeq && epoch === walletEpoch && generation === loadGeneration && lastPlan === plan;
   let connectedAccount: string | null = null;
+  let roundChain: number | null = null;
+  let walletIdentityVerified = false;
   const ethereum = ethereumProvider();
-  if (ethereum) {
+  if (!ethereum) {
+    walletAccount = null;
+    walletChainId = null;
+  } else {
     try {
       const accounts = await ethereum.request({ method: "eth_accounts" });
       if (!still()) return;
       const first = Array.isArray(accounts) ? String(accounts[0] ?? "") : "";
-      connectedAccount = /^0x[a-fA-F0-9]{40}$/.test(first) ? first : null;
+      if (!/^0x[a-fA-F0-9]{40}$/.test(first)) throw new Error("wallet account");
       const chain = await ethereum.request({ method: "eth_chainId" });
       if (!still()) return;
-      if (typeof chain === "string" && /^0x[0-9a-fA-F]+$/.test(chain)) {
-        const parsed = Number.parseInt(chain, 16);
-        walletChainId = Number.isSafeInteger(parsed) ? parsed : null;
-      }
+      if (typeof chain !== "string" || !/^0x[0-9a-fA-F]+$/.test(chain)) throw new Error("wallet chain");
+      const parsed = Number.parseInt(chain, 16);
+      if (!Number.isSafeInteger(parsed)) throw new Error("wallet chain");
+      connectedAccount = first;
+      roundChain = parsed;
+      walletIdentityVerified = true;
+      walletAccount = first.toLowerCase();
+      walletChainId = parsed;
     } catch {
       if (!still()) return;
+      connectedAccount = null;
+      roundChain = null;
+      walletIdentityVerified = false;
+      walletAccount = null;
+      walletChainId = null;
     }
   }
-  walletAccount = connectedAccount ? connectedAccount.toLowerCase() : null;
   try {
     const result = await reverifyListaClaim({
       call: (method: string, params: unknown[]) => fetchTrustedRpc(method, params, {
@@ -336,7 +349,8 @@ async function reverifyCurrent(testApprovals?: unknown[]): Promise<void> {
       task,
       account: plan.sender,
       connectedAccount,
-      walletChainId,
+      walletChainId: roundChain,
+      walletIdentityVerified,
       planDigest: plan.digest,
       revision,
       startedAt,

@@ -52,6 +52,8 @@ export const REASON_TEXT = Object.freeze({
   unapproved_deployment: "鏈上部署和任務一致，但客戶端沒有核准這個實作版本。",
   approval_retired: "這個部署核准已停用或過期。",
   plan_expired: "計畫的本地有效時間已過。",
+  plan_ttl_missing: "計畫沒有可用的本地有效時間，不能算完整通過。",
+  approval_unbounded: "核准沒有明確期限，不能算完整通過。",
   block_identity_unsupported: "節點不接受以區塊雜湊鎖定狀態，不能標成同一個區塊。",
   block_not_canonical: "區塊雜湊已不是標準鏈上的區塊。",
   wallet_unverified: "沒有核對到連線錢包。這次只是觀察，不能算通過。",
@@ -162,12 +164,8 @@ function localBlock(input) {
   if (input.revision != null && input.revision !== plan.revision) {
     return view("insufficient", ["revision_changed"], null, simulation);
   }
-  if (Object.prototype.hasOwnProperty.call(plan, "local_ttl_unix")) {
-    if (!Number.isSafeInteger(plan.local_ttl_unix)) return view("insufficient", ["missing_fields"], null, simulation);
-    if (Number.isSafeInteger(input.nowUnix) && input.nowUnix >= plan.local_ttl_unix) {
-      return view("insufficient", ["plan_expired"], null, simulation);
-    }
-  }
+  const ttlProblem = planTtlProblem(plan, input.nowUnix);
+  if (ttlProblem) return view("insufficient", [ttlProblem], null, simulation);
   const deployment = plan.deployment;
   const sources = trustedQuerySources(task ?? plan);
   if (!deployment || deployment.method !== CLAIM_SIGNATURE || !sameAddress(deployment.proxy, sources.proxy)) {
@@ -237,7 +235,14 @@ async function readAtBlock(call, account) {
   };
 }
 
-function deadlines(input, snap) {
+function planTtlProblem(plan, nowUnix) {
+  const value = plan ? plan.local_ttl_unix : undefined;
+  if (!Number.isSafeInteger(value)) return "plan_ttl_missing";
+  if (Number.isSafeInteger(nowUnix) && nowUnix >= value) return "plan_expired";
+  return null;
+}
+
+function deadlines(input, snap, approvalEntry) {
   const ttl = TRUSTED_LISTA.freshnessTtlSeconds;
   const startedAt = Number.isSafeInteger(input.startedAt) ? input.startedAt : input.nowUnix;
   const marks = [];
@@ -245,28 +250,41 @@ function deadlines(input, snap) {
   if (snap && Number.isSafeInteger(snap.blockTimestamp)) marks.push(snap.blockTimestamp + ttl);
   const planExpiresAt = input.plan && Number.isSafeInteger(input.plan.local_ttl_unix) ? input.plan.local_ttl_unix : null;
   if (planExpiresAt != null) marks.push(planExpiresAt);
+  const approvalValidUntil = approvalEntry && Number.isSafeInteger(approvalEntry.validUntilUnix)
+    ? approvalEntry.validUntilUnix
+    : null;
+  if (approvalValidUntil != null) marks.push(approvalValidUntil);
   return {
     startedAt: Number.isSafeInteger(startedAt) ? startedAt : null,
     planExpiresAt,
     blockTimestamp: snap && Number.isSafeInteger(snap.blockTimestamp) ? snap.blockTimestamp : null,
+    approvalId: approvalEntry ? approvalEntry.id : null,
+    approvalVersion: approvalEntry ? approvalEntry.registryVersion : null,
+    approvalValidUntil,
     freshUntil: marks.length ? Math.min(...marks) : input.nowUnix,
   };
 }
 
-function bindingFor(input, snap) {
-  const account = (input.connectedAccount ?? input.account).toLowerCase();
+function bindingFor(input, snap, approvalEntry) {
+  const account = (input.connectedAccount ?? input.account);
   const observedAt = input.nowUnix ?? Math.floor(Date.now() / 1000);
   return {
     taskRef: input.task && input.task.ref ? input.task.ref : null,
     revision: input.plan.revision,
     planDigest: input.planDigest,
-    account,
-    chainId: snap && snap.chainId ? snap.chainId : (input.walletChainId ?? TRUSTED_LISTA.chainId),
+    account: typeof account === "string" ? account.toLowerCase() : null,
+    chainId: snap && snap.chainId ? snap.chainId : (Number.isSafeInteger(input.walletChainId) ? input.walletChainId : null),
     blockNumber: snap ? snap.blockNumber : null,
     blockHash: snap ? snap.blockHash : null,
     observedAt,
-    ...deadlines(input, snap),
+    ...deadlines(input, snap, approvalEntry),
   };
+}
+
+function walletBoundThisRound(input) {
+  return input.walletIdentityVerified === true &&
+    sameAddress(input.connectedAccount, input.account) &&
+    input.walletChainId === TRUSTED_LISTA.chainId;
 }
 
 function approvalsFor(input) {
@@ -298,20 +316,25 @@ function sameTuple(left, right) {
 function entryState(entry, now) {
   if (entry.retired === true) return "retired";
   if (typeof entry.validFromUnix === "number" && now < entry.validFromUnix) return "inactive";
-  if (typeof entry.validUntilUnix === "number" && now >= entry.validUntilUnix) return "retired";
-  return "active";
+  if (Number.isSafeInteger(entry.validUntilUnix)) {
+    return now >= entry.validUntilUnix ? "retired" : "active";
+  }
+  if (entry.permanent === true && entry.validUntilUnix == null) return "active";
+  return "unbounded";
 }
 
 function classifyApproval(entries, tuple, now) {
   let retired = false;
+  let unbounded = false;
   for (const entry of Array.isArray(entries) ? entries : []) {
     const pinned = entryTuple(entry);
     if (!pinned || !sameTuple(pinned, tuple)) continue;
     const state = entryState(entry, now);
-    if (state === "active") return { active: true, retired: false };
+    if (state === "active") return { active: true, retired: false, unbounded: false, entry };
     if (state === "retired") retired = true;
+    if (state === "unbounded") unbounded = true;
   }
-  return { active: false, retired };
+  return { active: false, retired, unbounded, entry: null };
 }
 
 export function blockTagFailure(error) {
@@ -367,25 +390,22 @@ function judge(input, snap, located, status) {
     const rebuilt = claimCalldata(located.idx);
     if (String(input.plan.calls[0].data).toLowerCase() !== rebuilt) reasons.push("calldata_mismatch");
   }
-  const binding = bindingFor(input, snap);
-  if (Number.isSafeInteger(input.plan.local_ttl_unix) && input.nowUnix >= input.plan.local_ttl_unix) {
-    reasons.push("plan_expired");
-  }
+  const binding = bindingFor(input, snap, approval.entry);
+  const ttlProblem = planTtlProblem(input.plan, input.nowUnix);
+  if (ttlProblem) reasons.push(ttlProblem);
   if (input.nowUnix >= binding.freshUntil && !reasons.includes("stale_block") && !reasons.includes("plan_expired")) {
     reasons.push("stale");
   }
   const deployment = { matchesTask, approvedDeployment: approval.active };
-  const soft = new Set(["stale_block", "plan_expired", "stale"]);
+  const soft = new Set(["stale_block", "plan_expired", "plan_ttl_missing", "stale"]);
   const hard = reasons.filter((reason) => !soft.has(reason));
   if (hard.length) return view("fail", reasons, binding, simulation, deployment);
   if (reasons.length) return view("insufficient", reasons, null, simulation, deployment);
   if (!approval.active) {
-    return view("insufficient", [approval.retired ? "approval_retired" : "unapproved_deployment"], binding, simulation, {
-      matchesTask,
-      approvedDeployment: false,
-    });
+    const reason = approval.retired ? "approval_retired" : approval.unbounded ? "approval_unbounded" : "unapproved_deployment";
+    return view("insufficient", [reason], binding, simulation, { matchesTask, approvedDeployment: false });
   }
-  if (!sameAddress(input.connectedAccount, input.account)) {
+  if (!walletBoundThisRound(input)) {
     return view("insufficient", ["wallet_unverified"], binding, simulation, deployment);
   }
   return view("pass", [], binding, simulation, deployment);
@@ -452,6 +472,9 @@ export function settleReread(observation, context) {
   }
   const reasons = [];
   if (Number.isSafeInteger(binding.planExpiresAt) && context.nowUnix >= binding.planExpiresAt) reasons.push("plan_expired");
+  if (Number.isSafeInteger(binding.approvalValidUntil) && context.nowUnix >= binding.approvalValidUntil) {
+    reasons.push("approval_retired");
+  }
   if (Number.isSafeInteger(binding.blockTimestamp) && context.nowUnix - binding.blockTimestamp > TRUSTED_LISTA.freshnessTtlSeconds) {
     reasons.push("stale_block");
   }

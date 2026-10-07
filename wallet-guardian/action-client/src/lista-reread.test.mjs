@@ -67,6 +67,7 @@ function plan(overrides = {}) {
     asset_out: { raw_amount: "6" },
     simulation: { status: "INCOMPLETE", effects_checked: false, source: "not_run" },
     wallet_request_allowed: false,
+    local_ttl_unix: NOW + 3600,
     ...overrides,
   };
 }
@@ -95,7 +96,8 @@ function approvedEntry(overrides = {}) {
     implementationCodeSha256: sha(IMPL_CODE),
     provenance: "test-only injection, not a production pin",
     validFromUnix: 0,
-    validUntilUnix: null,
+    validUntilUnix: NOW + 3600,
+    permanent: false,
     retired: false,
     ...overrides,
   };
@@ -150,6 +152,8 @@ function passInput(overrides = {}) {
   return {
     ...input(overrides),
     connectedAccount: overrides.connectedAccount === undefined ? ACCOUNT : overrides.connectedAccount,
+    walletChainId: overrides.walletChainId === undefined ? 56 : overrides.walletChainId,
+    walletIdentityVerified: overrides.walletIdentityVerified === undefined ? true : overrides.walletIdentityVerified,
     testApprovals: overrides.testApprovals ?? [approvedEntry()],
   };
 }
@@ -528,6 +532,82 @@ test("a provider that rejects EIP-1898 tags cannot fall back to a number and pas
   assert.deepEqual(result.reasons, ["block_identity_unsupported"]);
   assert.equal(log.some((entry) => typeof entry.tag === "string" && entry.method !== "eth_blockNumber"), false);
   assert.equal(result.allowSend, "closed");
+});
+
+test("WG-P2-R2-01 missing, null, string, or illegal plan TTL cannot pass", async () => {
+  const samples = [undefined, null, "1700000060", 1.5, Number.NaN];
+  for (const localTtl of samples) {
+    const current = plan();
+    if (localTtl === undefined) delete current.local_ttl_unix;
+    else current.local_ttl_unix = localTtl;
+    const { call, log } = script();
+    const result = await reverifyListaClaim({ ...passInput({ plan: current }), call });
+    assert.notEqual(result.reread, "pass");
+    assert.equal(result.reread, "insufficient");
+    assert.equal(result.reasons.includes("plan_ttl_missing"), true);
+    assert.equal(result.allowSend, "closed");
+    assert.equal(log.length, 0);
+  }
+});
+
+test("WG-P2-R2-02 a stored pass drops when the used approval expires", async () => {
+  const until = NOW + 1;
+  const current = plan({ local_ttl_unix: NOW + 60 });
+  const result = await reverifyListaClaim({
+    ...passInput({ plan: current, testApprovals: [approvedEntry({ validUntilUnix: until })] }),
+    call: script().call,
+  });
+  assert.equal(result.reread, "pass");
+  assert.equal(result.binding.approvalId, "test-only-lista");
+  assert.equal(result.binding.approvalVersion, 1);
+  assert.equal(result.binding.approvalValidUntil, until);
+  assert.ok(result.binding.freshUntil <= until);
+  const context = {
+    simulation: { status: "INCOMPLETE", effects_checked: false },
+    account: ACCOUNT,
+    chainId: 56,
+    planDigest: result.binding.planDigest,
+    taskRef: null,
+    revision: 1,
+    nowUnix: NOW + 2,
+  };
+  const extended = {
+    ...result,
+    binding: { ...result.binding, freshUntil: NOW + 60 },
+  };
+  const settled = settleReread(extended, context);
+  assert.notEqual(settled.reread, "pass");
+  assert.equal(settled.reread, "insufficient");
+  assert.equal(settled.reasons.includes("approval_retired"), true);
+  assert.equal(settled.allowSend, "closed");
+});
+
+test("an approval without a finite validUntil is not a permanent pass", async () => {
+  const open = await reverifyListaClaim({
+    ...passInput({ testApprovals: [approvedEntry({ validUntilUnix: null })] }),
+    call: script().call,
+  });
+  assert.notEqual(open.reread, "pass");
+  assert.equal(open.reasons.includes("approval_unbounded"), true);
+  const permanent = await reverifyListaClaim({
+    ...passInput({ testApprovals: [approvedEntry({ validUntilUnix: null, permanent: true })] }),
+    call: script().call,
+  });
+  assert.equal(permanent.reread, "pass");
+  assert.equal(permanent.binding.approvalValidUntil, null);
+  assert.equal(permanent.allowSend, "closed");
+});
+
+test("WG-P2-R2-03 a failed wallet chain read cannot reuse a prior chain id", async () => {
+  const result = await reverifyListaClaim({
+    ...passInput({ walletIdentityVerified: false, walletChainId: 56 }),
+    call: script().call,
+  });
+  assert.notEqual(result.reread, "pass");
+  assert.equal(result.reread, "insufficient");
+  assert.equal(result.reasons.includes("wallet_unverified"), true);
+  assert.equal(result.allowSend, "closed");
+  assert.equal(result.simulation, "not_done");
 });
 
 test("ui copy keeps the three statuses and lock screen separate from lock chain", () => {
