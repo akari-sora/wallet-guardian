@@ -18,6 +18,11 @@
     "planned_write": ["claimWithdraw(uint256)"],
     "not_planned": ["deposit()", "requestWithdraw(uint256)", "claimWithdrawFor(address,uint256)"]
   },
+  "deployment_approvals": {
+    "registry_version": 1,
+    "provenance": "client policy; entries are reviewed pins and are not learned from a chain read or from task JSON",
+    "entries": []
+  },
   "notes": [
     "idx is the current array index and must be reread",
     "isClaimable comes from getUserRequestStatus, not from a 7-day clock",

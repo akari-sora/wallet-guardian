@@ -86,14 +86,34 @@ function input(overrides = {}) {
   };
 }
 
+function approvedEntry(overrides = {}) {
+  return {
+    id: "test-only-lista",
+    registryVersion: 1,
+    implementation: IMPL,
+    proxyCodeSha256: sha(PROXY_CODE),
+    implementationCodeSha256: sha(IMPL_CODE),
+    provenance: "test-only injection, not a production pin",
+    validFromUnix: 0,
+    validUntilUnix: null,
+    retired: false,
+    ...overrides,
+  };
+}
+
+function pinned(tag) {
+  return tag && tag.requireCanonical === true && tag.blockHash === BLOCK;
+}
+
 function script(overrides = {}) {
   const log = [];
   const impl = overrides.impl ?? IMPL;
   async function call(method, params) {
     log.push({ method, params: structuredClone(params) });
     if (overrides.throwName) {
-      const error = new Error("synthetic");
+      const error = new Error(overrides.throwMessage ?? "synthetic");
       error.name = overrides.throwName;
+      if (overrides.rpcError) error.rpcError = overrides.rpcError;
       throw error;
     }
     if (method === "eth_chainId") return overrides.chain ?? "0x38";
@@ -105,6 +125,9 @@ function script(overrides = {}) {
         timestamp: "0x" + (overrides.timestamp ?? NOW - 10).toString(16),
       };
     }
+    const tag = params[params.length - 1];
+    if (!pinned(tag)) throw new Error("state read was not pinned to the header hash");
+    if (overrides.onPinned) return overrides.onPinned(method, params, log);
     if (method === "eth_getStorageAt") return "0x" + word(impl);
     if (method === "eth_getCode") {
       const who = String(params[0]).toLowerCase();
@@ -114,7 +137,6 @@ function script(overrides = {}) {
     }
     if (method === "eth_call") {
       assert.equal(String(params[0].to).toLowerCase(), TRUSTED_LISTA.proxy.toLowerCase());
-      assert.equal(params[1], "0x64");
       if (params[0].data === encodePausedCall()) return "0x" + word(overrides.paused ? 1 : 0);
       if (params[0].data === encodeWithdrawalRequestsCall(ACCOUNT)) return overrides.requests ?? ONE_REQUEST;
       return overrides.status ?? STATUS_OK;
@@ -122,6 +144,14 @@ function script(overrides = {}) {
     throw new Error("unexpected method");
   }
   return { call, log };
+}
+
+function passInput(overrides = {}) {
+  return {
+    ...input(overrides),
+    connectedAccount: overrides.connectedAccount === undefined ? ACCOUNT : overrides.connectedAccount,
+    testApprovals: overrides.testApprovals ?? [approvedEntry()],
+  };
 }
 
 test("rebuilt claimWithdraw calldata is exact for idx 0 and 1", () => {
@@ -146,6 +176,9 @@ test("trusted sources ignore rpc and abi named by task JSON", () => {
   assert.equal(lista.proxy, TRUSTED_LISTA.proxy);
   for (const signature of TRUSTED_LISTA.reads) assert.ok(lista.methods.read.includes(signature));
   assert.deepEqual(lista.methods.planned_write, [TRUSTED_LISTA.method]);
+  assert.equal(lista.deployment_approvals.registry_version, TRUSTED_LISTA.approvalRegistryVersion);
+  assert.deepEqual(lista.deployment_approvals.entries, []);
+  assert.deepEqual([...TRUSTED_LISTA.approvals], []);
 });
 
 test("forged preflight: pass re-read, simulation not done, allow send closed", async () => {
@@ -155,7 +188,7 @@ test("forged preflight: pass re-read, simulation not done, allow send closed", a
   Object.freeze(current);
   Object.freeze(current.simulation);
   const { call, log } = script();
-  const result = await reverifyListaClaim({ ...input({ plan: current, task }), call });
+  const result = await reverifyListaClaim({ ...passInput({ plan: current, task }), call });
   assert.equal(result.reread, "pass");
   assert.equal(result.simulation, "not_done");
   assert.equal(result.allowSend, "closed");
@@ -163,7 +196,9 @@ test("forged preflight: pass re-read, simulation not done, allow send closed", a
   assert.equal(current.wallet_request_allowed, false);
   assert.equal(current.simulation.status, "INCOMPLETE");
   assert.equal(log.some((entry) => entry.method === "eth_sendTransaction"), false);
-  assert.equal(log.filter((entry) => entry.method === "eth_call" && entry.params[1] === "0x64").length, 3);
+  assert.equal(log.filter((entry) => entry.method === "eth_call" && entry.params[1]?.blockHash === BLOCK && entry.params[1]?.requireCanonical === true).length, 3);
+  assert.equal(result.deployment.matchesTask, true);
+  assert.equal(result.deployment.approvedDeployment, true);
   const decision = clientConfirmDecision({
     plan: current,
     task: { ...task, requires_user_wallet_confirmation: true },
@@ -282,7 +317,7 @@ test("not claimable, pause, recipient change, and mode C all block", async () =>
 
 test("a passing observation expires, and a revision or account change invalidates it", async () => {
   const { call } = script();
-  const result = await reverifyListaClaim({ ...input(), call });
+  const result = await reverifyListaClaim({ ...passInput(), call });
   assert.equal(result.reread, "pass");
   const context = {
     simulation: { status: "INCOMPLETE", effects_checked: false },
@@ -310,7 +345,7 @@ test("simulation FAIL stays fail when the re-read passes, and incomplete does no
   const current = plan({
     simulation: { status: "FAIL", effects_checked: false, source: "not_run" },
   });
-  const result = await reverifyListaClaim({ ...input({ plan: current }), call: script().call });
+  const result = await reverifyListaClaim({ ...passInput({ plan: current }), call: script().call });
   assert.equal(result.reread, "pass");
   assert.equal(result.simulation, "fail");
   assert.equal(result.allowSend, "closed");
@@ -341,6 +376,158 @@ test("fetch uses only the trusted endpoint and refuses a send method before the 
   assert.equal(await fetchTrustedRpc("eth_chainId", [], { fetchImpl }), "0x38");
   await assert.rejects(() => fetchTrustedRpc("eth_sendTransaction", [], { fetchImpl }));
   assert.equal(calls, 1);
+});
+
+test("UNPINNED_DEPLOYMENT_TUPLE matching the task is not a pass without client approval", async () => {
+  const current = plan({ deployment_approvals: [approvedEntry()], testApprovals: [approvedEntry()] });
+  const task = { mode: "A", ref: "ref_" + "ab".repeat(16), approvals: [approvedEntry()] };
+  const { call } = script();
+  const result = await reverifyListaClaim({ ...input({ plan: current, task }), call, connectedAccount: ACCOUNT });
+  assert.notEqual(result.reread, "pass");
+  assert.equal(result.reread, "insufficient");
+  assert.deepEqual(result.reasons, ["unapproved_deployment"]);
+  assert.equal(result.deployment.matchesTask, true);
+  assert.equal(result.deployment.approvedDeployment, false);
+  assert.equal(result.allowSend, "closed");
+  assert.equal(result.simulation, "not_done");
+});
+
+test("an injected active approval can pass and a retired or mismatched one cannot", async () => {
+  const { call } = script();
+  const approved = await reverifyListaClaim({ ...passInput(), call });
+  assert.equal(approved.reread, "pass");
+  assert.equal(approved.deployment.approvedDeployment, true);
+  const retired = await reverifyListaClaim({
+    ...passInput({ testApprovals: [approvedEntry({ retired: true })] }),
+    call: script().call,
+  });
+  assert.notEqual(retired.reread, "pass");
+  assert.deepEqual(retired.reasons, ["approval_retired"]);
+  const expired = await reverifyListaClaim({
+    ...passInput({ testApprovals: [approvedEntry({ validUntilUnix: NOW })] }),
+    call: script().call,
+  });
+  assert.notEqual(expired.reread, "pass");
+  assert.equal(expired.reasons.includes("approval_retired"), true);
+  const mismatched = await reverifyListaClaim({ ...passInput(), call: script({ impl: "0x" + "4".repeat(40) }).call });
+  assert.equal(mismatched.reread, "fail");
+  assert.equal(mismatched.reasons.includes("deployment_changed"), true);
+  assert.equal(mismatched.deployment.approvedDeployment, false);
+});
+
+test("wallet-only observation does not pass without a connected account", async () => {
+  const result = await reverifyListaClaim({ ...passInput({ connectedAccount: null }), call: script().call });
+  assert.equal(result.reread, "insufficient");
+  assert.deepEqual(result.reasons, ["wallet_unverified"]);
+  assert.equal(result.allowSend, "closed");
+});
+
+test("REORG_MIXED_HEIGHT cannot pass by mixing two states at one height", async () => {
+  const h1 = BLOCK;
+  const h2 = "0x" + "cd".repeat(32);
+  let headerReads = 0;
+  let requestsRead = false;
+  const log = [];
+  async function call(method, params) {
+    log.push({ method, params: structuredClone(params) });
+    if (method === "eth_chainId") return "0x38";
+    if (method === "eth_blockNumber") return "0x64";
+    if (method === "eth_getBlockByNumber") {
+      headerReads += 1;
+      return { number: "0x64", hash: h1, timestamp: "0x" + (NOW - 10).toString(16) };
+    }
+    const tag = params[params.length - 1];
+    const pinnedToH1 = tag && tag.blockHash === h1 && tag.requireCanonical === true;
+    if (typeof tag === "string") {
+      requestsRead = true;
+      if (method === "eth_call" && params[0].data === encodeRequestStatusCall(ACCOUNT, 0)) return STATUS_OK;
+      if (method === "eth_call" && params[0].data === encodeWithdrawalRequestsCall(ACCOUNT)) {
+        return requestsReturn([{ uuid: 99, amount: 5, start: 7 }]);
+      }
+    }
+    if (!pinnedToH1) throw new Error("unpinned");
+    if (method === "eth_getStorageAt") return "0x" + word(IMPL);
+    if (method === "eth_getCode") return String(params[0]).toLowerCase() === TRUSTED_LISTA.proxy.toLowerCase() ? PROXY_CODE : IMPL_CODE;
+    if (method === "eth_call" && params[0].data === encodePausedCall()) return "0x" + word(0);
+    if (method === "eth_call" && params[0].data === encodeWithdrawalRequestsCall(ACCOUNT)) {
+      requestsRead = true;
+      return ONE_REQUEST;
+    }
+    if (method === "eth_call" && params[0].data === encodeRequestStatusCall(ACCOUNT, 0)) {
+      assert.equal(requestsRead, true);
+      return "0x" + word(0) + word(6);
+    }
+    throw new Error("unexpected " + method);
+  }
+  const result = await reverifyListaClaim({ ...passInput(), call });
+  assert.equal(headerReads, 1);
+  assert.notEqual(result.reread, "pass");
+  assert.equal(result.reasons.includes("not_claimable"), true);
+  assert.equal(result.binding.blockHash, h1);
+  assert.equal(log.some((entry) => entry.params?.[1] === "0x64" && entry.method === "eth_call"), false);
+  assert.notEqual(h2, h1);
+  assert.equal(result.allowSend, "closed");
+});
+
+test("EXPIRED_PLAN does not pass", async () => {
+  const { call, log } = script();
+  const result = await reverifyListaClaim({
+    ...passInput({ plan: plan({ local_ttl_unix: NOW - 1 }) }),
+    call,
+  });
+  assert.notEqual(result.reread, "pass");
+  assert.equal(result.reread, "insufficient");
+  assert.deepEqual(result.reasons, ["plan_expired"]);
+  assert.equal(log.length, 0);
+  assert.equal(result.allowSend, "closed");
+});
+
+test("BLOCK_FRESHNESS_EXTENDED does not grant a new full TTL to a near-stale block", async () => {
+  const fresh = await reverifyListaClaim({ ...passInput(), call: script({ timestamp: NOW - 119 }).call });
+  assert.equal(fresh.reread, "pass");
+  assert.ok(fresh.binding.freshUntil <= (NOW - 119) + TRUSTED_LISTA.freshnessTtlSeconds);
+  assert.ok(fresh.binding.freshUntil < NOW + TRUSTED_LISTA.freshnessTtlSeconds);
+  const context = {
+    simulation: fresh.simulation === "not_done" ? { status: "INCOMPLETE", effects_checked: false } : {},
+    account: ACCOUNT,
+    chainId: 56,
+    planDigest: fresh.binding.planDigest,
+    taskRef: null,
+    revision: 1,
+    nowUnix: NOW + 2,
+  };
+  assert.equal(settleReread(fresh, context).reread, "insufficient");
+  const aged = await reverifyListaClaim({ ...passInput(), call: script({ timestamp: NOW - 121 }).call });
+  assert.notEqual(aged.reread, "pass");
+  assert.equal(aged.reasons.includes("stale_block"), true);
+  assert.equal(aged.allowSend, "closed");
+});
+
+test("a provider that rejects EIP-1898 tags cannot fall back to a number and pass", async () => {
+  const log = [];
+  async function call(method, params) {
+    log.push({ method, tag: params[params.length - 1] });
+    if (method === "eth_chainId") return "0x38";
+    if (method === "eth_blockNumber") return "0x64";
+    if (method === "eth_getBlockByNumber") {
+      return { number: "0x64", hash: BLOCK, timestamp: "0x" + (NOW - 10).toString(16) };
+    }
+    const tag = params[params.length - 1];
+    if (tag && typeof tag === "object") {
+      const error = new Error("invalid params");
+      error.rpcError = { code: -32602, message: "invalid params" };
+      throw error;
+    }
+    if (method === "eth_getStorageAt") return "0x" + word(IMPL);
+    if (method === "eth_getCode") return PROXY_CODE;
+    if (method === "eth_call") return STATUS_OK;
+    throw new Error("unexpected");
+  }
+  const result = await reverifyListaClaim({ ...passInput(), call });
+  assert.notEqual(result.reread, "pass");
+  assert.deepEqual(result.reasons, ["block_identity_unsupported"]);
+  assert.equal(log.some((entry) => typeof entry.tag === "string" && entry.method !== "eth_blockNumber"), false);
+  assert.equal(result.allowSend, "closed");
 });
 
 test("ui copy keeps the three statuses and lock screen separate from lock chain", () => {

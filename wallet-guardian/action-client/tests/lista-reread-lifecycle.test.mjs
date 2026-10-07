@@ -95,13 +95,31 @@ async function richTask(revision = 1) {
   };
 }
 
-function chainResult(body, { chain = "0x38" } = {}) {
+function approvalFixture() {
+  return [{
+    id: "test-only-lista",
+    registryVersion: 1,
+    implementation: IMPL,
+    proxyCodeSha256: sha(PROXY_CODE),
+    implementationCodeSha256: sha(IMPL_CODE),
+    provenance: "test-only injection, not a production pin",
+    validFromUnix: 0,
+    validUntilUnix: null,
+    retired: false,
+  }];
+}
+
+function chainResult(body, { chain = "0x38", blockAge = 5 } = {}) {
   const now = Math.floor(Date.now() / 1000);
   const method = body.method;
   if (method === "eth_chainId") return chain;
   if (method === "eth_blockNumber") return "0x64";
   if (method === "eth_getBlockByNumber") {
-    return { number: "0x64", hash: BLOCK, timestamp: "0x" + (now - 5).toString(16) };
+    return { number: "0x64", hash: BLOCK, timestamp: "0x" + (now - blockAge).toString(16) };
+  }
+  const tag = body.params?.[body.params.length - 1];
+  if (!tag || tag.blockHash !== BLOCK || tag.requireCanonical !== true) {
+    throw new Error("state read was not pinned to the header hash");
   }
   if (method === "eth_getStorageAt") return "0x" + word(IMPL);
   if (method === "eth_getCode") {
@@ -226,7 +244,7 @@ test("account change and chain change invalidate a stored pass", async () => {
     },
   });
   for (let i = 0; i < 500 && !h.elements.get("view").textContent.includes("Lista"); i += 1) await tick();
-  await h.app.reverifyCurrent();
+  await h.app.reverifyCurrent(approvalFixture());
   assert.equal(h.app.getState().reread.reread, "pass");
   assert.equal(h.elements.get("verify-send").textContent.includes("closed"), true);
   assert.equal(h.elements.get("verify-simulation").textContent.includes("not done"), true);
@@ -245,7 +263,7 @@ test("account change and chain change invalidate a stored pass", async () => {
 test("a passing re-read does not enable send when the harness mainnet flag is on", async () => {
   const taskBody = await richTask();
   const h = await preview(taskBody, (init) => rpcResponse(chainResult(JSON.parse(init.body))));
-  await h.app.reverifyCurrent();
+  await h.app.reverifyCurrent(approvalFixture());
   assert.equal(h.app.getState().reread.reread, "pass");
   const button = h.elements.get("view").children.flatMap(function walk(node) {
     return [node, ...(node.children ? node.children.flatMap(walk) : [])];
@@ -267,7 +285,7 @@ test("revision bump drops a stored pass", async () => {
     },
   });
   for (let i = 0; i < 500 && !h.elements.get("view").textContent.includes("Lista"); i += 1) await tick();
-  await h.app.reverifyCurrent();
+  await h.app.reverifyCurrent(approvalFixture());
   assert.equal(h.app.getState().reread.reread, "pass");
   current = await richTask(2);
   await h.app.loadPrivateTask(current.ref, h.app.getState().loadGeneration);
@@ -275,4 +293,75 @@ test("revision bump drops a stored pass", async () => {
   assert.equal(h.app.getState().reread.reread, "insufficient");
   assert.equal(h.app.getState().reread.allowSend, "closed");
   assert.equal(current.task.preflight.preflight_ok, true);
+});
+
+test("a second re-read clears the displayed pass while the new read is in progress", async () => {
+  const taskBody = await richTask();
+  const gates = [null, deferred()];
+  let chainCalls = 0;
+  const h = await preview(taskBody, (init) => {
+    const body = JSON.parse(init.body);
+    if (body.method === "eth_chainId") {
+      const gate = gates[chainCalls];
+      chainCalls += 1;
+      if (gate) return gate.promise.then(() => rpcResponse(chainResult(body)));
+    }
+    return rpcResponse(chainResult(body));
+  });
+  await h.app.reverifyCurrent(approvalFixture());
+  assert.match(h.elements.get("verify-reread").textContent, /pass/);
+  const pending = h.app.reverifyCurrent(approvalFixture());
+  for (let i = 0; i < 50 && chainCalls < 2; i += 1) await tick();
+  assert.equal(h.elements.get("verify-reread").textContent.includes("pass"), false);
+  assert.equal(h.app.getState().reread.reasons.includes("updating"), true);
+  assert.equal(h.elements.get("verify-send").textContent.includes("closed"), true);
+  gates[1].resolve();
+  await pending;
+  assert.match(h.elements.get("verify-reread").textContent, /pass/);
+  assert.equal(h.app.getState().reread.allowSend, "closed");
+});
+
+test("DOM expiry repaints a pass once the block deadline passes", async () => {
+  const taskBody = await richTask();
+  const h = await preview(taskBody, (init) => rpcResponse(chainResult(JSON.parse(init.body), { blockAge: 118 })));
+  await h.app.reverifyCurrent(approvalFixture());
+  assert.match(h.elements.get("verify-reread").textContent, /pass/);
+  assert.equal(typeof h.documentListeners.get("visibilitychange"), "function");
+  assert.equal(typeof h.windowListeners.get("focus"), "function");
+  await new Promise((resolve) => setTimeout(resolve, 4000));
+  h.documentListeners.get("visibilitychange")();
+  assert.equal(h.elements.get("verify-reread").textContent.includes("pass"), false);
+  assert.match(h.elements.get("verify-reread").textContent, /insufficient/);
+  assert.equal(h.app.getState().reread.reread, "insufficient");
+  assert.equal(h.elements.get("verify-send").textContent.includes("closed"), true);
+});
+
+test("disconnect and provider replacement invalidate a stored pass", async () => {
+  const taskBody = await richTask();
+  const h = await preview(taskBody, (init) => rpcResponse(chainResult(JSON.parse(init.body))));
+  assert.equal(typeof h.providerListeners.get("disconnect"), "function");
+  await h.app.reverifyCurrent(approvalFixture());
+  assert.match(h.elements.get("verify-reread").textContent, /pass/);
+  h.providerListeners.get("disconnect")({ code: 4900, message: "disconnected" });
+  assert.equal(h.elements.get("verify-reread").textContent.includes("pass"), false);
+  assert.equal(h.app.getState().reread.reasons.includes("provider_disconnected"), true);
+  assert.equal(h.app.getState().reread.allowSend, "closed");
+  await h.app.reverifyCurrent(approvalFixture());
+  assert.match(h.elements.get("verify-reread").textContent, /pass/);
+  let removed = false;
+  const previous = h.window.ethereum.removeListener;
+  h.window.ethereum.removeListener = (event, handler) => {
+    removed = true;
+    previous(event, handler);
+  };
+  h.window.ethereum = {
+    request: h.window.ethereum.request,
+    on: () => {},
+    removeListener: () => {},
+  };
+  h.windowListeners.get("focus")();
+  assert.equal(removed, true);
+  assert.equal(h.elements.get("verify-reread").textContent.includes("pass"), false);
+  assert.equal(h.app.getState().reread.reasons.includes("provider_replaced"), true);
+  assert.equal(h.app.getState().reread.allowSend, "closed");
 });

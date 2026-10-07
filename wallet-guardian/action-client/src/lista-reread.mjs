@@ -49,6 +49,15 @@ export const REASON_TEXT = Object.freeze({
   calldata_mismatch: "calldata 與重算的 claimWithdraw 不一致。",
   deployment_changed: "實作或程式碼與計畫記載的部署不一致。",
   deployment_unreadable: "合約程式碼無法核對。",
+  unapproved_deployment: "鏈上部署和任務一致，但客戶端沒有核准這個實作版本。",
+  approval_retired: "這個部署核准已停用或過期。",
+  plan_expired: "計畫的本地有效時間已過。",
+  block_identity_unsupported: "節點不接受以區塊雜湊鎖定狀態，不能標成同一個區塊。",
+  block_not_canonical: "區塊雜湊已不是標準鏈上的區塊。",
+  wallet_unverified: "沒有核對到連線錢包。這次只是觀察，不能算通過。",
+  provider_disconnected: "錢包連線中斷，先前的重讀作廢。",
+  provider_replaced: "錢包提供者已更換，先前的重讀作廢。",
+  updating: "正在重讀。先前的結果先不算數。",
   mode_unsupported: "模式 B／C 不在這次唯讀重讀範圍。",
   digest_mismatch: "計畫摘要對不上。",
 });
@@ -91,14 +100,23 @@ export function statusLines(view) {
   };
 }
 
-function view(status, reasons, binding, simulation) {
+function view(status, reasons, binding, simulation, deployment = null) {
   return {
     reread: status,
     simulation: simulationEffectStatus(simulation),
     allowSend: "closed",
     reasons,
     binding,
+    deployment,
   };
+}
+
+/** EIP-1898 tag. State reads use this object and do not fall back to a block number. */
+export function canonicalBlockTag(blockHash) {
+  if (typeof blockHash !== "string" || !/^0x[0-9a-f]{64}$/.test(blockHash)) {
+    throw new Error("block hash required");
+  }
+  return { blockHash, requireCanonical: true };
 }
 
 function uintString(value) {
@@ -144,6 +162,12 @@ function localBlock(input) {
   if (input.revision != null && input.revision !== plan.revision) {
     return view("insufficient", ["revision_changed"], null, simulation);
   }
+  if (Object.prototype.hasOwnProperty.call(plan, "local_ttl_unix")) {
+    if (!Number.isSafeInteger(plan.local_ttl_unix)) return view("insufficient", ["missing_fields"], null, simulation);
+    if (Number.isSafeInteger(input.nowUnix) && input.nowUnix >= plan.local_ttl_unix) {
+      return view("insufficient", ["plan_expired"], null, simulation);
+    }
+  }
   const deployment = plan.deployment;
   const sources = trustedQuerySources(task ?? plan);
   if (!deployment || deployment.method !== CLAIM_SIGNATURE || !sameAddress(deployment.proxy, sources.proxy)) {
@@ -182,25 +206,50 @@ async function readAtBlock(call, account) {
   if (chainId !== TRUSTED_LISTA.chainId) return { rejected: true, chainId };
   const blockHex = await call("eth_blockNumber", []);
   const block = await call("eth_getBlockByNumber", [blockHex, false]);
-  const implementationWord = await call("eth_getStorageAt", [sources.proxy, sources.implementationSlot, blockHex]);
+  const blockHash = block && typeof block.hash === "string" ? block.hash.toLowerCase() : "";
+  const blockNumber = hexQuantity(blockHex);
+  const blockTimestamp = block && block.timestamp != null ? hexQuantity(block.timestamp) : null;
+  const reportedNumber = block && block.number != null ? hexQuantity(block.number) : null;
+  if (!/^0x[0-9a-f]{64}$/.test(blockHash) || blockTimestamp == null || reportedNumber !== blockNumber) {
+    return { rejected: false, incoherent: "block_missing", chainId, blockNumber, blockHash, blockTimestamp, reportedNumber };
+  }
+  const blockTag = canonicalBlockTag(blockHash);
+  const implementationWord = await call("eth_getStorageAt", [sources.proxy, sources.implementationSlot, blockTag]);
   const implementation = addressFromStorage(implementationWord);
-  const proxyCode = await call("eth_getCode", [sources.proxy, blockHex]);
-  const implementationCode = await call("eth_getCode", [implementation, blockHex]);
-  const pausedWord = await call("eth_call", [{ to: sources.proxy, data: encodePausedCall() }, blockHex]);
-  const requestWord = await call("eth_call", [{ to: sources.proxy, data: encodeWithdrawalRequestsCall(account) }, blockHex]);
+  const proxyCode = await call("eth_getCode", [sources.proxy, blockTag]);
+  const implementationCode = await call("eth_getCode", [implementation, blockTag]);
+  const pausedWord = await call("eth_call", [{ to: sources.proxy, data: encodePausedCall() }, blockTag]);
+  const requestWord = await call("eth_call", [{ to: sources.proxy, data: encodeWithdrawalRequestsCall(account) }, blockTag]);
   return {
     rejected: false,
     chainId,
     blockHex,
-    blockNumber: hexQuantity(blockHex),
-    blockHash: block && typeof block.hash === "string" ? block.hash.toLowerCase() : "",
-    blockTimestamp: block && block.timestamp != null ? hexQuantity(block.timestamp) : null,
-    reportedNumber: block && block.number != null ? hexQuantity(block.number) : null,
+    blockNumber,
+    blockHash,
+    blockTimestamp,
+    reportedNumber,
+    blockTag,
     implementation,
     proxyCode,
     implementationCode,
     paused: decodeBool(pausedWord),
     requests: decodeWithdrawalRequests(requestWord),
+  };
+}
+
+function deadlines(input, snap) {
+  const ttl = TRUSTED_LISTA.freshnessTtlSeconds;
+  const startedAt = Number.isSafeInteger(input.startedAt) ? input.startedAt : input.nowUnix;
+  const marks = [];
+  if (Number.isSafeInteger(startedAt)) marks.push(startedAt + ttl);
+  if (snap && Number.isSafeInteger(snap.blockTimestamp)) marks.push(snap.blockTimestamp + ttl);
+  const planExpiresAt = input.plan && Number.isSafeInteger(input.plan.local_ttl_unix) ? input.plan.local_ttl_unix : null;
+  if (planExpiresAt != null) marks.push(planExpiresAt);
+  return {
+    startedAt: Number.isSafeInteger(startedAt) ? startedAt : null,
+    planExpiresAt,
+    blockTimestamp: snap && Number.isSafeInteger(snap.blockTimestamp) ? snap.blockTimestamp : null,
+    freshUntil: marks.length ? Math.min(...marks) : input.nowUnix,
   };
 }
 
@@ -216,8 +265,66 @@ function bindingFor(input, snap) {
     blockNumber: snap ? snap.blockNumber : null,
     blockHash: snap ? snap.blockHash : null,
     observedAt,
-    freshUntil: observedAt + TRUSTED_LISTA.freshnessTtlSeconds,
+    ...deadlines(input, snap),
   };
+}
+
+function approvalsFor(input) {
+  if (input && Object.prototype.hasOwnProperty.call(input, "testApprovals")) {
+    return Array.isArray(input.testApprovals) ? input.testApprovals : [];
+  }
+  return TRUSTED_LISTA.approvals;
+}
+
+function entryTuple(entry) {
+  if (!entry || entry.registryVersion !== TRUSTED_LISTA.approvalRegistryVersion) return null;
+  if (typeof entry.id !== "string" || entry.id.length === 0) return null;
+  if (typeof entry.provenance !== "string" || entry.provenance.length === 0) return null;
+  if (!sameAddress(entry.implementation, entry.implementation)) return null;
+  if (!hashString(entry.proxyCodeSha256) || !hashString(entry.implementationCodeSha256)) return null;
+  return {
+    implementation: entry.implementation,
+    proxyCodeSha256: entry.proxyCodeSha256.toLowerCase(),
+    implementationCodeSha256: entry.implementationCodeSha256.toLowerCase(),
+  };
+}
+
+function sameTuple(left, right) {
+  return sameAddress(left.implementation, right.implementation) &&
+    left.proxyCodeSha256 === right.proxyCodeSha256 &&
+    left.implementationCodeSha256 === right.implementationCodeSha256;
+}
+
+function entryState(entry, now) {
+  if (entry.retired === true) return "retired";
+  if (typeof entry.validFromUnix === "number" && now < entry.validFromUnix) return "inactive";
+  if (typeof entry.validUntilUnix === "number" && now >= entry.validUntilUnix) return "retired";
+  return "active";
+}
+
+function classifyApproval(entries, tuple, now) {
+  let retired = false;
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const pinned = entryTuple(entry);
+    if (!pinned || !sameTuple(pinned, tuple)) continue;
+    const state = entryState(entry, now);
+    if (state === "active") return { active: true, retired: false };
+    if (state === "retired") retired = true;
+  }
+  return { active: false, retired };
+}
+
+export function blockTagFailure(error) {
+  if (!error || error.name === "TimeoutError" || error.name === "AbortError") return null;
+  const rpcError = error.rpcError;
+  const message = `${error.message || ""} ${rpcError && rpcError.message ? rpcError.message : ""}`;
+  if ((rpcError && rpcError.code === -32602) || /invalid params|unsupported/i.test(message)) {
+    return "block_identity_unsupported";
+  }
+  if (/non-canonical|noncanonical|requireCanonical|unknown block|header not found|block not found/i.test(message)) {
+    return "block_not_canonical";
+  }
+  return null;
 }
 
 function fail(reasons, input) {
@@ -228,19 +335,24 @@ function judge(input, snap, located, status) {
   const simulation = input.plan.simulation;
   const reasons = [];
   if (snap.chainId !== TRUSTED_LISTA.chainId) reasons.push("wrong_chain");
-  if (!snap.blockHash || !/^0x[0-9a-f]{64}$/.test(snap.blockHash) || snap.blockTimestamp == null ||
-      snap.reportedNumber !== snap.blockNumber) {
+  if (!snap.blockTag || snap.blockTag.requireCanonical !== true || snap.blockTag.blockHash !== snap.blockHash) {
     return view("insufficient", ["block_missing"], null, simulation);
   }
   const skew = snap.blockTimestamp - input.nowUnix;
   if (skew > TRUSTED_LISTA.maxClockSkewSeconds) reasons.push("stale_block");
   if (input.nowUnix - snap.blockTimestamp > TRUSTED_LISTA.freshnessTtlSeconds) reasons.push("stale_block");
   if (snap.proxyCode === "0x" || snap.implementationCode === "0x") reasons.push("deployment_unreadable");
-  if (!sameAddress(snap.implementation, input.plan.deployment.implementation)) reasons.push("deployment_changed");
-  if (snap.proxyCodeSha256 !== input.plan.deployment.proxy_code_sha256.toLowerCase() ||
-      snap.implementationCodeSha256 !== input.plan.deployment.implementation_code_sha256.toLowerCase()) {
-    reasons.push("deployment_changed");
-  }
+  const tuple = {
+    implementation: snap.implementation,
+    proxyCodeSha256: snap.proxyCodeSha256,
+    implementationCodeSha256: snap.implementationCodeSha256,
+  };
+  const taskDeployment = input.plan.deployment;
+  const matchesTask = sameAddress(tuple.implementation, taskDeployment.implementation) &&
+    tuple.proxyCodeSha256 === String(taskDeployment.proxy_code_sha256).toLowerCase() &&
+    tuple.implementationCodeSha256 === String(taskDeployment.implementation_code_sha256).toLowerCase();
+  if (!matchesTask) reasons.push("deployment_changed");
+  const approval = classifyApproval(approvalsFor(input), tuple, input.nowUnix);
   if (snap.paused === true) reasons.push("paused");
   if (located.kind === "missing") reasons.push("claimable_missing");
   if (located.kind === "duplicate") reasons.push("uuid_not_unique");
@@ -255,23 +367,42 @@ function judge(input, snap, located, status) {
     const rebuilt = claimCalldata(located.idx);
     if (String(input.plan.calls[0].data).toLowerCase() !== rebuilt) reasons.push("calldata_mismatch");
   }
-  const stale = reasons.includes("stale_block");
-  const hard = reasons.filter((reason) => reason !== "stale_block");
-  if (reasons.length === 0) return view("pass", [], bindingFor(input, snap), simulation);
-  if (stale && hard.length === 0) return view("insufficient", reasons, null, simulation);
-  if (hard.length === 0) return view("insufficient", reasons, null, simulation);
-  return view("fail", reasons, bindingFor(input, snap), simulation);
+  const binding = bindingFor(input, snap);
+  if (Number.isSafeInteger(input.plan.local_ttl_unix) && input.nowUnix >= input.plan.local_ttl_unix) {
+    reasons.push("plan_expired");
+  }
+  if (input.nowUnix >= binding.freshUntil && !reasons.includes("stale_block") && !reasons.includes("plan_expired")) {
+    reasons.push("stale");
+  }
+  const deployment = { matchesTask, approvedDeployment: approval.active };
+  const soft = new Set(["stale_block", "plan_expired", "stale"]);
+  const hard = reasons.filter((reason) => !soft.has(reason));
+  if (hard.length) return view("fail", reasons, binding, simulation, deployment);
+  if (reasons.length) return view("insufficient", reasons, null, simulation, deployment);
+  if (!approval.active) {
+    return view("insufficient", [approval.retired ? "approval_retired" : "unapproved_deployment"], binding, simulation, {
+      matchesTask,
+      approvedDeployment: false,
+    });
+  }
+  if (!sameAddress(input.connectedAccount, input.account)) {
+    return view("insufficient", ["wallet_unverified"], binding, simulation, deployment);
+  }
+  return view("pass", [], binding, simulation, deployment);
 }
 
 export async function reverifyListaClaim(input) {
-  const blocked = localBlock(input);
+  const startedAt = Number.isSafeInteger(input.startedAt) ? input.startedAt : input.nowUnix;
+  const scoped = { ...input, startedAt };
+  const blocked = localBlock(scoped);
   if (blocked) return blocked;
-  if (typeof input.nowUnix !== "number" || !Number.isSafeInteger(input.nowUnix)) {
+  if (typeof scoped.nowUnix !== "number" || !Number.isSafeInteger(scoped.nowUnix)) {
     return view("insufficient", ["missing_fields"], null, input.plan.simulation);
   }
   try {
     const snap = await readAtBlock(input.call, input.account);
-    if (snap.rejected) return view("fail", ["wrong_chain"], bindingFor(input, snap), input.plan.simulation);
+    if (snap.rejected) return view("fail", ["wrong_chain"], bindingFor(scoped, snap), input.plan.simulation);
+    if (snap.incoherent) return view("insufficient", [snap.incoherent], null, input.plan.simulation);
     snap.proxyCodeSha256 = await codeSha256(snap.proxyCode);
     snap.implementationCodeSha256 = await codeSha256(snap.implementationCode);
     const located = locateWithdrawal(snap.requests, input.plan.intent.uuid);
@@ -283,16 +414,20 @@ export async function reverifyListaClaim(input) {
       const word = await input.call("eth_call", [{
         to: trustedQuerySources(null).proxy,
         data: encodeRequestStatusCall(input.account, located.idx),
-      }, snap.blockHex]);
+      }, snap.blockTag]);
       status = decodeStatus(word);
     }
-    return judge(input, snap, located, status);
+    const completedAt = typeof input.clock === "function" ? input.clock() : scoped.nowUnix;
+    const judged = { ...scoped, nowUnix: Number.isSafeInteger(completedAt) ? completedAt : scoped.nowUnix };
+    return judge(judged, snap, located, status);
   } catch (error) {
+    const tagReason = blockTagFailure(error);
+    if (tagReason) return view("insufficient", [tagReason], null, input.plan.simulation);
     const name = error && error.name;
     if (name === "TimeoutError" || name === "AbortError") {
       return view("insufficient", ["timeout"], null, input.plan.simulation);
     }
-    if (error instanceof Error && /bad |short |unexpected |truncated |word overflow/.test(error.message)) {
+    if (error instanceof Error && /bad |short |unexpected |truncated |word overflow|block hash required/.test(error.message)) {
       return view("insufficient", ["undecodable"], null, input.plan.simulation);
     }
     return view("insufficient", ["rpc_failed"], null, input.plan.simulation);
@@ -316,6 +451,10 @@ export function settleReread(observation, context) {
     return { reread: "insufficient", simulation, allowSend: "closed", reasons: ["unbound"], binding: null };
   }
   const reasons = [];
+  if (Number.isSafeInteger(binding.planExpiresAt) && context.nowUnix >= binding.planExpiresAt) reasons.push("plan_expired");
+  if (Number.isSafeInteger(binding.blockTimestamp) && context.nowUnix - binding.blockTimestamp > TRUSTED_LISTA.freshnessTtlSeconds) {
+    reasons.push("stale_block");
+  }
   if (context.nowUnix >= binding.freshUntil) reasons.push("stale");
   if (!sameAddress(context.account, binding.account)) reasons.push("account_changed");
   if (context.chainId !== binding.chainId) reasons.push("chain_changed");

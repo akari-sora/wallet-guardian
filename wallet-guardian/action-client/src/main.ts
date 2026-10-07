@@ -40,13 +40,14 @@ type RereadView = {
   simulation: string;
   allowSend: "closed";
   reasons: string[];
-  binding: { chainId?: number } | null;
+  binding: { chainId?: number; freshUntil?: number } | null;
 };
 
 type Plan = {
   protocol_version: string;
   task_id: string;
   revision?: number;
+  local_ttl_unix?: number;
   state?: string;
   sender: string;
   recipient: string;
@@ -125,14 +126,24 @@ let authBusy = false;
 let sessionAddress: string | null = null;
 let rereadSeq = 0;
 let rereadResult: RereadView | null = null;
+let rereadPending = false;
+let forcedReason: string | null = null;
+let expiryGeneration = 0;
+let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 let walletEpoch = 0;
 let walletAccount: string | null = null;
 let walletChainId: number | null = null;
 let watchedProvider: EthereumProvider | null = null;
+const walletHandlers: { event: string; handler: (value: unknown) => void }[] = [];
 
-function dropReread(): void {
+function dropReread(reason: string | null = null): void {
   rereadSeq += 1;
   rereadResult = null;
+  rereadPending = false;
+  forcedReason = reason;
+  expiryGeneration += 1;
+  if (expiryTimer) clearTimeout(expiryTimer);
+  expiryTimer = null;
 }
 
 // A network cancellation is best-effort; generations are the authority for
@@ -153,6 +164,7 @@ function invalidatePrivateView(keepRef = true): number {
 type EthereumProvider = {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
   on?: (event: string, handler: (value: unknown) => void) => void;
+  removeListener?: (event: string, handler: (value: unknown) => void) => void;
 };
 
 function ethereumProvider(): EthereumProvider | null {
@@ -160,6 +172,8 @@ function ethereumProvider(): EthereumProvider | null {
 }
 
 function currentVerification(): RereadView {
+  if (forcedReason) return { ...emptyRereadView(lastPlan?.simulation), reasons: [forcedReason] };
+  if (rereadPending) return { ...emptyRereadView(lastPlan?.simulation), reasons: ["updating"] };
   if (walletChainId != null && walletChainId !== TRUSTED_LISTA.chainId) {
     return { ...emptyRereadView(lastPlan?.simulation), reasons: ["wrong_chain"] };
   }
@@ -175,8 +189,24 @@ function currentVerification(): RereadView {
   });
 }
 
+function armExpiry(until: number): void {
+  if (expiryTimer) clearTimeout(expiryTimer);
+  const token = ++expiryGeneration;
+  const delay = Math.max(0, until * 1000 - Date.now());
+  const timer = setTimeout(() => {
+    if (token !== expiryGeneration) return;
+    paintVerification(currentVerification());
+  }, delay);
+  const nodeTimer = timer as unknown as { unref?: () => void };
+  if (typeof nodeTimer.unref === "function") nodeTimer.unref();
+  expiryTimer = timer;
+}
+
 function paintVerification(model: RereadView): void {
   const lines = statusLines(model);
+  if ((model.reread === "pass" || model.reread === "fail") && typeof model.binding?.freshUntil === "number") {
+    armExpiry(model.binding.freshUntil);
+  }
   const reread = document.querySelector<HTMLElement>("#verify-reread");
   const simulation = document.querySelector<HTMLElement>("#verify-simulation");
   const send = document.querySelector<HTMLElement>("#verify-send");
@@ -203,18 +233,39 @@ function paintVerification(model: RereadView): void {
   }
 }
 
+function unlisten(provider: EthereumProvider): void {
+  if (!provider.removeListener) {
+    walletHandlers.length = 0;
+    return;
+  }
+  for (const entry of walletHandlers) provider.removeListener(entry.event, entry.handler);
+  walletHandlers.length = 0;
+}
+
+function listen(provider: EthereumProvider, event: string, handler: (value: unknown) => void): void {
+  provider.on?.(event, handler);
+  walletHandlers.push({ event, handler });
+}
+
 function watchWallet(): void {
   const provider = ethereumProvider();
-  if (!provider?.on || watchedProvider === provider) return;
+  if (provider === watchedProvider) return;
+  if (watchedProvider) {
+    unlisten(watchedProvider);
+    walletEpoch += 1;
+    dropReread("provider_replaced");
+    paintVerification(currentVerification());
+  }
   watchedProvider = provider;
-  provider.on("accountsChanged", (value: unknown) => {
+  if (!provider?.on) return;
+  listen(provider, "accountsChanged", (value: unknown) => {
     const first = Array.isArray(value) ? String(value[0] ?? "") : "";
     walletAccount = /^0x[a-fA-F0-9]{40}$/.test(first) ? first.toLowerCase() : null;
     walletEpoch += 1;
     dropReread();
     paintVerification(currentVerification());
   });
-  provider.on("chainChanged", (value: unknown) => {
+  listen(provider, "chainChanged", (value: unknown) => {
     const hex = typeof value === "string" ? value : "";
     const parsed = /^0x[0-9a-fA-F]+$/.test(hex) ? Number.parseInt(hex, 16) : Number.NaN;
     walletChainId = Number.isSafeInteger(parsed) ? parsed : null;
@@ -222,9 +273,27 @@ function watchWallet(): void {
     dropReread();
     paintVerification(currentVerification());
   });
+  listen(provider, "disconnect", () => {
+    walletEpoch += 1;
+    walletAccount = null;
+    dropReread("provider_disconnected");
+    paintVerification(currentVerification());
+  });
 }
 
-async function reverifyCurrent(): Promise<void> {
+function bindResumeListeners(): void {
+  const resume = () => {
+    watchWallet();
+    paintVerification(currentVerification());
+  };
+  if (typeof document.addEventListener === "function") document.addEventListener("visibilitychange", resume);
+  if (typeof window.addEventListener === "function") {
+    window.addEventListener("focus", resume);
+    window.addEventListener("pageshow", resume);
+  }
+}
+
+async function reverifyCurrent(testApprovals?: unknown[]): Promise<void> {
   const generation = loadGeneration;
   const seq = ++rereadSeq;
   const epoch = walletEpoch;
@@ -232,6 +301,10 @@ async function reverifyCurrent(): Promise<void> {
   const task = lastTask;
   const revision = privateRevision ?? plan?.revision ?? null;
   if (!plan) return;
+  const startedAt = Math.floor(Date.now() / 1000);
+  forcedReason = null;
+  rereadPending = true;
+  paintVerification(currentVerification());
   watchWallet();
   const still = () => seq === rereadSeq && epoch === walletEpoch && generation === loadGeneration && lastPlan === plan;
   let connectedAccount: string | null = null;
@@ -266,12 +339,17 @@ async function reverifyCurrent(): Promise<void> {
       walletChainId,
       planDigest: plan.digest,
       revision,
-      nowUnix: Math.floor(Date.now() / 1000),
+      startedAt,
+      nowUnix: startedAt,
+      clock: () => Math.floor(Date.now() / 1000),
+      ...(Array.isArray(testApprovals) ? { testApprovals } : {}),
     });
     if (!still() || (privateRevision ?? plan.revision) !== revision) return;
+    rereadPending = false;
     rereadResult = result as RereadView;
   } catch (error) {
     if (!still()) return;
+    rereadPending = false;
     const name = error instanceof Error ? error.name : "";
     const reason = name === "TimeoutError" || name === "AbortError" ? "timeout" : "rpc_failed";
     rereadResult = { ...emptyRereadView(plan.simulation), reasons: [reason] };
@@ -912,4 +990,5 @@ document.querySelector("#clear")!.addEventListener("click", () => {
 });
 
 watchWallet();
+bindResumeListeners();
 void restoreSession().then((current) => { if (current) inspectLocation(); });

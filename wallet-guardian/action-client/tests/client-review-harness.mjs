@@ -62,9 +62,14 @@ export async function harness({ onFetch, onWallet, initialSession = session(), p
   const elements = new Map(['view','banner','login','logout','cancel-task','load-sample','file','clear','session','verify','verify-reread','verify-simulation','verify-send','verify-reasons'].map(x => [x, new Element()]));
   const calls = [], walletCalls = [];
   const providerListeners = new Map();
+  const documentListeners = new Map();
+  const windowListeners = new Map();
   const document = { querySelector: selector => elements.get(selector.replace(/^#/, '')),
-    createElement: () => new Element() };
-  const window = { location: new URL(pathname, ORIGIN), ethereum: {
+    createElement: () => new Element(),
+    addEventListener: (event, handler) => documentListeners.set(event, handler) };
+  const window = { location: new URL(pathname, ORIGIN),
+    addEventListener: (event, handler) => windowListeners.set(event, handler),
+    ethereum: {
     request: async args => {
       walletCalls.push(args);
       if (onWallet) { const handled = onWallet(args); if (handled !== undefined) return handled; }
@@ -107,7 +112,7 @@ export async function harness({ onFetch, onWallet, initialSession = session(), p
   ).outputText;
   vm.runInContext(transpiled, context, { filename: 'review-actual-main.cjs', timeout:3000 });
   for (let i = 0; i < 5; i++) await tick();
-  return { app:context.__review, elements, calls, walletCalls, providerListeners };
+  return { app:context.__review, elements, calls, walletCalls, providerListeners, documentListeners, windowListeners, window };
 }
 
 export async function envelope() {
