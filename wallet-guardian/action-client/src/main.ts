@@ -343,7 +343,11 @@ async function loadSameOriginTask(ref: string): Promise<void> {
 
 function inspectLocation(): void {
   const params = new URLSearchParams(window.location.search);
-  if ([...params.keys()].some((key) => key !== "ref")) {
+  let hasExtraQuery = false;
+  params.forEach((_value, key) => {
+    if (key !== "ref") hasExtraQuery = true;
+  });
+  if (hasExtraQuery) {
     renderError("任務連結只能帶不透明參考碼，不能帶地址、金額或其他私人欄位。連結不是執行授權。");
     return;
   }
