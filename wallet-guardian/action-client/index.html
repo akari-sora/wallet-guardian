@@ -13,7 +13,7 @@
         <h1>錢包瀏覽器任務工作台</h1>
         <p>在你自己的錢包裡核對目標、資產、接收人與費用。這個頁面是固定版本，只接受 typed 任務資料，不會在執行時產生簽名腳本，也不會把主錢包私鑰送到監控程式。</p>
       </header>
-      <div class="banner" id="banner">主網簽名未授權。沒有固定 HTTPS 網域，不會發行可在手機錢包開啟的任務連結。按鈕只會說明阻塞原因，不會呼叫錢包。</div>
+      <div class="banner" id="banner">主網簽名未授權。沒有固定 HTTPS 網域，不會發行可在手機錢包開啟的任務連結。按鈕只會說明阻塞原因，不會呼叫錢包。鎖畫面不等於鎖鏈。lock screen ≠ lock chain.</div>
       <p id="session" class="status">尚未登入。登入只建立讀取工作階段，不是交易授權。ERC-1271 合約帳戶不支援。</p>
       <div class="row">
         <button type="button" id="login">登入（只簽讀取訊息）</button>
@@ -26,6 +26,13 @@
         </label>
         <button type="button" id="clear">取消</button>
       </div>
+      <section id="verify" class="verify" aria-live="polite" aria-label="獨立核對">
+        <p id="verify-reread" data-check="reread" data-state="insufficient">獨立鏈上重讀：資料不足（insufficient）</p>
+        <p id="verify-simulation" data-check="simulation" data-state="not_done">交易效果模擬：未做（not done）</p>
+        <p id="verify-send" data-check="send" data-state="closed">允許實際送出：關閉（closed）</p>
+        <p class="lock-note">鎖畫面不等於鎖鏈。lock screen ≠ lock chain.</p>
+        <ul id="verify-reasons" class="reasons"></ul>
+      </section>
       <section id="view" class="empty">尚未載入任務。合成範例不是你的鏈上餘額。</section>
     </main>
     <script type="module" src="/src/main.ts"></script>

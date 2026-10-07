@@ -14,6 +14,7 @@ This repository is a read-only monitor plus an unsigned action planner.
 - Mode C stays off. This repository has no permission contract. A caller-supplied enforcer object is not enforcement.
 - `GUARDIAN_MAINNET_SEND` defaults false and only concerns the user wallet. It never lets the agent sign or broadcast.
 - Task JSON `preflight_ok` and `requires_user_wallet_confirmation` do not authorize a wallet request. `wallet_request_allowed=false`, incomplete simulation, and block reasons keep send off.
+- A Lista re-read uses the client-trusted RPC, proxy, and ABI. Passing that re-read does not write `preflight_ok`, does not mark an incomplete simulation as pass, and does not open send. Lock screen is not lock chain.
 - Load API keys from the environment or gitignored `.env.local`. Do not commit them. Etherscan V2 uses one `ETHERSCAN_API_KEY`.
 - A new smart account cannot operate a position that still sits on the original address.
 - A transaction hash is not completion. Waiting periods can be tracked and cannot be skipped.

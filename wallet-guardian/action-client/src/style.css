@@ -45,6 +45,25 @@ header p, .status {
   margin: 18px 0;
 }
 
+.verify {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+
+.verify p {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.verify [data-state="pass"] { color: var(--ok); }
+.verify [data-state="fail"], .verify [data-state="insufficient"], .verify [data-state="not_done"] { color: var(--warn); }
+.verify [data-state="closed"] { color: var(--danger); }
+.lock-note { color: var(--ink); }
+
 #session { margin: 0 0 12px; }
 
 .row {

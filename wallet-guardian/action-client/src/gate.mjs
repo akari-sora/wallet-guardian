@@ -54,7 +54,7 @@ export function confirmDecision({
   return { buttonEnabled: true, sendAllowed: true, reason: null, agentMaySign: false };
 }
 
-/** Browser policy: task JSON preflight is ignored. This build has no client-owned reread. */
+/** Task JSON preflight is ignored. A client re-read is not passed in and is not send authority. */
 export function clientConfirmDecision({ plan, task, mainnetSend, mode }) {
   const resolvedMode = task && task.mode === "C" ? "C" : mode;
   return confirmDecision({

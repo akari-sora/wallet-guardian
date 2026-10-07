@@ -9,7 +9,7 @@ export function parsePrivateTaskRef(pathname) {
   return match[1];
 }
 
-/** Task JSON, including preflight_ok, is not send authority. This build has no chain reread. */
+/** Task JSON, including preflight_ok, is not send authority. A chain re-read is not send authority either. */
 export function privateTaskSendAllowed(task, mainnetSend = false) {
   const decision = clientConfirmDecision({
     plan: task && task.plan,

@@ -92,13 +92,13 @@ npm run dev
 
 頁面會重算 digest。金額、收款地址與計畫不一致就拒絕。連接錢包、登入簽名、代幣授權、批次確認、限定執行權限、帳戶升級與「確認這筆領取」分開列出。Lista 原地址單步領取只有最後一項需要確認。
 
-`在我的錢包確認` 不會因為任務 JSON 自述 `preflight_ok` 而送出。計畫 `wallet_request_allowed=false`、未完成模擬或阻塞原因都會關掉送出。這個預覽沒有客戶端鏈上重讀，所以按鈕保持關閉，也不會呼叫 `eth_sendTransaction` 或 `wallet_sendCalls`。`VITE_GUARDIAN_MAINNET_SEND` 預設不設定。監控程式永遠不能簽名。
+`在我的錢包確認` 不會因為任務 JSON 自述 `preflight_ok` 而送出。計畫 `wallet_request_allowed=false`、未完成模擬或阻塞原因都會關掉送出。獨立鏈上重讀、效果模擬、允許送出分開顯示；重讀通過也不會打開送出。見 `docs/p2-lista-reread.md`。`VITE_GUARDIAN_MAINNET_SEND` 預設不設定。監控程式永遠不能簽名。
 
 `查詢批次能力` 是另一個按鈕。它只在你按下時讀 `wallet_getCapabilities`。不支援、查到別的鏈、或狀態是 `ready`，都留在模式 A。同鏈而且多於一筆、能力是 `supported`，畫面才標模式 B。真錢包批次未測。這個預覽不呼叫 `wallet_sendCalls`。
 
 模式 C 保持關閉。程式裡沒有權限合約。任務資料自己宣稱已驗證，不算鏈上強制。
 
-重讀通過時 `preflight_ok` 為 true，但 `continue_to_wallet` 仍是 false。交易雜湊不算完成。拒絕、送出不明、替代與完成核對有離線狀態機測試。
+Python 的狀態重讀可以讓 `preflight_ok` 為 true，但 `continue_to_wallet` 仍是 false。客戶端的獨立重讀不會寫回這個旗標。交易雜湊不算完成。拒絕、送出不明、替代與完成核對有離線狀態機測試。
 
 固定 HTTPS 來源見 `docs/deploy.md`。套件常數 `fixed_https_origin` 仍是 false，所以不會發行任務連結，這也不是主網執行授權。
 

@@ -33,7 +33,7 @@ SIWE 的 `AUTH_URI` 只綁定登入挑戰的 domain／URI。它不是執行來�
 - D1 的 session、ACL、最新 revision 都走 `withSession("first-primary")`。直接讀 replica 會失敗。
 - Pages Function 的每個成功與錯誤回應自己帶 `Cache-Control: no-store`。`_headers` 管不到 Function。
 - `/api/*` 由 `functions/api/[[path]].js` 回答 JSON。`_redirects` 只把 `/t/*` 指到 `index.html`，不把 `/api` 指過去。公開目錄沒有 `tasks/` 或 `api/`。合成範例仍是 `/sample-task.json`，不是使用者的任務。
-- 任務裡的 `preflight_ok` 不能打開送出。這個客戶端沒有鏈上重讀，確認鈕保持關閉。模式 C 不能建立成可執行任務。
+- 任務裡的 `preflight_ok` 不能打開送出。獨立鏈上重讀另外顯示，通過也不會寫回 `preflight_ok` 或打開確認鈕。模式 C 不能建立成可執行任務。
 
 ## 本機
 
@@ -49,4 +49,4 @@ D1 遷移在 `action-client/migrations/0001_p1_init.sql`。`wrangler.jsonc` 的 
 
 ## 仍不做
 
-模式 A 的客戶端鏈上重讀、模式 B 送出、模式 C、TUF／獨立簽章程式、R2、把 `fixed_https_origin` 改成 true、部署 https://wallet-guardian-action-client.pages.dev/ 。
+模式 B 送出、模式 C、TUF／獨立簽章程式、R2、把 `fixed_https_origin` 改成 true、部署 https://wallet-guardian-action-client.pages.dev/ 。唯讀重讀見 `docs/p2-lista-reread.md`。

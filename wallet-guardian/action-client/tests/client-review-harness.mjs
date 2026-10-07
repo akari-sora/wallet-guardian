@@ -59,7 +59,7 @@ export async function harness({ onFetch, onWallet, initialSession = session(), p
   for (const match of source.matchAll(/from\s+["'](\.\/[^"']+)["']/g)) {
     imports.set(match[1], await import(pathToFileURL(resolve(sourceRoot, match[1])).href));
   }
-  const elements = new Map(['view','banner','login','logout','cancel-task','load-sample','file','clear','session'].map(x => [x, new Element()]));
+  const elements = new Map(['view','banner','login','logout','cancel-task','load-sample','file','clear','session','verify','verify-reread','verify-simulation','verify-send','verify-reasons'].map(x => [x, new Element()]));
   const calls = [], walletCalls = [];
   const providerListeners = new Map();
   const document = { querySelector: selector => elements.get(selector.replace(/^#/, '')),
@@ -98,8 +98,8 @@ export async function harness({ onFetch, onWallet, initialSession = session(), p
     },
   });
   const append = `\nglobalThis.__review = {
-    login, logout, cancelPrivateTask, loadPrivateTask, openPrivateTask, queryCapability, restoreSession,
-    getState: () => ({ loadGeneration, lastPlan, lastTask, csrfToken, privateRef, privateRevision, privateCancelAllowed })
+    login, logout, cancelPrivateTask, loadPrivateTask, openPrivateTask, queryCapability, restoreSession, reverifyCurrent,
+    getState: () => ({ loadGeneration, lastPlan, lastTask, csrfToken, privateRef, privateRevision, privateCancelAllowed, reread: currentVerification() })
   };`;
   const transpiled = ts.transpileModule(
     source.replace('import.meta.env.VITE_GUARDIAN_MAINNET_SEND', JSON.stringify('true')) + append,

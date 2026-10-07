@@ -1,9 +1,11 @@
 import { digestBody } from "./canonical.mjs";
 import { clientConfirmDecision, eip5792Status, executionMode, simulationAllowsSend } from "./gate.mjs";
+import { emptyRereadView, REASON_TEXT, reverifyListaClaim, settleReread, statusLines } from "./lista-reread.mjs";
 import { LOGIN_STATEMENT } from "./login-statement.mjs";
 import { validateLoginChallenge } from "./login-challenge.mjs";
 import { assertInertPayload, assertTaskRef, boundedJson, units, validatePlan } from "./plan-validation.mjs";
 import { parsePrivateTaskRef, privateTaskSendAllowed, readBoundedJson } from "./private-task.mjs";
+import { fetchTrustedRpc, TRUSTED_LISTA } from "./trusted-lista.mjs";
 
 const TASK_VERSION = "guardian.task.v1";
 const PLAN_VERSION = "guardian.action_plan.v1";
@@ -33,9 +35,18 @@ type Simulation = {
   state_overrides?: boolean;
 };
 
+type RereadView = {
+  reread: string;
+  simulation: string;
+  allowSend: "closed";
+  reasons: string[];
+  binding: { chainId?: number } | null;
+};
+
 type Plan = {
   protocol_version: string;
   task_id: string;
+  revision?: number;
   state?: string;
   sender: string;
   recipient: string;
@@ -112,6 +123,17 @@ let privateCancelAllowed = false;
 let authGeneration = 0;
 let authBusy = false;
 let sessionAddress: string | null = null;
+let rereadSeq = 0;
+let rereadResult: RereadView | null = null;
+let walletEpoch = 0;
+let walletAccount: string | null = null;
+let walletChainId: number | null = null;
+let watchedProvider: EthereumProvider | null = null;
+
+function dropReread(): void {
+  rereadSeq += 1;
+  rereadResult = null;
+}
 
 // A network cancellation is best-effort; generations are the authority for
 // whether a late response may mutate this page after a security boundary.
@@ -122,15 +144,139 @@ function invalidatePrivateView(keepRef = true): number {
   observedCapability = "unknown";
   privateRevision = null;
   if (!keepRef) privateRef = null;
+  dropReread();
   hideCancel();
   renderEmpty();
   return loadGeneration;
 }
 
-type EthereumProvider = { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> };
+type EthereumProvider = {
+  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+  on?: (event: string, handler: (value: unknown) => void) => void;
+};
 
 function ethereumProvider(): EthereumProvider | null {
   return (window as unknown as { ethereum?: EthereumProvider }).ethereum ?? null;
+}
+
+function currentVerification(): RereadView {
+  if (walletChainId != null && walletChainId !== TRUSTED_LISTA.chainId) {
+    return { ...emptyRereadView(lastPlan?.simulation), reasons: ["wrong_chain"] };
+  }
+  if (!lastPlan || !rereadResult) return emptyRereadView(lastPlan?.simulation);
+  return settleReread(rereadResult, {
+    simulation: lastPlan.simulation,
+    account: walletAccount ?? lastPlan.sender,
+    chainId: rereadResult.binding ? rereadResult.binding.chainId : TRUSTED_LISTA.chainId,
+    planDigest: lastPlan.digest,
+    taskRef: lastTask?.ref ?? null,
+    revision: privateRevision ?? lastPlan.revision,
+    nowUnix: Math.floor(Date.now() / 1000),
+  });
+}
+
+function paintVerification(model: RereadView): void {
+  const lines = statusLines(model);
+  const reread = document.querySelector<HTMLElement>("#verify-reread");
+  const simulation = document.querySelector<HTMLElement>("#verify-simulation");
+  const send = document.querySelector<HTMLElement>("#verify-send");
+  const reasons = document.querySelector<HTMLElement>("#verify-reasons");
+  if (reread) {
+    reread.textContent = lines.reread;
+    if (reread.dataset) reread.dataset.state = model.reread;
+  }
+  if (simulation) {
+    simulation.textContent = lines.simulation;
+    if (simulation.dataset) simulation.dataset.state = model.simulation;
+  }
+  if (send) {
+    send.textContent = lines.send;
+    if (send.dataset) send.dataset.state = "closed";
+  }
+  if (reasons) {
+    reasons.replaceChildren();
+    for (const code of model.reasons) {
+      const item = document.createElement("li");
+      item.textContent = REASON_TEXT[code as keyof typeof REASON_TEXT] ?? code;
+      reasons.append(item);
+    }
+  }
+}
+
+function watchWallet(): void {
+  const provider = ethereumProvider();
+  if (!provider?.on || watchedProvider === provider) return;
+  watchedProvider = provider;
+  provider.on("accountsChanged", (value: unknown) => {
+    const first = Array.isArray(value) ? String(value[0] ?? "") : "";
+    walletAccount = /^0x[a-fA-F0-9]{40}$/.test(first) ? first.toLowerCase() : null;
+    walletEpoch += 1;
+    dropReread();
+    paintVerification(currentVerification());
+  });
+  provider.on("chainChanged", (value: unknown) => {
+    const hex = typeof value === "string" ? value : "";
+    const parsed = /^0x[0-9a-fA-F]+$/.test(hex) ? Number.parseInt(hex, 16) : Number.NaN;
+    walletChainId = Number.isSafeInteger(parsed) ? parsed : null;
+    walletEpoch += 1;
+    dropReread();
+    paintVerification(currentVerification());
+  });
+}
+
+async function reverifyCurrent(): Promise<void> {
+  const generation = loadGeneration;
+  const seq = ++rereadSeq;
+  const epoch = walletEpoch;
+  const plan = lastPlan;
+  const task = lastTask;
+  const revision = privateRevision ?? plan?.revision ?? null;
+  if (!plan) return;
+  watchWallet();
+  const still = () => seq === rereadSeq && epoch === walletEpoch && generation === loadGeneration && lastPlan === plan;
+  let connectedAccount: string | null = null;
+  const ethereum = ethereumProvider();
+  if (ethereum) {
+    try {
+      const accounts = await ethereum.request({ method: "eth_accounts" });
+      if (!still()) return;
+      const first = Array.isArray(accounts) ? String(accounts[0] ?? "") : "";
+      connectedAccount = /^0x[a-fA-F0-9]{40}$/.test(first) ? first : null;
+      const chain = await ethereum.request({ method: "eth_chainId" });
+      if (!still()) return;
+      if (typeof chain === "string" && /^0x[0-9a-fA-F]+$/.test(chain)) {
+        const parsed = Number.parseInt(chain, 16);
+        walletChainId = Number.isSafeInteger(parsed) ? parsed : null;
+      }
+    } catch {
+      if (!still()) return;
+    }
+  }
+  walletAccount = connectedAccount ? connectedAccount.toLowerCase() : null;
+  try {
+    const result = await reverifyListaClaim({
+      call: (method: string, params: unknown[]) => fetchTrustedRpc(method, params, {
+        fetchImpl: fetch,
+        signal: AbortSignal.timeout(10000),
+      }),
+      plan,
+      task,
+      account: plan.sender,
+      connectedAccount,
+      walletChainId,
+      planDigest: plan.digest,
+      revision,
+      nowUnix: Math.floor(Date.now() / 1000),
+    });
+    if (!still() || (privateRevision ?? plan.revision) !== revision) return;
+    rereadResult = result as RereadView;
+  } catch (error) {
+    if (!still()) return;
+    const name = error instanceof Error ? error.name : "";
+    const reason = name === "TimeoutError" || name === "AbortError" ? "timeout" : "rpc_failed";
+    rereadResult = { ...emptyRereadView(plan.simulation), reasons: [reason] };
+  }
+  if (still()) paintVerification(currentVerification());
 }
 
 function presentedMode(task: Task | null, plan: Plan): "A" | "B" {
@@ -155,7 +301,7 @@ function requestUserSend(plan: Plan): void {
   if (!MAINNET_SEND) {
     throw new Error("主網送出開關是關閉的。不會呼叫錢包。");
   }
-  throw new Error("這個建置沒有客戶端鏈上重讀，不會呼叫錢包。");
+  throw new Error("獨立重讀不是送出授權。允許實際送出保持關閉。不會呼叫錢包。");
 }
 
 function syncAccountControls(): void {
@@ -181,14 +327,17 @@ function renderError(message: string): void {
   lastPlan = null;
   lastTask = null;
   observedCapability = "unknown";
+  dropReread();
   hideCancel();
   view.className = "error";
   view.textContent = message;
+  paintVerification(emptyRereadView(undefined));
 }
 
 function renderEmpty(): void {
   view.className = "empty";
   view.textContent = "尚未載入任務。合成範例不是你的鏈上餘額。";
+  paintVerification(emptyRereadView(undefined));
 }
 
 function containsSecret(value: unknown): boolean {
@@ -278,11 +427,11 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
   const reasons = [...(plan.block_reasons ?? [])];
   if (plan.wallet_request_allowed !== true) reasons.push("計畫本身不允許提出錢包請求。任務裡的 preflight 不能推翻這個拒絕。");
   if (!simulationAllowsSend(plan.simulation)) reasons.push("模擬未完成，不能當作可以送出的證據。");
-  if (!decision.buttonEnabled) reasons.push("確認鈕關閉。任務自述的 preflight 不是客戶端鏈上重讀。");
+  if (!decision.buttonEnabled) reasons.push("確認鈕關閉。任務自述的 preflight 不能當成重讀通過，也不能打開送出。");
   if (!MAINNET_SEND) reasons.push("VITE_GUARDIAN_MAINNET_SEND 沒有打開。監控程式不能簽名。");
   if (task?.mode === "C") reasons.push("模式 C 不支援。沒有鏈上權限合約。");
   if (task && !task.link?.issued) reasons.push("沒有固定 HTTPS 網域，所以沒有發行公開任務連結。");
-  banner.textContent = "尚未對錢包提出交易。主網送出保持關閉。格式核對不是來源認證或安全保證；此頁沒有重新讀取鏈上狀態。";
+  banner.textContent = "尚未對錢包提出交易。主網送出保持關閉。重讀通過不是模擬通過，也不是送出授權。鎖畫面不等於鎖鏈。";
 
   const alternatives = (plan.alternatives ?? [])
     .map((item) => `${item.id}${item.completes_original_redeem ? "" : "（不是完成原贖回）"}`)
@@ -388,7 +537,15 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
   capability.addEventListener("click", () => {
     void queryCapability(plan.chain_id, generation);
   });
-  actions.append(confirm, capability);
+  const reread = document.createElement("button");
+  reread.type = "button";
+  reread.textContent = "重讀鏈上狀態（唯讀）";
+  reread.addEventListener("click", () => {
+    if (generation !== loadGeneration) return;
+    void reverifyCurrent();
+  });
+  actions.append(confirm, capability, reread);
+  paintVerification(currentVerification());
 
   const details = document.createElement("details");
   const summaryNode = document.createElement("summary");
@@ -528,7 +685,9 @@ async function loadPrivateTask(ref: string, generation: number): Promise<void> {
       return;
     }
     assertTaskRef(body.task, ref);
-    privateRevision = typeof body.revision === "number" ? body.revision : null;
+    const nextRevision = typeof body.revision === "number" ? body.revision : null;
+    if (nextRevision !== privateRevision) dropReread();
+    privateRevision = nextRevision;
     privateCancelAllowed = body.cancel_allowed === true && privateRevision != null;
     syncAccountControls();
     await renderPayload(body.task, generation);
@@ -540,6 +699,8 @@ async function loadPrivateTask(ref: string, generation: number): Promise<void> {
 async function openPrivateTask(ref: string): Promise<void> {
   const generation = ++loadGeneration;
   privateRef = ref;
+  dropReread();
+  paintVerification(emptyRereadView(undefined));
   hideCancel();
   if (!csrfToken) {
     renderError("這個任務要先登入才能讀。登入只簽一則讀取訊息，不會送出交易。");
@@ -713,6 +874,7 @@ document.querySelector("#cancel-task")!.addEventListener("click", () => {
 
 document.querySelector("#load-sample")!.addEventListener("click", async () => {
   const generation = ++loadGeneration;
+  dropReread();
   hideCancel();
   try {
     const response = await fetch("/sample-task.json", { redirect: "error", cache: "no-store", signal: AbortSignal.timeout(10000) });
@@ -724,6 +886,7 @@ document.querySelector("#load-sample")!.addEventListener("click", async () => {
 
 document.querySelector<HTMLInputElement>("#file")!.addEventListener("change", async (event) => {
   const generation = ++loadGeneration;
+  dropReread();
   hideCancel();
   const file = (event.target as HTMLInputElement).files?.[0];
   if (!file) return;
@@ -741,10 +904,12 @@ document.querySelector("#clear")!.addEventListener("click", () => {
   lastTask = null;
   privateRef = null;
   privateRevision = null;
+  dropReread();
   hideCancel();
   renderEmpty();
   document.querySelector<HTMLInputElement>("#file")!.value = "";
   banner.textContent = BANNER;
 });
 
+watchWallet();
 void restoreSession().then((current) => { if (current) inspectLocation(); });
