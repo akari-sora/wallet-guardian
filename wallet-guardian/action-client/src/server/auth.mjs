@@ -73,10 +73,19 @@ export async function postChallenge(request, env, db, now) {
   if (!checksum) return json(400, { error: "invalid_address" });
   const address = checksum.toLowerCase();
   const ip = request.headers.get("cf-connecting-ip") || "unknown";
+  const windowStart = now - (now % cfg.challengeWindow);
+  await db.prepare("DELETE FROM challenges WHERE expires_at <= ?").bind(now).run();
+  await db.prepare("DELETE FROM rate_buckets WHERE window_start < ?").bind(windowStart).run();
   if (await rateLimited(db, `challenge:${ip}:${address}`, now, cfg.challengeWindow, cfg.challengeLimit)) {
     return json(429, { error: "rate_limited", execution_authorized: false });
   }
-  await db.prepare("DELETE FROM challenges WHERE address = ? AND expires_at <= ?").bind(address, now).run();
+  const live = await db
+    .prepare("SELECT COUNT(*) AS n FROM challenges WHERE consumed = 0 AND expires_at > ?")
+    .bind(now)
+    .first();
+  if (!live || Number(live.n) >= cfg.challengeGlobalLimit) {
+    return json(429, { error: "rate_limited", execution_authorized: false });
+  }
   const nonce = randomHex(16);
   const attemptId = randomHex(32);
   const csrf = randomHex(32);

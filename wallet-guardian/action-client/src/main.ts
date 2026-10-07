@@ -1,8 +1,29 @@
 import { digestBody } from "./canonical.mjs";
+import {
+  CANCEL_PENDING_CONFIRMATION,
+  adoptSession,
+  applyUnauthenticated,
+  beginLogin,
+  beginPresent,
+  beginLogout,
+  beginTaskLoad,
+  canRedrawCapability,
+  clearPresented,
+  createClientFlow,
+  endLogin,
+  finishLogout,
+  isCancelUnconfirmed,
+  loginStillCurrent,
+  mutationCsrf,
+  noteAttemptCsrf,
+  rememberPresented,
+  resolveCancel,
+  stampMatches,
+} from "./client-flow.mjs";
 import { clientConfirmDecision, eip5792Status, executionMode, simulationAllowsSend } from "./gate.mjs";
-import { LOGIN_STATEMENT } from "./login-statement.mjs";
 import { assertInertPayload, assertTaskRef, boundedJson, units, validatePlan } from "./plan-validation.mjs";
 import { parsePrivateTaskRef, privateTaskSendAllowed, readBoundedJson } from "./private-task.mjs";
+import { acceptLoginChallenge } from "./siwe-gate.mjs";
 
 const TASK_VERSION = "guardian.task.v1";
 const PLAN_VERSION = "guardian.action_plan.v1";
@@ -100,14 +121,14 @@ type Task = {
 const view = document.querySelector<HTMLElement>("#view")!;
 const banner = document.querySelector<HTMLElement>("#banner")!;
 const MAINNET_SEND = import.meta.env.VITE_GUARDIAN_MAINNET_SEND === "true";
-let loadGeneration = 0;
-let observedCapability = "unknown";
-let lastPlan: Plan | null = null;
-let lastTask: Task | null = null;
-let csrfToken: string | null = null;
-let privateRef: string | null = null;
-let privateRevision: number | null = null;
-let privateCancelAllowed = false;
+const flow = createClientFlow();
+
+type ViewStamp = {
+  generation: number;
+  epoch: number;
+  ref: string | null;
+  revision: number | null;
+};
 
 type EthereumProvider = { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> };
 
@@ -118,7 +139,7 @@ function ethereumProvider(): EthereumProvider | null {
 function presentedMode(task: Task | null, plan: Plan): "A" | "B" {
   if (!task || task.mode === "C") return "A";
   return executionMode({
-    capability: observedCapability,
+    capability: flow.observedCapability,
     callCount: plan.calls.length,
     sameChain: plan.chain_id === 56,
   });
@@ -143,12 +164,12 @@ function requestUserSend(plan: Plan): void {
 function syncAccountControls(): void {
   const logout = document.querySelector<HTMLButtonElement>("#logout");
   const cancel = document.querySelector<HTMLButtonElement>("#cancel-task");
-  if (logout) logout.hidden = !csrfToken;
-  if (cancel) cancel.hidden = !privateCancelAllowed;
+  if (logout) logout.hidden = !flow.sessionCsrf;
+  if (cancel) cancel.hidden = !flow.privateCancelAllowed;
 }
 
 function hideCancel(): void {
-  privateCancelAllowed = false;
+  flow.privateCancelAllowed = false;
   syncAccountControls();
 }
 
@@ -180,7 +201,7 @@ function modeLine(task: Task | null, mode: "A" | "B"): string {
   if (mode === "B") {
     return "模式 B：這台錢包回報同鏈批次可用。真錢包批次仍未測，這個建置也不會送出。";
   }
-  if (observedCapability === "unsupported" || observedCapability === "ready") {
+  if (flow.observedCapability === "unsupported" || flow.observedCapability === "ready") {
     return "模式 A：這台錢包沒有可用的同鏈批次，或 ready 不會自動升級。改以一般確認。";
   }
   if (task?.mode_reason === "single_step_original_account") {
@@ -218,15 +239,15 @@ function appendFacts(list: HTMLElement, rows: Array<[string, string]>): void {
   }
 }
 
-async function renderPlan(plan: Plan, task: Task | null, generation: number): Promise<void> {
-  if (generation !== loadGeneration) return;
+async function renderPlan(plan: Plan, task: Task | null, stamp: ViewStamp): Promise<void> {
+  if (!stampMatches(flow, stamp)) return;
   validatePlan(plan);
   if (plan.protocol_version !== PLAN_VERSION) {
     renderError("協議版本不符，已拒絕這個檔案。");
     return;
   }
   const digest = await digestBody(plan);
-  if (generation !== loadGeneration) return;
+  if (!stampMatches(flow, stamp)) return;
   if (digest !== plan.digest) {
     renderError("計畫摘要比對失敗。檔案可能被改過，不會拿去簽名。");
     return;
@@ -348,7 +369,7 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
   confirm.textContent = "在我的錢包確認";
   confirm.addEventListener("click", () => {
     try {
-      if (generation !== loadGeneration) return;
+      if (!stampMatches(flow, stamp)) return;
       requestUserSend(plan);
     } catch (error) {
       banner.textContent = error instanceof Error ? error.message : "已停止";
@@ -358,7 +379,7 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
   capability.type = "button";
   capability.textContent = "查詢批次能力";
   capability.addEventListener("click", () => {
-    void queryCapability(plan.chain_id, generation);
+    void queryCapability(plan.chain_id, stamp);
   });
   actions.append(confirm, capability);
 
@@ -369,32 +390,35 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
   pre.textContent = JSON.stringify(task ?? plan, null, 2);
   details.append(summaryNode, pre);
 
-  lastPlan = plan;
-  lastTask = task;
+  if (!rememberPresented(flow, stamp, plan, task)) return;
   view.append(mode, heading, list, stepHeading, steps, wait, actions, reasonList, evidenceHeading, evidence, details);
 }
 
-async function queryCapability(chainId: number, generation: number): Promise<void> {
-  if (generation !== loadGeneration) return;
+async function queryCapability(chainId: number, stamp: ViewStamp): Promise<void> {
+  if (!stampMatches(flow, stamp)) return;
   const ethereum = ethereumProvider();
   if (!ethereum) {
+    if (!stampMatches(flow, stamp)) return;
     banner.textContent = "找不到瀏覽器錢包，無法查詢 EIP-5792。維持模式 A，不會送出交易。";
     return;
   }
   try {
     const capabilities = await ethereum.request({ method: "wallet_getCapabilities" });
-    if (generation !== loadGeneration) return;
-    observedCapability = eip5792Status(capabilities, chainId);
+    if (!canRedrawCapability(flow, stamp)) return;
+    flow.observedCapability = eip5792Status(capabilities, chainId);
   } catch {
-    if (generation !== loadGeneration) return;
-    observedCapability = "unknown";
+    if (!canRedrawCapability(flow, stamp)) return;
+    flow.observedCapability = "unknown";
     banner.textContent = "批次能力查詢失敗。維持模式 A，不會送出交易。";
   }
-  if (lastPlan && generation === loadGeneration) await renderPlan(lastPlan, lastTask, generation);
+  const plan = flow.lastPlan as Plan | null;
+  const task = flow.lastTask as Task | null;
+  if (!plan || !canRedrawCapability(flow, stamp)) return;
+  await renderPlan(plan, task, stamp);
 }
 
-async function renderPayload(payload: unknown, generation: number): Promise<void> {
-  if (generation !== loadGeneration) return;
+async function renderPayload(payload: unknown, stamp: ViewStamp): Promise<void> {
+  if (!stampMatches(flow, stamp)) return;
   assertInertPayload(payload);
   if (!payload || typeof payload !== "object") {
     renderError("這個檔案不是可讀的任務 JSON。");
@@ -408,11 +432,11 @@ async function renderPayload(payload: unknown, generation: number): Promise<void
       renderError(problem);
       return;
     }
-    await renderPlan(task.plan, task, generation);
+    await renderPlan(task.plan, task, stamp);
     return;
   }
   if (record.protocol_version === PLAN_VERSION) {
-    await renderPlan(payload as Plan, null, generation);
+    await renderPlan(payload as Plan, null, stamp);
     return;
   }
   renderError("協議版本不符，已拒絕這個檔案。");
@@ -440,7 +464,8 @@ function api(path: string, init: RequestInit = {}): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
   if (method !== "GET" && method !== "HEAD") {
     if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
-    if (csrfToken) headers.set("x-csrf-token", csrfToken);
+    const token = mutationCsrf(flow, path === "/api/auth/verify" ? "verify" : "session");
+    if (token) headers.set("x-csrf-token", token);
   }
   return fetch(path, {
     ...init,
@@ -452,25 +477,31 @@ function api(path: string, init: RequestInit = {}): Promise<Response> {
   });
 }
 
-function applySession(body: unknown): void {
-  if (!body || typeof body !== "object") return;
+function applySession(body: unknown): boolean {
+  if (!body || typeof body !== "object") return false;
   const record = body as SessionBody;
   if (record.execution_authorized === true || record.send_authorized === true) {
-    csrfToken = null;
+    flow.sessionCsrf = null;
     syncAccountControls();
-    return;
+    return false;
   }
-  csrfToken = record.authenticated === true && typeof record.csrf_token === "string" ? record.csrf_token : null;
+  if (record.authenticated === true && typeof record.csrf_token === "string") {
+    const adopted = adoptSession(flow, record.csrf_token);
+    syncAccountControls();
+    return adopted;
+  }
+  flow.sessionCsrf = null;
   syncAccountControls();
+  return false;
 }
 
-async function loadPrivateTask(ref: string, generation: number): Promise<void> {
+async function loadPrivateTask(ref: string, stamp: ViewStamp): Promise<void> {
   try {
     const response = await api(`/api/tasks/${ref}`, { signal: AbortSignal.timeout(10000) });
     const body = (await readBoundedJson(response)) as PrivateTaskBody;
-    if (generation !== loadGeneration) return;
+    if (!stampMatches(flow, stamp)) return;
     if (response.status === 401) {
-      csrfToken = null;
+      applyUnauthenticated(flow, stamp);
       syncAccountControls();
       renderError("登入已失效。請重新登入。不會送出交易。");
       return;
@@ -500,24 +531,29 @@ async function loadPrivateTask(ref: string, generation: number): Promise<void> {
       return;
     }
     assertTaskRef(body.task, ref);
-    privateRevision = typeof body.revision === "number" ? body.revision : null;
-    privateCancelAllowed = body.cancel_allowed === true && privateRevision != null;
+    const revision = typeof body.revision === "number" ? body.revision : null;
+    if (stamp.revision != null && revision !== stamp.revision) {
+      if (!stampMatches(flow, stamp)) return;
+      renderError("任務版本已更新。舊版本不能使用，也不會送出交易。");
+      return;
+    }
+    if (!stampMatches(flow, stamp)) return;
+    flow.privateRevision = revision;
+    flow.privateCancelAllowed = body.cancel_allowed === true && flow.privateRevision != null;
     syncAccountControls();
-    await renderPayload(body.task, generation);
+    await renderPayload(body.task, stamp);
   } catch {
-    if (generation === loadGeneration) renderError("無法載入私人任務。不跟隨重新導向，也不會送出交易。");
+    if (stampMatches(flow, stamp)) renderError("無法載入私人任務。不跟隨重新導向，也不會送出交易。");
   }
 }
 
 async function openPrivateTask(ref: string): Promise<void> {
-  const generation = ++loadGeneration;
-  privateRef = ref;
-  hideCancel();
-  if (!csrfToken) {
+  const stamp = beginTaskLoad(flow, ref) as ViewStamp;
+  if (!flow.sessionCsrf) {
     renderError("這個任務要先登入才能讀。登入只簽一則讀取訊息，不會送出交易。");
     return;
   }
-  await loadPrivateTask(ref, generation);
+  await loadPrivateTask(ref, stamp);
 }
 
 async function login(): Promise<void> {
@@ -526,10 +562,17 @@ async function login(): Promise<void> {
     banner.textContent = "找不到瀏覽器錢包，無法登入。不會送出交易。";
     return;
   }
+  const attempt = beginLogin(flow);
+  if (attempt == null) {
+    banner.textContent = "登入已經在進行。不會再要求簽名。";
+    return;
+  }
   try {
     const accounts = await ethereum.request({ method: "eth_requestAccounts" });
+    if (!loginStillCurrent(flow, attempt)) return;
     const address = Array.isArray(accounts) ? String(accounts[0] ?? "") : "";
     if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+      endLogin(flow);
       banner.textContent = "錢包沒有提供可用帳戶。不會送出交易。";
       return;
     }
@@ -538,55 +581,57 @@ async function login(): Promise<void> {
       body: JSON.stringify({ address }),
       signal: AbortSignal.timeout(10000),
     });
-    const issued = (await readBoundedJson(challengeResponse)) as {
-      message?: string;
-      csrf_token?: string;
-      execution_authorized?: boolean;
-      send_authorized?: boolean;
-      erc1271?: string;
-    };
-    if (!challengeResponse.ok || issued.execution_authorized !== false || issued.send_authorized !== false || issued.erc1271 !== "unsupported") {
-      banner.textContent = "登入挑戰不符合唯讀規則。不會簽名。";
-      return;
-    }
-    if (typeof issued.message !== "string" || typeof issued.csrf_token !== "string" || issued.message.length > 4096) {
-      banner.textContent = "登入挑戰不完整。不會簽名。";
-      return;
-    }
-    if (!issued.message.includes(LOGIN_STATEMENT) || !issued.message.includes("wants you to sign in with your Ethereum account:")) {
+    const issued = await readBoundedJson(challengeResponse);
+    if (!loginStillCurrent(flow, attempt)) return;
+    const message = acceptLoginChallenge(issued, address, Date.now());
+    const csrf = issued && typeof issued === "object" ? (issued as { csrf_token?: unknown }).csrf_token : undefined;
+    if (typeof message !== "string" || !noteAttemptCsrf(flow, csrf)) {
+      endLogin(flow);
       banner.textContent = "登入訊息不是固定的讀取聲明。不會簽名。";
       return;
     }
-    csrfToken = issued.csrf_token;
-    const signature = await ethereum.request({ method: "personal_sign", params: [issued.message, address] });
+    const signature = await ethereum.request({ method: "personal_sign", params: [message, address] });
+    if (!loginStillCurrent(flow, attempt)) return;
     if (typeof signature !== "string") {
+      endLogin(flow);
       banner.textContent = "錢包沒有回傳登入簽名。不會送出交易。";
       return;
     }
     const verifyResponse = await api("/api/auth/verify", {
       method: "POST",
-      body: JSON.stringify({ message: issued.message, signature }),
+      body: JSON.stringify({ message, signature }),
       signal: AbortSignal.timeout(10000),
     });
     const verified = await readBoundedJson(verifyResponse);
-    if (!verifyResponse.ok) {
-      csrfToken = null;
+    if (!loginStillCurrent(flow, attempt)) return;
+    if (!verifyResponse.ok || !applySession(verified)) {
+      endLogin(flow);
       syncAccountControls();
       banner.textContent = "登入沒有完成。不會送出交易。";
       return;
     }
-    applySession(verified);
     banner.textContent = "已登入。這只是讀取身分，不是交易授權。主網送出保持關閉。";
-    if (privateRef) {
-      const generation = ++loadGeneration;
-      await loadPrivateTask(privateRef, generation);
+    if (flow.privateRef) {
+      const stamp = beginTaskLoad(flow, flow.privateRef) as ViewStamp;
+      await loadPrivateTask(flow.privateRef, stamp);
     }
   } catch {
+    if (!loginStillCurrent(flow, attempt)) return;
+    endLogin(flow);
     banner.textContent = "登入已停止。不會送出交易。";
   }
 }
 
 async function logout(): Promise<void> {
+  const csrf = beginLogout(flow);
+  syncAccountControls();
+  if (!csrf) {
+    finishLogout(flow);
+    syncAccountControls();
+    banner.textContent = "已登出。伺服器會作廢這個工作階段。不會送出交易。";
+    renderEmpty();
+    return;
+  }
   try {
     const response = await api("/api/auth/logout", {
       method: "POST",
@@ -601,38 +646,59 @@ async function logout(): Promise<void> {
     banner.textContent = "登出沒有完成。";
     return;
   }
-  csrfToken = null;
-  privateRef = null;
-  privateRevision = null;
-  hideCancel();
+  finishLogout(flow);
+  syncAccountControls();
   banner.textContent = "已登出。伺服器會作廢這個工作階段。不會送出交易。";
   renderEmpty();
 }
 
 async function cancelPrivateTask(): Promise<void> {
-  if (!privateRef || privateRevision == null || !privateCancelAllowed || !csrfToken) return;
-  const ref = privateRef;
-  const revision = privateRevision;
+  if (!flow.privateRef || flow.privateRevision == null || !flow.privateCancelAllowed || !flow.sessionCsrf) return;
+  const stamp = {
+    generation: flow.loadGeneration,
+    epoch: flow.sessionEpoch,
+    ref: flow.privateRef,
+    revision: flow.privateRevision,
+  } as ViewStamp;
+  const ref = stamp.ref;
+  if (!ref || stamp.revision == null) return;
   try {
     const response = await api(`/api/tasks/${ref}/cancel`, {
       method: "POST",
-      body: JSON.stringify({ revision }),
+      body: JSON.stringify({ revision: stamp.revision }),
       signal: AbortSignal.timeout(10000),
     });
-    const body = (await readBoundedJson(response)) as PrivateTaskBody;
-    if (body.on_chain_revoked === true || body.tx_hash_verified === true || body.send_authorized === true || body.execution_authorized === true) {
-      renderError("取消回應試圖宣稱鏈上撤銷或授權送出。已拒絕。");
+    let body: unknown;
+    try {
+      body = await readBoundedJson(response);
+    } catch (error) {
+      if (!stampMatches(flow, stamp)) return;
+      if (isCancelUnconfirmed(error)) {
+        banner.textContent = CANCEL_PENDING_CONFIRMATION;
+        await loadPrivateTask(ref, stamp);
+        return;
+      }
+      banner.textContent = "取消回應不符合已取消的格式。不會把它當成已取消，也不會送出交易。";
       return;
     }
-    if (!response.ok) {
-      banner.textContent = "任務沒有取消。不會送出交易。";
+    if (!stampMatches(flow, stamp)) return;
+    const outcome = resolveCancel(flow, stamp, { ok: response.ok, body });
+    if (outcome === "cancelled") {
+      syncAccountControls();
+      view.className = "card";
+      view.textContent = "未執行任務已取消。這只更新讀取紀錄，不是鏈上撤銷，也沒有送出交易。";
+      banner.textContent = "主網送出保持關閉。取消不是交易。";
       return;
     }
-    hideCancel();
-    view.className = "card";
-    view.textContent = "未執行任務已取消。這只更新讀取紀錄，不是鏈上撤銷，也沒有送出交易。";
-    banner.textContent = "主網送出保持關閉。取消不是交易。";
-  } catch {
+    if (outcome === "stale") return;
+    banner.textContent = "取消回應不符合已取消的格式。不會把它當成已取消，也不會送出交易。";
+  } catch (error) {
+    if (!stampMatches(flow, stamp)) return;
+    if (isCancelUnconfirmed(error)) {
+      banner.textContent = CANCEL_PENDING_CONFIRMATION;
+      await loadPrivateTask(ref, stamp);
+      return;
+    }
     banner.textContent = "任務沒有取消。不會送出交易。";
   }
 }
@@ -659,11 +725,19 @@ function inspectLocation(): void {
 }
 
 async function restoreSession(): Promise<void> {
+  const stamp = {
+    generation: flow.loadGeneration,
+    epoch: flow.sessionEpoch,
+    ref: flow.privateRef,
+    revision: flow.privateRevision,
+  } as ViewStamp;
   try {
     const response = await api("/api/session", { signal: AbortSignal.timeout(10000) });
-    applySession(await readBoundedJson(response));
+    const body = await readBoundedJson(response);
+    if (!stampMatches(flow, stamp)) return;
+    applySession(body);
   } catch {
-    csrfToken = null;
+    if (!applyUnauthenticated(flow, stamp)) return;
     syncAccountControls();
   }
 }
@@ -681,36 +755,29 @@ document.querySelector("#cancel-task")!.addEventListener("click", () => {
 });
 
 document.querySelector("#load-sample")!.addEventListener("click", async () => {
-  const generation = ++loadGeneration;
-  hideCancel();
+  const stamp = beginPresent(flow) as ViewStamp;
   try {
     const response = await fetch("/sample-task.json", { redirect: "error", cache: "no-store", signal: AbortSignal.timeout(10000) });
-    await renderPayload(await boundedJson(response), generation);
+    await renderPayload(await boundedJson(response), stamp);
   } catch {
-    if (generation === loadGeneration) renderError("讀不到有效合成範例。");
+    if (stampMatches(flow, stamp)) renderError("讀不到有效合成範例。");
   }
 });
 
 document.querySelector<HTMLInputElement>("#file")!.addEventListener("change", async (event) => {
-  const generation = ++loadGeneration;
-  hideCancel();
+  const stamp = beginPresent(flow) as ViewStamp;
   const file = (event.target as HTMLInputElement).files?.[0];
   if (!file) return;
   try {
     if (file.size > 1024 * 1024) throw new Error("檔案超過大小限制");
-    await renderPayload(JSON.parse(await file.text()) as unknown, generation);
+    await renderPayload(JSON.parse(await file.text()) as unknown, stamp);
   } catch {
-    if (generation === loadGeneration) renderError("無效的任務資料。檢查格式、大小、摘要及固定協議規則。");
+    if (stampMatches(flow, stamp)) renderError("無效的任務資料。檢查格式、大小、摘要及固定協議規則。");
   }
 });
 
 document.querySelector("#clear")!.addEventListener("click", () => {
-  ++loadGeneration;
-  lastPlan = null;
-  lastTask = null;
-  privateRef = null;
-  privateRevision = null;
-  hideCancel();
+  clearPresented(flow);
   renderEmpty();
   document.querySelector<HTMLInputElement>("#file")!.value = "";
   banner.textContent = BANNER;

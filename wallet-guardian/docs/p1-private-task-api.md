@@ -34,6 +34,10 @@ SIWE 的 `AUTH_URI` 只綁定登入挑戰的 domain／URI。它不是執行來�
 - Pages Function 的每個成功與錯誤回應自己帶 `Cache-Control: no-store`。`_headers` 管不到 Function。
 - `/api/*` 由 `functions/api/[[path]].js` 回答 JSON。`_redirects` 只把 `/t/*` 指到 `index.html`，不把 `/api` 指過去。公開目錄沒有 `tasks/` 或 `api/`。合成範例仍是 `/sample-task.json`，不是使用者的任務。
 - 任務裡的 `preflight_ok` 不能打開送出。這個客戶端沒有鏈上重讀，確認鈕保持關閉。模式 C 不能建立成可執行任務。
+- 登出會讓進行中的任務讀取與批次能力查詢作廢，並清掉已顯示的私人計畫。登入挑戰的 CSRF 只拿去驗證這次簽名；拒絕簽名不會換成仍有效的工作階段 CSRF。
+- 呼叫 `personal_sign` 之前，客戶端會拆開再組回挑戰，核對固定聲明、domain、URI、地址、chain 56、nonce 與到期，並拒絕多餘欄位。這不表示後端驗證被繞過；後端仍保存完整挑戰。這個檢查不把 `fixed_https_origin` 設成 true。
+- 取消要看到同一筆任務的 `status=cancelled`、相符 revision、`cancel_allowed=false`，以及拒絕執行的旗標。逾時或連線中斷只說結果待確認，然後重新讀取該任務。
+- 挑戰發行前會刪掉過期挑戰，並受全域未消耗上限約束。過大的 JSON 讀取會取消並釋放 reader。
 
 ## 本機
 

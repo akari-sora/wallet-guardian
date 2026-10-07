@@ -27,12 +27,27 @@ export async function readBoundedJson(response, limit = 256 * 1024) {
   const reader = response.body.getReader();
   const chunks = [];
   let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > limit) throw new Error("too large");
-    chunks.push(value);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        try {
+          await reader.cancel(new Error("too large"));
+        } catch {
+          // The lock is released below either way.
+        }
+        throw new Error("too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // Some streams release the lock when cancel finishes.
+    }
   }
   const bytes = new Uint8Array(size);
   let offset = 0;

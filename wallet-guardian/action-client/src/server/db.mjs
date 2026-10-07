@@ -24,6 +24,10 @@ export function readConfig(env) {
   if (!Number.isInteger(challengeLimit) || challengeLimit < 1 || challengeLimit > 100) {
     throw new Error("auth config missing");
   }
+  const challengeGlobalLimit = Number(env.AUTH_CHALLENGE_GLOBAL_LIMIT ?? 200);
+  if (!Number.isInteger(challengeGlobalLimit) || challengeGlobalLimit < 1 || challengeGlobalLimit > 10000) {
+    throw new Error("auth config missing");
+  }
   return {
     domain,
     uri,
@@ -32,6 +36,7 @@ export function readConfig(env) {
     challengeTtl: 600,
     sessionTtl: 12 * 60 * 60,
     challengeLimit,
+    challengeGlobalLimit,
     challengeWindow: 600,
   };
 }

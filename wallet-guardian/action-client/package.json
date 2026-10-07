@@ -9,7 +9,7 @@
     "test:canonical": "node src/canonical.test.mjs",
     "test:validation": "node --test src/plan-validation.test.mjs",
     "test:gate": "node src/gate.test.mjs",
-    "test:api": "node --test src/private-task.test.mjs src/server/api.test.mjs"
+    "test:api": "node --test src/private-task.test.mjs src/client-flow.test.mjs src/siwe-gate.test.mjs src/server/api.test.mjs"
   },
   "devDependencies": {
     "typescript": "^5.6.3",
