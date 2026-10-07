@@ -2,6 +2,9 @@
 __pycache__/
 .pytest_cache/
 uploads/
+private/
+secrets
+secrets-staging
 agent-tools/
 wallet-guardian/private/
 wallet-guardian/data/
@@ -10,3 +13,4 @@ wallet-guardian/action-client/node_modules/
 wallet-guardian/action-client/dist/
 .env
 .env.*
+*.env

@@ -3,6 +3,8 @@ __pycache__/
 .pytest_cache/
 *.pyc
 private/
+secrets
+secrets-staging
 data/
 evidence/
 fixtures/private/
@@ -12,3 +14,4 @@ action-client/dist/
 *.sqlite-journal
 .env
 .env.*
+*.env
