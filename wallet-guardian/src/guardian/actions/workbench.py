@@ -263,11 +263,25 @@ def confirm_gate(
     requires_user_wallet_confirmation: bool,
     preflight_ok: bool,
     mainnet_send: bool,
+    wallet_request_allowed: bool = False,
+    simulation_complete: bool = False,
+    plan_blocked: bool = True,
 ) -> dict[str, Any]:
-    """The button is separate from the send flag. Python never signs or broadcasts."""
+    """The button is separate from the send flag. Python never signs or broadcasts.
+
+    ``preflight_ok`` is not send authority. A false wallet-request flag, incomplete
+    simulation, or outstanding block reasons deny send even when preflight and the
+    mainnet flag are both true. Defaults fail closed.
+    """
     if not requires_user_wallet_confirmation or not preflight_ok:
         reason = "requires_user_wallet_confirmation_false" if not requires_user_wallet_confirmation else "preflight_not_ok"
         return {"button_enabled": False, "send_allowed": False, "reason": reason, "agent_may_sign": False}
+    if wallet_request_allowed is not True:
+        return {"button_enabled": False, "send_allowed": False, "reason": "wallet_request_denied", "agent_may_sign": False}
+    if simulation_complete is not True:
+        return {"button_enabled": False, "send_allowed": False, "reason": "simulation_incomplete", "agent_may_sign": False}
+    if plan_blocked:
+        return {"button_enabled": False, "send_allowed": False, "reason": "plan_blocked", "agent_may_sign": False}
     if not mainnet_send:
         return {
             "button_enabled": True,

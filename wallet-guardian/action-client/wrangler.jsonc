@@ -1,0 +1,20 @@
+{
+  "name": "wallet-guardian-action-client",
+  "compatibility_date": "2026-10-07",
+  "pages_build_output_dir": "./dist",
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "traces": {
+      "enabled": true
+    }
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "wallet-guardian-tasks",
+      "database_id": "00000000-0000-4000-8000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

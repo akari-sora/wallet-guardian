@@ -9,36 +9,34 @@ import platform
 import re
 import shutil
 import subprocess
+import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
+import httpx
+
 from guardian import __version__
-from guardian.amounts import format_units
 from guardian.actions.lista_plan import build_lista_claim_plan
-from guardian.actions.policy import KillSwitch
+from guardian.actions.policy import CANONICAL_PLAN_KEYS, KillSwitch
 from guardian.actions.workbench import CLIENT_BUILD, TASK_VERSION, evidence_status
 from guardian.domain import (
     WithdrawalRequest,
-    baseline_alerts,
-    diff_items,
     external_watcher_risk,
-    format_alert,
     monitoring_mode,
     normalize_hyperliquid,
-    notify_decision,
-    semantic_key,
 )
-from guardian.actions.policy import CANONICAL_PLAN_KEYS
 from guardian.canonical import digest_body
-from guardian.errors import ConfigError, PolicyError, RpcError, SecurityError
+from guardian.errors import ConfigError, RpcError, SecurityError
 from guardian.providers import LISTA_PROXY, SLISBNB, RpcClient, read_lista_state, safe_get_text, safe_post_json
 from guardian.security.address import parse_evm_address
 from guardian.security.redact import redact
 from guardian.security.rpc_guard import FORBIDDEN_RPC_METHODS
 from guardian.storage import Database
+from guardian.monitoring import SnapshotCycle
 
 ROOT = Path(__file__).resolve().parents[2]
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -93,18 +91,46 @@ def load_config(path: Path) -> dict[str, Any]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ConfigError("config is not valid json") from exc
+    if not isinstance(data, dict):
+        raise ConfigError("config must be a JSON object")
     if data.get("mode") not in {None, "read_only"}:
         raise ConfigError("agent mode must stay read_only")
     deployment = data.get("deployment") or {}
+    assisted = data.get("assisted_actions") or {}
+    if not isinstance(deployment, dict) or not isinstance(assisted, dict):
+        raise ConfigError("deployment and assisted_actions must be objects")
+    pending = data.get("known_pending_actions") or []
+    if not isinstance(pending, list) or any(not isinstance(row, dict) for row in pending):
+        raise ConfigError("known_pending_actions must be a list of objects")
+    if any(not isinstance(row.get("external_watcher") or {}, dict) for row in pending):
+        raise ConfigError("external_watcher must be an object")
     if deployment.get("allow_trade_or_sign") or deployment.get("allow_public_webhook"):
         raise SecurityError("this agent build refuses trade, sign, and public webhook flags")
     if (data.get("assisted_actions") or {}).get("mainnet_test_transactions_authorized"):
         raise SecurityError("mainnet test transactions are not authorized for this build")
     wallets = []
-    for wallet in data.get("wallets") or []:
+    configured = data.get("wallets")
+    if not isinstance(configured, list) or not configured:
+        raise ConfigError("wallets must be a non-empty list")
+    labels, addresses = set(), set()
+    for wallet in configured:
+        if not isinstance(wallet, dict):
+            raise ConfigError("each wallet must be an object")
+        label = wallet.get("label")
+        if not isinstance(label, str) or not label.strip() or any(c in label for c in ":|/\\\n\r"):
+            raise ConfigError("wallet labels must be non-empty and contain no path or identity separators")
+        if label in labels:
+            raise ConfigError("duplicate wallet label")
+        labels.add(label)
         if wallet.get("family") != "evm":
             raise ConfigError("only evm watch addresses are supported")
-        wallets.append({**wallet, "address": parse_evm_address(wallet["address"])})
+        if not isinstance(wallet.get("address"), str):
+            raise ConfigError("wallet address must be a string")
+        address = parse_evm_address(wallet["address"])
+        if address.lower() in addresses:
+            raise ConfigError("duplicate wallet address")
+        addresses.add(address.lower())
+        wallets.append({**wallet, "address": address})
     data["wallets"] = wallets
     return data
 
@@ -328,8 +354,9 @@ def provider_probes() -> list[dict[str, Any]]:
         ("alchemy", "ALCHEMY_API_KEY", "no api key"),
         ("tenderly", "TENDERLY_ACCESS_KEY", "simulation vendor not configured"),
     ):
-        level = "BLOCKED" if flags[env_name] != "configured" else "BLOCKED"
-        blocked.append({"source_id": name, "level": level, "reason": reason, "latency_ms": 0})
+        if flags[env_name] == "configured":
+            reason = "key configured; this provider adapter is not implemented"
+        blocked.append({"source_id": name, "level": "BLOCKED", "reason": reason, "latency_ms": 0})
 
     return [
         _probe("etherscan_v2_chainlist", etherscan),
@@ -409,6 +436,14 @@ def _hyperliquid(address: str) -> dict[str, Any]:
         status, body = safe_post_json("https://api.hyperliquid.xyz/info", {"type": kind, "user": address})
         if status != 200:
             raise RpcError(f"hyperliquid {kind} http {status}")
+        if kind != "subAccounts" and (
+            not isinstance(body, dict) or body.get("non_json") or
+            (kind == "clearinghouseState" and (not isinstance(body.get("assetPositions"), list) or not isinstance(body.get("marginSummary"), dict))) or
+            (kind == "spotClearinghouseState" and not isinstance(body.get("balances"), list))
+        ):
+            raise RpcError(f"hyperliquid {kind} invalid response schema")
+        if kind == "subAccounts" and body is not None and not isinstance(body, list):
+            raise RpcError("hyperliquid subAccounts invalid response schema")
         payloads[kind] = body
     subaccounts = payloads["subAccounts"]
     if subaccounts is None:
@@ -422,7 +457,9 @@ def _hyperliquid(address: str) -> dict[str, Any]:
     if isinstance(spot, dict) and "portfolio_value" not in spot:
         spot = {**spot, "portfolio_value": None}
     return {
-        "quality": "PARTIAL" if parsed_subs is None else "COMPLETE",
+        "quality": "PARTIAL",
+        "coverage_limits": ["account mode unknown", "subaccount positions and HIP-3 markets not queried"],
+        "raw": payloads,
         "normalized": normalize_hyperliquid(
             clearinghouse=clearing,
             spot=spot,
@@ -436,20 +473,42 @@ def _hyperliquid(address: str) -> dict[str, Any]:
 def run_once(config_path: Path, db_path: Path | None = None) -> dict[str, Any]:
     config = load_config(config_path)
     database = Database(db_path or (ROOT / "data" / "guardian.sqlite"))
+    try:
+        return _run_once(config, database)
+    finally:
+        database.close()
+
+
+def _run_once(config: dict[str, Any], database: Database) -> dict[str, Any]:
     tenant_id = str(config.get("tenant_label") or "local")
     database.upsert_tenant(tenant_id, tenant_id)
+    cycle = SnapshotCycle(database, tenant_id)  # Before any network I/O.
     rpc = RpcClient(BSC_RPC)
+    successful_scopes: set[tuple[str, int]] = set()
+    failed_scopes: list[str] = []
     items: list[dict[str, Any]] = []
     wallet_reports = []
     plans = []
     limitations = [
-        "LIMITED_DISCOVERY: DeBank, Zerion, and Alchemy keys are not configured",
+        "LIMITED_DISCOVERY: DeBank, Zerion, and Alchemy discovery adapters are not implemented",
         "official BSC dataseed disables eth_getLogs, so historical claims are not reconstructed",
         "prices are unknown and are not treated as zero",
         "notifications were not delivered to an external channel",
     ]
-    blind = False
     for wallet in config["wallets"]:
+        existing = database.conn.execute(
+            "SELECT address FROM wallets WHERE tenant_id=? AND wallet_id=?",
+            (tenant_id, wallet["label"]),
+        ).fetchone()
+        if existing and existing["address"].lower() != wallet["address"].lower():
+            raise ConfigError("a wallet label cannot be rebound to a different address; use a new label")
+        old_label = database.conn.execute(
+            "SELECT label FROM wallets WHERE tenant_id=? AND lower(address)=? AND wallet_id<>?",
+            (tenant_id, wallet["address"].lower(), wallet["label"]),
+        ).fetchone()
+        if old_label:
+            raise ConfigError("renaming a wallet requires an explicit identity migration")
+        start = len(items)
         database.upsert_wallet(
             wallet["label"],
             tenant_id,
@@ -464,6 +523,9 @@ def run_once(config_path: Path, db_path: Path | None = None) -> dict[str, Any]:
         }
         try:
             state = read_lista_state(rpc, wallet["address"])
+            age = time.time() - state["block_timestamp"]
+            if age < -60 or age > 300 or not state.get("block_hash"):
+                raise RpcError("BSC block is stale, in the future, or missing its hash")
             entry["bsc"] = {
                 "quality": "COMPLETE",
                 "scope": [
@@ -516,74 +578,28 @@ def run_once(config_path: Path, db_path: Path | None = None) -> dict[str, Any]:
                     }
                 )
 
-            class _LiveReread:
-                def __init__(self) -> None:
-                    self.reads = 0
-
-                def read_now(self) -> list[WithdrawalRequest]:
-                    self.reads += 1
-                    fresh = read_lista_state(rpc, wallet["address"])
-                    self.last = fresh
-                    return _as_requests(fresh["requests"])
-
+            for item in items[start:]:
+                item.update(
+                    wallet_label=wallet["label"], wallet_address=wallet["address"],
+                    quality="COMPLETE", fresh=True, observed_at=now_local(),
+                    block_number=state["block_number"], block_hash=state["block_hash"],
+                    block_timestamp=state["block_timestamp"], finality=state["finality"],
+                    paused=state["paused"],
+                )
+            successful_scopes.add((wallet["label"], 56))
             for request in state["requests"]:
-                source = _LiveReread()
-                try:
-                    plan = build_lista_claim_plan(
-                        source=source,
-                        uuid=int(request["uuid"]),
-                        sender=wallet["address"],
-                        proxy=LISTA_PROXY,
-                        implementation=state["implementation"],
-                        proxy_code_sha256=state["proxy_code_sha256"],
-                        implementation_code_sha256=state["implementation_code_sha256"],
-                        paused=state["paused"],
-                        block_number=state["block_number"],
-                        block_hash=state["block_hash"],
-                        task_id="lista-"
-                        + hashlib.sha256(wallet["address"].encode()).hexdigest()[:8]
-                        + "-"
-                        + request["uuid"],
-                        ownership_basis=wallet.get("ownership_basis", "user_provided_watch_address"),
-                        mainnet_authorized=False,
-                        assisted_enabled=False,
-                    )
-                except (PolicyError, RpcError, ValueError) as exc:
-                    plans.append(
-                        {
-                            "wallet_label": wallet["label"],
-                            "plan": {
-                                "task_id": "lista-unplanned-" + request["uuid"],
-                                "state": "BLOCKED",
-                                "wallet_request_allowed": False,
-                                "block_reasons": [redact(str(exc))[:240]],
-                                "digest": None,
-                            },
-                        }
-                    )
-                    continue
-                fresh = source.last
-                plan["deployment"]["implementation"] = fresh["implementation"]
-                plan["deployment"]["proxy_code_sha256"] = fresh["proxy_code_sha256"]
-                plan["deployment"]["implementation_code_sha256"] = fresh["implementation_code_sha256"]
-                plan["preconditions"]["paused"] = fresh["paused"]
-                plan["simulation"]["block_number"] = fresh["block_number"]
-                plan["simulation"]["block_hash"] = fresh["block_hash"]
-                if fresh["implementation"] != state["implementation"] or fresh["paused"] != state["paused"]:
-                    plan["state"] = "BLOCKED"
-                    plan["block_reasons"].append("部署或 pause 狀態在重讀時改變，舊計畫作廢")
-                plan["digest"] = digest_body({key: plan[key] for key in CANONICAL_PLAN_KEYS})
-                if source.reads != 1:
-                    raise RuntimeError("plan builder did not reread the request list")
+                plan = _fresh_lista_plan(rpc, wallet, request, database, tenant_id)
                 plans.append({"wallet_label": wallet["label"], "plan": plan})
-                database.save_task(tenant_id, plan)
-        except (RpcError, SecurityError, OSError, ValueError) as exc:
-            blind = True
+        except (RpcError, SecurityError, OSError, ValueError, KeyError, TypeError, httpx.HTTPError) as exc:
+            del items[start:]
+            successful_scopes.discard((wallet["label"], 56))
+            failed_scopes.append(wallet["label"] + ":bsc")
             entry["bsc"] = {"quality": "ERROR", "detail": redact(str(exc))[:300], "balances": None}
-            limitations.append(f"{wallet['label']} BSC read failed; last known balances were not replaced with zero")
+            limitations.append(f"{wallet['label']} BSC read failed; previous items retained as STALE")
         try:
             entry["hyperliquid"] = _hyperliquid(wallet["address"])
-        except (RpcError, SecurityError, OSError, ValueError) as exc:
+        except (RpcError, SecurityError, OSError, ValueError, KeyError, TypeError, httpx.HTTPError) as exc:
+            failed_scopes.append(wallet["label"] + ":hyperliquid")
             entry["hyperliquid"] = {"quality": "ERROR", "detail": redact(str(exc))[:300]}
             limitations.append(f"{wallet['label']} Hyperliquid read failed")
         wallet_reports.append(entry)
@@ -602,46 +618,27 @@ def run_once(config_path: Path, db_path: Path | None = None) -> dict[str, Any]:
             }
         )
 
-    previous = database.snapshot_items(tenant_id) if database.latest_generation(tenant_id) else []
-    generation = database.latest_generation(tenant_id) + 1
-    created = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    if items:
-        database.commit_snapshot(tenant_id, generation, created, items)
-    diff = diff_items(previous, items)
-    is_baseline = not previous
-    candidates = baseline_alerts(items, is_baseline=is_baseline)
-    alerts = []
-    if candidates and is_baseline:
-        for item in candidates:
-            alert = {
-                "severity": item["severity"],
-                "severity_label": "待處理" if item["severity"] == "ACTION" else item["severity"],
-                "confidence": "鏈上讀取",
-                "wallet_label": item["position_id"].split(":", 1)[0],
-                "chain_label": "BNB Smart Chain",
-                "subject": "Lista 提款",
-                "what": "首次基準觀測到目前可領的請求；這不是「剛剛才變成可領」的判斷。",
-                "amount_display": format_units(item["raw_amount"], 18),
-                "unit": item["symbol"],
-                "price": None,
-                "price_time": None,
-                "why": "這是監控地址上的 Lista 提款請求。",
-                "step": "在你自己的錢包確認前，先核對 idx 與 isClaimable。此建置不會代簽。",
-                "event_time": created,
-                "observed_at": now_local(),
-                "source": BSC_RPC,
-                "limits": "模擬沒有追蹤餘額變化；主網簽名未授權。",
-                "dedup_key": semantic_key(tenant_id, "56", item["position_id"], "claimable", "baseline"),
-            }
-            alerts.append({"text": format_alert(alert), "payload": alert})
-            database.add_alert(tenant_id, alert["dedup_key"], alert)
-    decision = notify_decision(
-        changes=alerts,
-        sources_healthy=not blind,
-        blind_alert_open=False,
-        recovered=False,
+    created = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    ofac = screen_ofac(config["wallets"])
+    if ofac.get("level") == "LIVE_FAIL":
+        failed_scopes.append("ofac")
+    # Suppress only an explicitly identified request with a verified external
+    # owner. Amounts and array indexes never establish cross-watcher identity.
+    suppressed = set()
+    for action in config.get("known_pending_actions") or []:
+        watcher = action.get("external_watcher") or {}
+        request_uuid = str(action.get("request_uuid", ""))
+        if (action.get("chain_id") == 56 and action.get("protocol") in {"Lista DAO", "lista-slisbnb"}
+                and request_uuid.isascii() and request_uuid.isdigit()
+                and watcher.get("current_health") == "VERIFIED_HEALTHY"
+                and watcher.get("suppress_expected_claim_duplicate") is True):
+            suppressed.add(f"{action.get('wallet_label')}:lista:{int(request_uuid)}")
+    settled = cycle.finish(
+        incoming=items, successful_scopes=successful_scopes, failed_scopes=failed_scopes,
+        created=created, tasks=[row["plan"] for row in plans], suppressed_claims=suppressed,
     )
-    run_id = "run-" + hashlib.sha256(created.encode()).hexdigest()[:12]
+    run_id = "run-" + uuid.uuid4().hex
+    blind = bool(failed_scopes)
     result = {
         "status": "completed_with_limitations" if not blind else "degraded",
         "mode": "READ_ONLY",
@@ -649,13 +646,14 @@ def run_once(config_path: Path, db_path: Path | None = None) -> dict[str, Any]:
         "monitoring_mode": "RUN_ONCE",
         "generated_at_taipei": now_local(),
         "run_id": run_id,
-        "snapshot_generation": generation if items else None,
-        "diff": diff,
-        "baseline": is_baseline,
+        "snapshot_generation": settled["snapshot_generation"],
+        "diff": settled["diff"],
+        "baseline": settled["baseline"],
+        "source_health": settled["source_health"],
         "notifications_sent": False,
-        "notification_decision": decision,
+        "notification_decision": settled["notification_decision"],
         "limitations": limitations,
-        "ofac": screen_ofac(config["wallets"]),
+        "ofac": ofac,
         "pending_actions": pending,
         "wallets": wallet_reports,
         "action_plans": [
@@ -672,27 +670,56 @@ def run_once(config_path: Path, db_path: Path | None = None) -> dict[str, Any]:
         "operation_coverage": operation_coverage(),
         "agent_broadcast": False,
     }
-    evidence = ROOT / "evidence"
-    evidence.mkdir(parents=True, exist_ok=True)
+    database.save_run(tenant_id, run_id, result)
+    evidence = ROOT / "evidence" / hashlib.sha256(tenant_id.encode()).hexdigest()
+    evidence.mkdir(parents=True, exist_ok=True, mode=0o700)
     (evidence / f"{run_id}.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    full_plans = ROOT / "evidence" / "plans"
+    full_plans = evidence / "plans"
     full_plans.mkdir(parents=True, exist_ok=True)
     for row in plans:
         (full_plans / f"{row['plan']['task_id']}.json").write_text(
             json.dumps(row["plan"], ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-    database.save_run(tenant_id, run_id, {"status": result["status"], "generation": result["snapshot_generation"]})
-    database.close()
     return result
 
+
+
+def _fresh_lista_plan(rpc, wallet, request, database, tenant_id):
+    task_id = "lista-" + hashlib.sha256(wallet["address"].lower().encode()).hexdigest() + "-" + str(request["uuid"])
+    old = database.get_task(tenant_id, task_id)
+    revision = int(old["revision"]) + 1 if old else 1
+    try:
+        fresh = read_lista_state(rpc, wallet["address"])
+        age = time.time() - fresh["block_timestamp"]
+        if age < -60 or age > 300 or not fresh.get("block_hash"):
+            raise RpcError("planning block is stale or missing")
+        plan = build_lista_claim_plan(
+            source=_SnapshotSource(_as_requests(fresh["requests"])),
+            uuid=int(request["uuid"]), sender=wallet["address"], proxy=LISTA_PROXY,
+            implementation=fresh["implementation"], proxy_code_sha256=fresh["proxy_code_sha256"],
+            implementation_code_sha256=fresh["implementation_code_sha256"], paused=fresh["paused"],
+            block_number=fresh["block_number"], block_hash=fresh["block_hash"],
+            task_id=task_id, revision=revision, now_unix=int(time.time()),
+            ownership_basis="user_provided_watch_address", mainnet_authorized=False, assisted_enabled=False,
+        )
+        if plan["state"] == "SIMULATED":
+            plan["state"] = "DRAFT"
+        plan["simulation"]["source"] = "not_run"
+        plan["block_reasons"].append("只讀取狀態；未模擬 claimWithdraw 交易。")
+        plan["digest"] = digest_body({key: plan[key] for key in CANONICAL_PLAN_KEYS})
+        return plan
+    except (RpcError, SecurityError, OSError, ValueError, KeyError, TypeError, httpx.HTTPError) as exc:
+        return {"task_id": task_id, "revision": revision, "state": "BLOCKED",
+                "calls": [], "wallet_request_allowed": False,
+                "block_reasons": [redact(str(exc))[:240]], "digest": None}
 
 def screen_ofac(wallets: list[dict[str, Any]]) -> dict[str, Any]:
     import re
 
     try:
         status, text = safe_get_text(OFAC_URL)
-    except (OSError, SecurityError, ValueError) as exc:
+    except (OSError, RpcError, SecurityError, ValueError, httpx.HTTPError) as exc:
         return {"level": "LIVE_FAIL", "detail": redact(str(exc))[:240], "rows": []}
     found: set[str] = set()
     for item in re.findall(r"0x[a-fA-F0-9]{40}", text):

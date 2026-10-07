@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
-import { confirmDecision, eip5792Status, executionMode, listaCallsOnly } from "./gate.mjs";
+import { clientConfirmDecision, confirmDecision, eip5792Status, executionMode, listaCallsOnly, simulationAllowsSend } from "./gate.mjs";
+
+const clearPlan = {
+  walletRequestAllowed: true,
+  simulationComplete: true,
+  planBlocked: false,
+};
 
 const off = confirmDecision({
   requiresUserWalletConfirmation: true,
   preflightOk: true,
   mainnetSend: false,
   mode: "A",
+  ...clearPlan,
 });
 assert.equal(off.buttonEnabled, true);
 assert.equal(off.sendAllowed, false);
@@ -37,6 +44,97 @@ const modeC = confirmDecision({
 });
 assert.equal(modeC.buttonEnabled, false);
 assert.equal(modeC.reason, "mode_c_unsupported");
+
+const forgedPreflight = confirmDecision({
+  requiresUserWalletConfirmation: true,
+  preflightOk: true,
+  mainnetSend: true,
+  mode: "A",
+  walletRequestAllowed: false,
+  simulationComplete: false,
+  planBlocked: false,
+});
+assert.equal(forgedPreflight.buttonEnabled, false);
+assert.equal(forgedPreflight.sendAllowed, false);
+assert.equal(forgedPreflight.reason, "wallet_request_denied");
+assert.equal(forgedPreflight.agentMaySign, false);
+
+const incompleteSimulation = confirmDecision({
+  requiresUserWalletConfirmation: true,
+  preflightOk: true,
+  mainnetSend: true,
+  mode: "A",
+  walletRequestAllowed: true,
+  simulationComplete: false,
+  planBlocked: false,
+});
+assert.equal(incompleteSimulation.sendAllowed, false);
+assert.equal(incompleteSimulation.reason, "simulation_incomplete");
+
+const blockedPlan = confirmDecision({
+  requiresUserWalletConfirmation: true,
+  preflightOk: true,
+  mainnetSend: true,
+  mode: "A",
+  walletRequestAllowed: true,
+  simulationComplete: true,
+  planBlocked: true,
+});
+assert.equal(blockedPlan.sendAllowed, false);
+assert.equal(blockedPlan.reason, "plan_blocked");
+
+const omittedDenials = confirmDecision({
+  requiresUserWalletConfirmation: true,
+  preflightOk: true,
+  mainnetSend: true,
+  mode: "A",
+});
+assert.equal(omittedDenials.sendAllowed, false);
+assert.equal(omittedDenials.reason, "wallet_request_denied");
+
+assert.equal(simulationAllowsSend({ status: "INCOMPLETE", effects_checked: false }), false);
+assert.equal(simulationAllowsSend({ status: "PASS", effects_checked: true, usable_as_live_evidence: true, state_overrides: true }), false);
+assert.equal(simulationAllowsSend({ status: "PASS", effects_checked: false, usable_as_live_evidence: true }), false);
+assert.equal(
+  simulationAllowsSend({ status: "PASS", effects_checked: true, usable_as_live_evidence: true }),
+  true,
+);
+
+const forgedTask = clientConfirmDecision({
+  plan: {
+    wallet_request_allowed: false,
+    simulation: { status: "INCOMPLETE", effects_checked: false },
+    block_reasons: ["unsigned"],
+  },
+  task: {
+    mode: "A",
+    requires_user_wallet_confirmation: true,
+    preflight: { preflight_ok: true, revision_required: false, changes: [] },
+  },
+  mainnetSend: true,
+  mode: "A",
+});
+assert.equal(forgedTask.buttonEnabled, false);
+assert.equal(forgedTask.sendAllowed, false);
+assert.equal(forgedTask.agentMaySign, false);
+
+const preflightAlone = clientConfirmDecision({
+  plan: {
+    wallet_request_allowed: true,
+    simulation: { status: "PASS", effects_checked: true, usable_as_live_evidence: true, state_overrides: false },
+    block_reasons: [],
+  },
+  task: {
+    mode: "A",
+    requires_user_wallet_confirmation: true,
+    preflight: { preflight_ok: true, revision_required: false, changes: [] },
+  },
+  mainnetSend: true,
+  mode: "A",
+});
+assert.equal(preflightAlone.sendAllowed, false);
+assert.equal(preflightAlone.buttonEnabled, false);
+assert.equal(preflightAlone.reason, "preflight_not_ok");
 
 assert.equal(eip5792Status({ "0x38": { atomic: { status: "unsupported" } } }, 56), "unsupported");
 assert.equal(executionMode({ capability: "unsupported", callCount: 2, sameChain: true }), "A");

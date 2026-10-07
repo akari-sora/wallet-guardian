@@ -74,6 +74,9 @@ def test_mode_a_button_requires_user_confirmation_and_preflight():
         requires_user_wallet_confirmation=True,
         preflight_ok=True,
         mainnet_send=False,
+        wallet_request_allowed=True,
+        simulation_complete=True,
+        plan_blocked=False,
     )
     assert armed["button_enabled"] is True
     assert armed["send_allowed"] is False
@@ -83,7 +86,48 @@ def test_mode_a_button_requires_user_confirmation_and_preflight():
 
 def test_mainnet_send_flag_does_not_let_the_agent_sign(monkeypatch):
     monkeypatch.setenv("GUARDIAN_MAINNET_SEND", "true")
-    gate = confirm_gate(requires_user_wallet_confirmation=True, preflight_ok=True, mainnet_send=True)
+    forged = confirm_gate(
+        requires_user_wallet_confirmation=True,
+        preflight_ok=True,
+        mainnet_send=True,
+        wallet_request_allowed=False,
+        simulation_complete=False,
+        plan_blocked=False,
+    )
+    assert forged["send_allowed"] is False
+    assert forged["reason"] == "wallet_request_denied"
+    assert forged["agent_may_sign"] is False
+    incomplete = confirm_gate(
+        requires_user_wallet_confirmation=True,
+        preflight_ok=True,
+        mainnet_send=True,
+        wallet_request_allowed=True,
+        simulation_complete=False,
+        plan_blocked=False,
+    )
+    assert incomplete["send_allowed"] is False
+    assert incomplete["reason"] == "simulation_incomplete"
+    blocked = confirm_gate(
+        requires_user_wallet_confirmation=True,
+        preflight_ok=True,
+        mainnet_send=True,
+        wallet_request_allowed=True,
+        simulation_complete=True,
+        plan_blocked=True,
+    )
+    assert blocked["send_allowed"] is False
+    assert blocked["reason"] == "plan_blocked"
+    omitted = confirm_gate(requires_user_wallet_confirmation=True, preflight_ok=True, mainnet_send=True)
+    assert omitted["send_allowed"] is False
+    assert omitted["reason"] == "wallet_request_denied"
+    gate = confirm_gate(
+        requires_user_wallet_confirmation=True,
+        preflight_ok=True,
+        mainnet_send=True,
+        wallet_request_allowed=True,
+        simulation_complete=True,
+        plan_blocked=False,
+    )
     assert gate["send_allowed"] is True
     assert gate["agent_may_sign"] is False
     with pytest.raises(SecurityError):

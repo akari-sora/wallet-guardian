@@ -14,6 +14,7 @@ from guardian.errors import GuardianError
 from guardian.security.redact import redact
 from guardian.service import ROOT, doctor, load_config, load_local_env, operation_coverage, rescue_doctor, run_once, self_check
 from guardian.storage import Database
+from guardian.read_views import latest_items, resolve_tenant
 
 
 def _print(payload: dict) -> None:
@@ -28,9 +29,11 @@ def _db(args: argparse.Namespace) -> Database:
 
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--db", help="sqlite path")
+    common.add_argument("--db", default=argparse.SUPPRESS, help="sqlite path")
+    common.add_argument("--tenant", default=argparse.SUPPRESS, help="local tenant scope (required when ambiguous)")
     common.add_argument("--json", action="store_true", help="print JSON (this is always on)")
     parser = argparse.ArgumentParser(prog="guardian")
+    parser.set_defaults(db=None)
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("doctor", parents=[common])
@@ -116,7 +119,8 @@ def dispatch(args: argparse.Namespace) -> tuple[dict, int]:
         report = doctor()
         return {"providers": report["providers"]}, 0
     if args.command == "wallets":
-        return run_once(Path(args.config), Path(args.db) if args.db else None), 0
+        result = run_once(Path(args.config), Path(args.db) if args.db else None)
+        return result, 3 if result["status"] == "degraded" else 0
     if args.command in {"snapshot", "reconcile", "claims", "approvals", "actions"}:
         return _stored(args)
     if args.command == "explain":
@@ -167,15 +171,13 @@ def _stored(args: argparse.Namespace) -> tuple[dict, int]:
                 "reason": "allowance history has not been indexed; coverage is partial",
                 "items": [],
             }, 0
-        items = []
-        # Local DB is single-operator in this build; tenant filter still applies when known.
-        rows = database.conn.execute("SELECT tenant_id, payload FROM snapshot_items ORDER BY id").fetchall()
-        items = [json.loads(row["payload"]) | {"tenant_id": row["tenant_id"]} for row in rows]
+        tenant = resolve_tenant(database, getattr(args, "tenant", None))
+        items = latest_items(database, tenant, getattr(args, "wallet", None))
         if args.command == "claims" or (args.command == "actions" and args.actions_command == "list"):
             claims = [item for item in items if ":lista:" in item.get("position_id", "")]
             return {"status": "ok", "claims": claims, "wallet_request_allowed": False}, 0
         if args.command == "reconcile":
-            return {"status": "ok", "items": len(items), "note": "aggregator keys are absent, so this is direct-state only"}, 0
+            return {"status": "ok", "items": len(items), "note": "latest stored generation only; no live reconciliation was performed"}, 0
         return {"status": "ok", "items": items}, 0
     finally:
         database.close()
@@ -187,13 +189,14 @@ def _explain(args: argparse.Namespace) -> tuple[dict, int]:
         return {"status": "not_found", "event_id": args.event_id}, 0
     database = Database(path)
     try:
-        rows = database.conn.execute("SELECT payload FROM alerts").fetchall()
+        tenant = resolve_tenant(database, getattr(args, "tenant", None))
+        rows = database.alerts_for(tenant) if tenant is not None else []
     finally:
         database.close()
-    for row in rows:
-        payload = json.loads(row["payload"])
+    for payload in rows:
         if payload.get("dedup_key") == args.event_id:
-            return {"status": "ok", "alert": payload, "text": format_alert(payload)}, 0
+            text = format_alert(payload) if "severity_label" in payload else str(payload.get("what", ""))
+            return {"status": "ok", "alert": payload, "text": text}, 0
     return {"status": "not_found", "event_id": args.event_id}, 0
 
 
@@ -203,13 +206,13 @@ def _task_view(args: argparse.Namespace, task_id: str) -> tuple[dict, int]:
         return {"status": "not_found", "task_id": task_id}, 0
     database = Database(path)
     try:
-        row = database.conn.execute("SELECT tenant_id, payload FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        tenant = resolve_tenant(database, getattr(args, "tenant", None))
+        task = database.get_task(tenant, task_id) if tenant is not None else None
     finally:
         database.close()
-    if not row:
+    if not task:
         return {"status": "not_found", "task_id": task_id}, 0
-    task = json.loads(row["payload"])
-    return {"status": "ok", "tenant_id": row["tenant_id"], "task": task, "wallet_request_allowed": False}, 0
+    return {"status": "ok", "tenant_id": tenant, "task": task, "wallet_request_allowed": False}, 0
 
 
 def _action(args: argparse.Namespace) -> tuple[dict, int]:

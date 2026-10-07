@@ -14,12 +14,12 @@
 |---|---|---|
 | BNB Chain chain id 56，官方 RPC 讀 native、slisBNB、Lista 提款 | 由 run-once 實測 | `eth_getLogs` 在官方 dataseed 不可用 |
 | Lista `claimWithdraw` 未簽名計畫 | DRAFT / BLOCKED | 會重讀 idx；不簽名 |
-| 任務工作台模式 A | 閘門已寫入 | 確認鈕只在 `requires_user_wallet_confirmation` 且 preflight 通過時可按。`GUARDIAN_MAINNET_SEND` 預設 false，可按也不送出。真錢包未測 |
+| 任務工作台模式 A | 引導路徑與不廣播測試已寫入 | 重讀通過不會授權送出。`requestUserSend` 在正式預設仍拒絕，主網建置旗標打開也一樣。不廣播測試只在測試旗標且提供者標記不廣播時記錄單筆 `claimWithdraw`。完成必須綁到這筆收據；同一個任務的 pending 與 unknown 不會在重讀時被清成 idle。真錢包與主網仍要擁有者稍後授權，寫明錢包、請求、收款地址與費用。同意這次實作不是打開送出開關 |
 | 任務工作台模式 B | 能力判斷已寫入，真錢包未測 | 不支援、別的鏈或 `ready` 退回 A。同鏈多筆且 `supported` 才標 B。沒有對真錢包送出 `wallet_sendCalls` |
 | 任務工作台模式 C | 關閉 | 程式沒有權限合約。呼叫端自述不算強制 |
 | Etherscan V2 chainlist | 有 key 才 LIVE_PASS | 這次環境沒有 key，所以沒有新的 LIVE_PASS。一把 `ETHERSCAN_API_KEY` 涵蓋 V2 |
-| 手機錢包內建瀏覽器 | 未測 | 沒有已驗證的固定 HTTPS 網域，沒有發行公開任務連結 |
-| 固定 HTTPS 網域 | BLOCKED | 靜態建置與 GitLab Pages / Vercel / Cloudflare 設定已寫好。見 `docs/deploy.md`。沒有憑證，不能宣稱網址已上線 |
+| 手機錢包內建瀏覽器 | 未測 | 沒有發行公開任務連結。手機瀏覽器未測 |
+| 固定 HTTPS 網域 | 紀錄見 deploy.md | Cloudflare Pages 於這次核對回 HTTP 200。程式常數 `fixed_https_origin` 仍是 false。沒有重新部署，也沒有因此發行任務連結 |
 | Ethereum、其他 EVM | 未啟用 | 沒有預先核准的 RPC |
 | DeBank / Zerion / Alchemy discovery | BLOCKED | 沒有 key |
 | GoPlus | LIMITED_DISCOVERY | 沒有 key，不宣稱已做風險篩選 |

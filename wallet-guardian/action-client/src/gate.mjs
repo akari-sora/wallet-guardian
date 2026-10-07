@@ -4,7 +4,25 @@ export const CLIENT_BUILD = "action-client@0.3.0";
 export const LISTA_PROXY = "0x1adb950d8bb3da4be104211d5ab038628e477fe6";
 export const CLAIM_SELECTOR = "0xb13acedd";
 
-export function confirmDecision({ requiresUserWalletConfirmation, preflightOk, mainnetSend, mode }) {
+export function simulationAllowsSend(simulation) {
+  if (!simulation || typeof simulation !== "object") return false;
+  return (
+    simulation.effects_checked === true &&
+    simulation.status === "PASS" &&
+    simulation.usable_as_live_evidence === true &&
+    simulation.state_overrides !== true
+  );
+}
+
+export function confirmDecision({
+  requiresUserWalletConfirmation,
+  preflightOk,
+  mainnetSend,
+  mode,
+  walletRequestAllowed = false,
+  simulationComplete = false,
+  planBlocked = true,
+}) {
   if (mode === "C") {
     return { buttonEnabled: false, sendAllowed: false, reason: "mode_c_unsupported", agentMaySign: false };
   }
@@ -19,10 +37,35 @@ export function confirmDecision({ requiresUserWalletConfirmation, preflightOk, m
   if (!preflightOk) {
     return { buttonEnabled: false, sendAllowed: false, reason: "preflight_not_ok", agentMaySign: false };
   }
+  // Task preflight booleans are not enough. Explicit denials win, including the
+  // fail-closed defaults when a caller omits them.
+  if (walletRequestAllowed !== true) {
+    return { buttonEnabled: false, sendAllowed: false, reason: "wallet_request_denied", agentMaySign: false };
+  }
+  if (simulationComplete !== true) {
+    return { buttonEnabled: false, sendAllowed: false, reason: "simulation_incomplete", agentMaySign: false };
+  }
+  if (planBlocked !== false) {
+    return { buttonEnabled: false, sendAllowed: false, reason: "plan_blocked", agentMaySign: false };
+  }
   if (!mainnetSend) {
     return { buttonEnabled: true, sendAllowed: false, reason: "mainnet_send_disabled", agentMaySign: false };
   }
   return { buttonEnabled: true, sendAllowed: true, reason: null, agentMaySign: false };
+}
+
+/** Task JSON preflight is ignored. A client re-read is not passed in and is not send authority. */
+export function clientConfirmDecision({ plan, task, mainnetSend, mode }) {
+  const resolvedMode = task && task.mode === "C" ? "C" : mode;
+  return confirmDecision({
+    requiresUserWalletConfirmation: Boolean(task && task.requires_user_wallet_confirmation === true),
+    preflightOk: false,
+    mainnetSend: mainnetSend === true,
+    mode: resolvedMode,
+    walletRequestAllowed: Boolean(plan && plan.wallet_request_allowed === true),
+    simulationComplete: simulationAllowsSend(plan && plan.simulation),
+    planBlocked: Array.isArray(plan && plan.block_reasons) && plan.block_reasons.length > 0,
+  });
 }
 
 export function eip5792Status(capabilities, chainId) {
