@@ -14,7 +14,7 @@
 |---|---|---|
 | BNB Chain chain id 56，官方 RPC 讀 native、slisBNB、Lista 提款 | 由 run-once 實測 | `eth_getLogs` 在官方 dataseed 不可用 |
 | Lista `claimWithdraw` 未簽名計畫 | DRAFT / BLOCKED | 會重讀 idx；不簽名 |
-| 任務工作台模式 A | 引導路徑與不廣播測試已寫入 | 重讀通過不會授權送出。正式路徑仍拒絕錢包請求。不廣播測試只在測試旗標且提供者標記不廣播時記錄單筆 `claimWithdraw`。真錢包與主網仍要另一次明確人工授權，寫明錢包、請求、收款地址與費用 |
+| 任務工作台模式 A | 引導路徑與不廣播測試已寫入 | 重讀通過不會授權送出。`requestUserSend` 在正式預設仍拒絕，主網建置旗標打開也一樣。不廣播測試只在測試旗標且提供者標記不廣播時記錄單筆 `claimWithdraw`。真錢包與主網仍要擁有者稍後授權，寫明錢包、請求、收款地址與費用。同意這次實作不是打開送出開關 |
 | 任務工作台模式 B | 能力判斷已寫入，真錢包未測 | 不支援、別的鏈或 `ready` 退回 A。同鏈多筆且 `supported` 才標 B。沒有對真錢包送出 `wallet_sendCalls` |
 | 任務工作台模式 C | 關閉 | 程式沒有權限合約。呼叫端自述不算強制 |
 | Etherscan V2 chainlist | 有 key 才 LIVE_PASS | 這次環境沒有 key，所以沒有新的 LIVE_PASS。一把 `ETHERSCAN_API_KEY` 涵蓋 V2 |
