@@ -1,0 +1,83 @@
+{
+  "generated_at_taipei": "2026-10-07T13:28:48+08:00",
+  "results": [
+    {
+      "http": 200,
+      "reported_rows": 63,
+      "name_classified_mainnets": 35,
+      "enabled_for_monitoring": [
+        "bnb-smart-chain:56"
+      ],
+      "note": "row count is not the number of monitored mainnets",
+      "source_id": "etherscan_v2_chainlist",
+      "level": "LIVE_PASS",
+      "latency_ms": 262
+    },
+    {
+      "chain_id": 56,
+      "block_number": 126196077,
+      "eth_getLogs": "disabled_on_official_dataseed",
+      "source_id": "bsc_official_rpc",
+      "level": "LIVE_PASS",
+      "latency_ms": 589
+    },
+    {
+      "http": 200,
+      "source_id": "hyperliquid_info",
+      "level": "LIVE_PASS",
+      "latency_ms": 147
+    },
+    {
+      "http": 200,
+      "address_count": 91,
+      "reason": "SDN CSV included some 0x strings; it is not a complete digital-currency sanctions list",
+      "source_id": "ofac_sdn_csv",
+      "level": "LIMITED_DISCOVERY",
+      "latency_ms": 8754
+    },
+    {
+      "source_id": "goplus",
+      "level": "LIMITED_DISCOVERY",
+      "reason": "GOPLUS_API_KEY not configured",
+      "queried": false,
+      "latency_ms": 0
+    },
+    {
+      "source_id": "debank",
+      "level": "BLOCKED",
+      "reason": "no access key; discovery stays limited",
+      "latency_ms": 0
+    },
+    {
+      "source_id": "zerion",
+      "level": "BLOCKED",
+      "reason": "no api key and no verified callback",
+      "latency_ms": 0
+    },
+    {
+      "source_id": "alchemy",
+      "level": "BLOCKED",
+      "reason": "no api key",
+      "latency_ms": 0
+    },
+    {
+      "source_id": "tenderly",
+      "level": "BLOCKED",
+      "reason": "simulation vendor not configured",
+      "latency_ms": 0
+    },
+    {
+      "source_id": "news_rss",
+      "level": "LIMITED_DISCOVERY",
+      "reason": "filter skeleton only; no wallet is sent to a news search",
+      "latency_ms": 0
+    },
+    {
+      "source_id": "webhook_receiver",
+      "level": "BLOCKED",
+      "reason": "public webhook is disallowed",
+      "latency_ms": 0
+    }
+  ],
+  "stress_tests": "BLOCKED"
+}

@@ -1,6 +1,13 @@
 # 覆蓋範圍
 
-更新方式：離線政策測試與一次唯讀 `doctor` / `run-once`。這裡不記錄私人餘額。
+更新時間：2026-10-07 13:28 Asia/Taipei。離線測試與一次唯讀 `doctor` / `run-once`。私人餘額只留在 gitignore 的 `evidence/`。
+
+## 這次實際執行
+
+- `uv run pytest -q`：138 passed。其中 v1 文件 56 項、v2 文件 72 項，其餘是目錄對照與 CLI 安全檢查。
+- `guardian doctor --json`：exit 0。BNB Chain 官方 RPC `LIVE_PASS`（約 block 126196077）。Etherscan V2 chainlist `LIVE_PASS`（回傳 63 列，監控只啟用 chain 56）。Hyperliquid info `LIVE_PASS`。
+- `guardian run-once --config private/config.json --json`：exit 0，`completed_with_limitations`，`monitoring_active=false`。Lista proxy 的 ERC-1967 implementation 讀到 `0xF9a3702659d8bFDb2ff5E3c3f264E479801F63Bf`，`paused=false`。一個 watch 地址的目前提款陣列有一筆且 `isClaimable=true`；另一個陣列是空的。未簽名計畫是 `SIMULATED`，`wallet_request_allowed=false`。
+- 沒有送出通知，沒有簽名，沒有廣播。
 
 | 範圍 | 狀態 | 說明 |
 |---|---|---|

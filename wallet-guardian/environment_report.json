@@ -1,0 +1,40 @@
+{
+  "generated_at_utc": "2026-10-07T05:28:38+00:00",
+  "generated_at_taipei": "2026-10-07T13:28:38+08:00",
+  "timezone": "Asia/Taipei",
+  "os": "Linux-6.12.94+-x86_64-with-glibc2.39",
+  "cpu_arch": "x86_64",
+  "python": "3.12.3",
+  "node": {
+    "present": true,
+    "path": "/exec-daemon/node"
+  },
+  "uv": {
+    "present": true,
+    "path": "/home/ubuntu/.local/bin/uv"
+  },
+  "git": {
+    "present": true,
+    "path": "/usr/bin/git"
+  },
+  "pid_1": "tini",
+  "systemd": "offline",
+  "cron_daemon": "not_available_as_bot_scheduler",
+  "disk_total_bytes": 270436077568,
+  "disk_free_bytes": 254568308736,
+  "workspace_writable": true,
+  "persistent_workspace_assumed": false,
+  "shared_computer_is_isolation": false,
+  "https_webhook_receiver": false,
+  "webhook_reason": "no verified public callback and the private seed disallows a public webhook",
+  "credential_slots": {
+    "ETHERSCAN_API_KEY": "not_configured",
+    "GOPLUS_API_KEY": "not_configured",
+    "DEBANK_ACCESS_KEY": "not_configured",
+    "ZERION_API_KEY": "not_configured",
+    "ALCHEMY_API_KEY": "not_configured",
+    "TENDERLY_ACCESS_KEY": "not_configured"
+  },
+  "paid_subscription_changes": "not_performed",
+  "guardian_version": "0.2.0"
+}

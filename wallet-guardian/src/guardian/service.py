@@ -14,6 +14,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from guardian import __version__
+from guardian.amounts import format_units
 from guardian.actions.lista_plan import build_lista_claim_plan
 from guardian.actions.policy import KillSwitch
 from guardian.domain import (
@@ -237,12 +238,28 @@ def provider_probes() -> list[dict[str, Any]]:
                 "http": status,
                 "reason": "downloaded SDN CSV did not contain a 0x address set, so wallets were not screened",
             }
-        return {"level": "LIVE_PASS", "address_count": len(set(addresses))}
+        return {
+            "level": "LIMITED_DISCOVERY",
+            "http": status,
+            "address_count": len(set(addresses)),
+            "reason": "SDN CSV included some 0x strings; it is not a complete digital-currency sanctions list",
+        }
 
     def goplus() -> dict[str, Any]:
         if flags["GOPLUS_API_KEY"] != "configured":
-            return {"level": "LIMITED_DISCOVERY", "reason": "GOPLUS_API_KEY not configured", "queried": False}
-        return {"level": "BLOCKED", "reason": "configured key path is intentionally not auto-called"}
+            return {
+                "source_id": "goplus",
+                "level": "LIMITED_DISCOVERY",
+                "reason": "GOPLUS_API_KEY not configured",
+                "queried": False,
+                "latency_ms": 0,
+            }
+        return {
+            "source_id": "goplus",
+            "level": "BLOCKED",
+            "reason": "configured key path is intentionally not auto-called",
+            "latency_ms": 0,
+        }
 
     blocked = []
     for name, env_name, reason in (
@@ -385,7 +402,14 @@ def run_once(config_path: Path, db_path: Path | None = None) -> dict[str, Any]:
         try:
             state = read_lista_state(rpc, wallet["address"])
             entry["bsc"] = {
-                "quality": "PARTIAL",
+                "quality": "COMPLETE",
+                "scope": [
+                    "native_balance",
+                    "slisbnb_balanceOf",
+                    "lista_withdrawal_requests",
+                    "pause",
+                    "erc1967_implementation",
+                ],
                 "block_number": state["block_number"],
                 "block_hash": state["block_hash"],
                 "block_timestamp": state["block_timestamp"],
@@ -534,7 +558,7 @@ def run_once(config_path: Path, db_path: Path | None = None) -> dict[str, Any]:
                 "chain_label": "BNB Smart Chain",
                 "subject": "Lista 提款",
                 "what": "首次基準觀測到目前可領的請求；這不是「剛剛才變成可領」的判斷。",
-                "amount_display": item["raw_amount"],
+                "amount_display": format_units(item["raw_amount"], 18),
                 "unit": item["symbol"],
                 "price": None,
                 "price_time": None,
@@ -568,6 +592,7 @@ def run_once(config_path: Path, db_path: Path | None = None) -> dict[str, Any]:
         "notifications_sent": False,
         "notification_decision": decision,
         "limitations": limitations,
+        "ofac": screen_ofac(config["wallets"]),
         "pending_actions": pending,
         "wallets": wallet_reports,
         "action_plans": [
@@ -597,6 +622,39 @@ def run_once(config_path: Path, db_path: Path | None = None) -> dict[str, Any]:
     database.save_run(tenant_id, run_id, {"status": result["status"], "generation": result["snapshot_generation"]})
     database.close()
     return result
+
+
+def screen_ofac(wallets: list[dict[str, Any]]) -> dict[str, Any]:
+    import re
+
+    try:
+        status, text = safe_get_text(OFAC_URL)
+    except (OSError, SecurityError, ValueError) as exc:
+        return {"level": "LIVE_FAIL", "detail": redact(str(exc))[:240], "rows": []}
+    found: set[str] = set()
+    for item in re.findall(r"0x[a-fA-F0-9]{40}", text):
+        try:
+            found.add(parse_evm_address(item))
+        except ConfigError:
+            continue
+    if status != 200 or not found:
+        return {
+            "level": "LIMITED_DISCOVERY",
+            "http": status,
+            "rows": [],
+            "reason": "downloaded file did not yield a usable 0x address set",
+        }
+    return {
+        "level": "LIMITED_DISCOVERY",
+        "http": status,
+        "address_count": len(found),
+        "coverage": "PARTIAL",
+        "reason": "SDN CSV is not a complete digital-currency sanctions list",
+        "rows": [
+            {"label": wallet["label"], "listed_in_downloaded_csv": wallet["address"] in found}
+            for wallet in wallets
+        ],
+    }
 
 
 def operation_coverage() -> dict[str, Any]:

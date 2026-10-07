@@ -28,6 +28,7 @@ def _db(args: argparse.Namespace) -> Database:
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--db", help="sqlite path")
+    common.add_argument("--json", action="store_true", help="print JSON (this is always on)")
     parser = argparse.ArgumentParser(prog="guardian")
     sub = parser.add_subparsers(dest="command", required=True)
 
