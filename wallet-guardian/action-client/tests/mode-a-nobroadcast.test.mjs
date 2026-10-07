@@ -2,19 +2,23 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { claimCalldata, encodePausedCall, encodeRequestStatusCall, encodeWithdrawalRequestsCall, TRUSTED_LISTA } from "../src/trusted-lista.mjs";
+import { keccak_256 } from "@noble/hashes/sha3.js";
+import { CLAIM_WITHDRAWAL_EVENT, CLAIM_WITHDRAWAL_TOPIC, claimCalldata, encodePausedCall, encodeRequestStatusCall, encodeWithdrawalRequestsCall, TRUSTED_LISTA } from "../src/trusted-lista.mjs";
 import { settleReread } from "../src/lista-reread.mjs";
 import {
   applyWalletEvent,
   assertSingleStep,
+  createModeAFlow,
   exactClaimRequest,
   guideListaModeA,
   OUTCOME_TEXT,
+  outcomeAfterReread,
   POISON_NOTE,
   recordEconomicOutcome,
   recordReplacement,
   retryModeA,
   sendAuthorizedByReread,
+  verifyRecordedClaim,
 } from "../src/mode-a.mjs";
 
 const ACCOUNT = "0x" + "1".repeat(40);
@@ -361,27 +365,108 @@ test("calldata is rebuilt from the observed idx, not a tampered plan blob", asyn
   assert.equal(stale.allowSend, "closed");
 });
 
+function addressTopic(account) {
+  return "0x" + account.slice(2).toLowerCase().padStart(64, "0");
+}
+
+function topicOf(signature) {
+  const bytes = keccak_256(new TextEncoder().encode(signature));
+  return "0x" + [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function boundSubmission(txHash = "0x" + "ab".repeat(32)) {
+  return {
+    txHash,
+    account: ACCOUNT,
+    idx: 0,
+    uuid: "42",
+    amountOut: "1000",
+    calldata: claimCalldata(0),
+    to: TRUSTED_LISTA.proxy,
+    taskRef: "ref_" + "ab".repeat(16),
+    revision: 1,
+    chainId: 56,
+  };
+}
+
+function boundEvidence(submission, mutate = {}) {
+  const gasUsed = mutate.gasUsed ?? 21n;
+  const price = mutate.price ?? 2n;
+  const amount = BigInt(submission.amountOut);
+  const fee = gasUsed * price;
+  const before = 5_000n;
+  const delta = mutate.nativeDelta ?? (amount - fee);
+  const log = {
+    address: mutate.logAddress ?? TRUSTED_LISTA.proxy,
+    transactionHash: mutate.logHash ?? submission.txHash,
+    topics: [
+      CLAIM_WITHDRAWAL_TOPIC,
+      addressTopic(mutate.logAccount ?? submission.account),
+    ],
+    data: "0x" + word(mutate.logIdx ?? submission.idx) + word(mutate.logAmount ?? amount),
+  };
+  const evidence = {
+    receipt: {
+      transactionHash: mutate.receiptHash ?? submission.txHash,
+      status: mutate.status ?? "0x1",
+      from: mutate.from ?? submission.account,
+      to: mutate.to ?? TRUSTED_LISTA.proxy,
+      gasUsed: "0x" + gasUsed.toString(16),
+      effectiveGasPrice: mutate.omitPrice ? undefined : "0x" + price.toString(16),
+      logs: mutate.logs ?? [log],
+    },
+    balanceWindow: mutate.omitWindow ? undefined : {
+      account: mutate.windowAccount ?? submission.account,
+      txHash: submission.txHash,
+      beforeWei: before.toString(),
+      afterWei: (before + delta).toString(),
+      otherTxHashes: mutate.otherTxHashes ?? [],
+    },
+    request: {
+      gone: mutate.gone ?? true,
+      account: mutate.requestAccount ?? submission.account,
+      uuid: mutate.uuid ?? submission.uuid,
+      idx: mutate.requestIdx ?? submission.idx,
+    },
+  };
+  if (mutate.gasFeeWei != null) evidence.gasFeeWei = mutate.gasFeeWei;
+  return evidence;
+}
+
 test("wallet outcomes never treat a hash as done and do not auto-retry", () => {
   const submitted = applyWalletEvent(null, { type: "submitted", txHash: "0x" + "ab".repeat(32) });
   assert.equal(submitted.status, "pending");
   assert.equal(submitted.done, false);
   assert.equal(submitted.hashIsDone, false);
-  const economics = recordEconomicOutcome(submitted, {
+  const loose = recordEconomicOutcome(submitted, {
     requestGone: true,
     claimLog: { bnbRaw: "1000" },
     nativeDelta: "900",
     gasUsed: "100",
     concurrentOtherTxs: false,
   });
-  assert.equal(economics.status, "confirmed");
-  assert.equal(economics.done, true);
-  assert.equal(economics.hashIsDone, false);
-  assert.equal(economics.economicVerified, true);
+  assert.equal(loose.status, "pending");
+  assert.equal(loose.done, false);
+  assert.equal(loose.hashIsDone, false);
+  assert.equal(loose.economicVerified, false);
+  assert.equal(loose.txHash, submitted.txHash);
+  const noHash = recordEconomicOutcome(null, {
+    requestGone: true,
+    claimLog: { bnbRaw: "1000" },
+    nativeDelta: "900",
+    gasUsed: "100",
+    receiptStatus: "0x1",
+  });
+  assert.equal(noHash.status, "pending");
+  assert.equal(noHash.done, false);
+  assert.equal(noHash.economicVerified, false);
+  assert.equal(noHash.txHash, null);
+  assert.equal(noHash.economicReason, "missing_tx");
   const disappeared = recordEconomicOutcome(submitted, { requestGone: true, claimLog: null });
   assert.notEqual(disappeared.status, "confirmed");
   assert.equal(disappeared.done, false);
   assert.equal(disappeared.hashIsDone, false);
-  assert.equal(disappeared.economicReason, "missing_claim_event");
+  assert.equal(disappeared.economicReason, "missing_submission");
   const ambiguous = applyWalletEvent(submitted, { type: "ambiguous" });
   assert.equal(ambiguous.status, "unknown");
   assert.equal(ambiguous.autoRetry, false);
@@ -411,21 +496,34 @@ test("an ambiguous probe is not sent again", async () => {
     error.name = "TimeoutError";
     throw error;
   });
+  const flow = createModeAFlow();
   const first = await guideListaModeA({
     ...guideInput().input,
     testOnlyAllowWalletRequest: true,
     provider,
+    flow,
   });
   assert.equal(first.outcome.status, "unknown");
   assert.equal(first.outcome.autoRetry, false);
+  assert.equal(flow.outcome.status, "unknown");
   assert.equal(provider.recorded.length, 1);
+  const remembered = await guideListaModeA({
+    ...guideInput().input,
+    testOnlyAllowWalletRequest: true,
+    provider,
+    flow,
+  });
+  assert.equal(remembered.phase, "verify_outcome");
+  assert.equal(remembered.walletRequested, false);
+  assert.equal(provider.recorded.length, 1);
+  assert.equal(outcomeAfterReread(flow).status, "unknown");
   const second = await guideListaModeA({
     ...guideInput().input,
     testOnlyAllowWalletRequest: true,
     provider,
     prior: first.outcome,
   });
-  assert.equal(second.phase, "no_auto_retry");
+  assert.equal(second.phase, "verify_outcome");
   assert.equal(second.walletRequested, false);
   assert.equal(second.outcome.autoRetry, false);
   assert.equal(second.outcome.newTransaction, false);
@@ -447,8 +545,268 @@ test("an ambiguous probe is not sent again", async () => {
     provider: denied,
     prior: rejected.outcome,
   });
+  assert.equal(stopped.phase, "no_auto_retry");
   assert.equal(stopped.walletRequested, false);
   assert.equal(denied.recorded.length, 1);
+});
+
+test("a confirmed outcome binds this task receipt and does not treat gas units as wei", () => {
+  assert.equal(CLAIM_WITHDRAWAL_TOPIC, topicOf(CLAIM_WITHDRAWAL_EVENT));
+  assert.equal(CLAIM_WITHDRAWAL_TOPIC.length, 66);
+  const submission = boundSubmission();
+  const submitted = applyWalletEvent(null, { type: "submitted", txHash: submission.txHash });
+  submitted.submission = submission;
+  const confirmed = recordEconomicOutcome(submitted, boundEvidence(submission));
+  assert.equal(confirmed.status, "confirmed");
+  assert.equal(confirmed.done, true);
+  assert.equal(confirmed.economicVerified, true);
+  assert.equal(confirmed.hashIsDone, false);
+  assert.equal(confirmed.txHash, submission.txHash);
+  assert.equal(confirmed.autoRetry, false);
+  const gasUnitsAsWei = recordEconomicOutcome(submitted, boundEvidence(submission, { nativeDelta: 1000n - 21n }));
+  assert.equal(gasUnitsAsWei.status, "pending");
+  assert.equal(gasUnitsAsWei.done, false);
+  assert.equal(gasUnitsAsWei.economicVerified, false);
+  assert.equal(gasUnitsAsWei.economicReason, "effect_mismatch");
+  const namedFee = recordEconomicOutcome(submitted, boundEvidence(submission, { gasFeeWei: "42" }));
+  assert.equal(namedFee.status, "confirmed");
+  assert.equal(namedFee.hashIsDone, false);
+  const wrongFee = recordEconomicOutcome(submitted, boundEvidence(submission, { gasFeeWei: "21" }));
+  assert.equal(wrongFee.economicVerified, false);
+  assert.equal(wrongFee.economicReason, "gas_fee_unknown");
+  const noPrice = recordEconomicOutcome(submitted, boundEvidence(submission, { omitPrice: true }));
+  assert.equal(noPrice.economicReason, "gas_fee_unknown");
+  const pendingReceipt = recordEconomicOutcome(submitted, boundEvidence(submission, { status: "pending" }));
+  assert.equal(pendingReceipt.status, "pending");
+  assert.equal(pendingReceipt.done, false);
+  assert.equal(pendingReceipt.economicReason, "receipt_pending");
+  const reverted = recordEconomicOutcome(submitted, boundEvidence(submission, { status: "0x0" }));
+  assert.equal(reverted.status, "failed");
+  assert.equal(reverted.done, false);
+  assert.equal(reverted.economicVerified, false);
+  assert.equal(reverted.economicReason, "receipt_failed");
+  const otherTxs = recordEconomicOutcome(submitted, boundEvidence(submission, { otherTxHashes: ["0x" + "22".repeat(32)] }));
+  assert.equal(otherTxs.economicReason, "native_delta_ambiguous");
+  const hiddenWindow = recordEconomicOutcome(submitted, boundEvidence(submission, { omitWindow: true }));
+  assert.equal(hiddenWindow.economicReason, "native_delta_ambiguous");
+  const otherAccount = recordEconomicOutcome(submitted, boundEvidence(submission, { logAccount: OTHER }));
+  assert.equal(otherAccount.economicReason, "provenance_mismatch");
+  const otherHash = recordEconomicOutcome(submitted, boundEvidence(submission, { receiptHash: "0x" + "cd".repeat(32) }));
+  assert.equal(otherHash.economicReason, "provenance_mismatch");
+  const otherRequest = recordEconomicOutcome(submitted, boundEvidence(submission, { uuid: "99" }));
+  assert.equal(otherRequest.economicReason, "provenance_mismatch");
+  const stillThere = recordEconomicOutcome(submitted, boundEvidence(submission, { gone: false }));
+  assert.equal(stillThere.economicReason, "request_not_gone");
+  const otherIdx = recordEconomicOutcome(submitted, boundEvidence(submission, { logIdx: 1 }));
+  assert.equal(otherIdx.economicReason, "provenance_mismatch");
+  const callerStory = {
+    ...boundEvidence(submission),
+    requestGone: true,
+    claimLog: { bnbRaw: "1" },
+    nativeDelta: "1",
+    gasUsed: "1",
+  };
+  const stored = recordEconomicOutcome(submitted, callerStory);
+  assert.equal(stored.status, "confirmed");
+  const unbound = recordEconomicOutcome(
+    applyWalletEvent(null, { type: "submitted", txHash: submission.txHash }),
+    callerStory,
+  );
+  assert.equal(unbound.economicVerified, false);
+  assert.equal(unbound.economicReason, "missing_submission");
+});
+
+test("the same task records one request and keeps an ambiguous outcome for verification", async () => {
+  const provider = recorder();
+  const flow = createModeAFlow();
+  const { input, chain } = guideInput({
+    fields: { testOnlyAllowWalletRequest: true, provider, flow },
+  });
+  const first = guideListaModeA(input);
+  const second = guideListaModeA(input);
+  const [left, right] = await Promise.all([first, second]);
+  assert.deepEqual([left.phase, right.phase].sort(), ["in_flight", "test_probe"]);
+  assert.equal(provider.recorded.length, 1);
+  assert.equal(chain.log.length, 18);
+  assert.equal(flow.inFlight, false);
+  assert.equal(flow.outcome.status, "pending");
+  assert.equal(flow.outcome.submission.uuid, "42");
+  assert.equal(flow.outcome.submission.amountOut, "6");
+  const again = await guideListaModeA({
+    ...guideInput({ fields: { testOnlyAllowWalletRequest: true, provider, flow } }).input,
+  });
+  assert.equal(again.phase, "verify_outcome");
+  assert.equal(again.walletRequested, false);
+  assert.equal(provider.recorded.length, 1);
+  const loose = verifyRecordedClaim(flow, {
+    requestGone: true,
+    claimLog: { bnbRaw: "6" },
+    nativeDelta: "4",
+    gasUsed: "2",
+    concurrentOtherTxs: false,
+  });
+  assert.equal(loose.economicVerified, false);
+  assert.equal(loose.done, false);
+  assert.equal(provider.recorded.length, 1);
+  const watched = recorder();
+  const amount = 6n;
+  const gasUsed = 2n;
+  const price = 3n;
+  const fee = gasUsed * price;
+  const before = 1_000n;
+  const verified = verifyRecordedClaim(flow, {
+    provider: watched,
+    receipt: {
+      transactionHash: flow.outcome.txHash,
+      status: "0x1",
+      from: ACCOUNT,
+      to: TRUSTED_LISTA.proxy,
+      gasUsed: "0x" + gasUsed.toString(16),
+      effectiveGasPrice: "0x" + price.toString(16),
+      logs: [{
+        address: TRUSTED_LISTA.proxy,
+        transactionHash: flow.outcome.txHash,
+        topics: [CLAIM_WITHDRAWAL_TOPIC, addressTopic(ACCOUNT)],
+        data: "0x" + word(0) + word(amount),
+      }],
+    },
+    balanceWindow: {
+      account: ACCOUNT,
+      txHash: flow.outcome.txHash,
+      beforeWei: before.toString(),
+      afterWei: (before + amount - fee).toString(),
+      otherTxHashes: [],
+    },
+    request: { gone: true, account: ACCOUNT, uuid: "42", idx: 0 },
+    gasFeeWei: fee.toString(),
+  });
+  assert.equal(watched.recorded.length, 0);
+  assert.equal(verified.status, "confirmed");
+  assert.equal(verified.done, true);
+  assert.equal(verified.hashIsDone, false);
+  assert.equal(flow.outcome.status, "confirmed");
+  const retry = await guideListaModeA({
+    ...guideInput({ fields: { testOnlyAllowWalletRequest: true, provider, flow } }).input,
+  });
+  assert.equal(retry.phase, "no_auto_retry");
+  assert.equal(provider.recorded.length, 1);
+});
+
+test("a changed account or chain is checked again and is not handed to the recorder", async () => {
+  const provider = recorder();
+  const flow = createModeAFlow();
+  let account = ACCOUNT;
+  let chainId = 56;
+  const { input, chain } = guideInput({
+    fields: {
+      testOnlyAllowWalletRequest: true,
+      provider,
+      flow,
+      identity: () => ({
+        connectedAccount: account,
+        walletChainId: chainId,
+        walletIdentityVerified: account === ACCOUNT && chainId === 56,
+        revision: 1,
+        planDigest: "ab".repeat(32),
+        taskRef: "ref_" + "ab".repeat(16),
+      }),
+    },
+  });
+  const baseCall = input.call;
+  input.call = async (method, params) => {
+    const result = await baseCall(method, params);
+    if (chain.log.length >= 9) {
+      account = OTHER;
+      chainId = 1;
+    }
+    return result;
+  };
+  const result = await guideListaModeA(input);
+  assert.equal(result.phase, "identity_changed");
+  assert.equal(result.walletRequested, false);
+  assert.equal(result.second, null);
+  assert.equal(provider.recorded.length, 0);
+  assert.equal(flow.outcome.status, "idle");
+});
+
+test("the clock is read again before the recorder, including once the plan TTL has passed", async () => {
+  const provider = recorder();
+  const flow = createModeAFlow();
+  let now = NOW;
+  const { input, chain } = guideInput({
+    fields: {
+      testOnlyAllowWalletRequest: true,
+      provider,
+      flow,
+      clock: () => now,
+    },
+  });
+  const baseCall = input.call;
+  input.call = async (method, params) => {
+    const result = await baseCall(method, params);
+    if (chain.log.length >= 9) now = input.plan.local_ttl_unix;
+    return result;
+  };
+  const expiredDuringSecond = await guideListaModeA(input);
+  assert.equal(expiredDuringSecond.walletRequested, false);
+  assert.equal(expiredDuringSecond.second.reasons.includes("plan_expired"), true);
+  assert.equal(provider.recorded.length, 0);
+  assert.notEqual(expiredDuringSecond.phase, "test_probe");
+
+  const later = recorder();
+  let samples = 0;
+  const held = createModeAFlow();
+  const preSend = await guideListaModeA({
+    ...guideInput({
+      fields: {
+        testOnlyAllowWalletRequest: true,
+        provider: later,
+        flow: held,
+        clock: () => {
+          samples += 1;
+          return samples >= 3 ? NOW + 10_000 : NOW;
+        },
+      },
+    }).input,
+  });
+  assert.equal(samples, 3);
+  assert.equal(preSend.phase, "expired_before_wallet");
+  assert.equal(preSend.second.reread, "pass");
+  assert.equal(preSend.walletRequested, false);
+  assert.equal(later.recorded.length, 0);
+  assert.equal(outcomeAfterReread(held).status, "idle");
+});
+
+test("identity sampled after both reads still blocks the recorder", async () => {
+  const provider = recorder();
+  const flow = createModeAFlow();
+  let samples = 0;
+  const result = await guideListaModeA({
+    ...guideInput({
+      fields: {
+        testOnlyAllowWalletRequest: true,
+        provider,
+        flow,
+        identity: () => {
+          samples += 1;
+          const drifted = samples >= 3;
+          return {
+            connectedAccount: drifted ? OTHER : ACCOUNT,
+            walletChainId: drifted ? 97 : 56,
+            walletIdentityVerified: !drifted,
+            revision: drifted ? 2 : 1,
+            planDigest: "ab".repeat(32),
+            taskRef: "ref_" + "ab".repeat(16),
+          };
+        },
+      },
+    }).input,
+  });
+  assert.equal(samples, 3);
+  assert.equal(result.phase, "revision_changed");
+  assert.equal(result.second.reread, "pass");
+  assert.equal(result.walletRequested, false);
+  assert.equal(provider.recorded.length, 0);
 });
 
 test("recipient confirmation is one claim, and the page keeps send closed", () => {
@@ -466,6 +824,12 @@ test("recipient confirmation is one claim, and the page keeps send closed", () =
   assert.match(main, /provider:\s*null/);
   assert.doesNotMatch(main, /testOnlyAllowWalletRequest:\s*true/);
   assert.match(main, /guideListaModeA/);
+  assert.match(main, /createModeAFlow/);
+  assert.match(main, /flow:\s*modeAFlow/);
+  assert.match(main, /identity:\s*\(\)/);
+  assert.match(main, /clock:\s*\(\)/);
+  assert.match(main, /outcomeAfterReread\(\s*modeAFlow\s*\)/);
+  assert.doesNotMatch(main, /paintWalletOutcome\(\s*["']idle["']\s*\)/);
   assert.match(guide, /wallet_sendCalls/);
   assert.match(guide, /eth_sendTransaction/);
   assert.match(guide, /noBroadcast === true/);

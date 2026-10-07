@@ -7,7 +7,7 @@
  * module does not broadcast.
  */
 
-import { claimCalldata, sameAddress, TRUSTED_LISTA } from "./trusted-lista.mjs";
+import { CLAIM_WITHDRAWAL_TOPIC, claimCalldata, sameAddress, TRUSTED_LISTA } from "./trusted-lista.mjs";
 import { reverifyListaClaim } from "./lista-reread.mjs";
 
 export const POISON_NOTE =
@@ -126,37 +126,151 @@ export function applyWalletEvent(track, event) {
   return { ...base, status: "unknown", txHash: null };
 }
 
-/** List disappearance is not enough. A hash without this check stays pending. */
-export function verifyClaimEconomics({
-  requestGone,
-  claimLog,
-  nativeDelta,
-  gasUsed,
-  concurrentOtherTxs,
-}) {
-  if (!claimLog || claimLog.bnbRaw == null) {
-    return { verified: false, reason: "missing_claim_event", listDisappearanceIsEnough: false };
-  }
-  if (concurrentOtherTxs === true || nativeDelta == null || gasUsed == null) {
-    return { verified: false, reason: "native_delta_ambiguous", listDisappearanceIsEnough: false };
-  }
-  let expected;
-  try {
-    expected = BigInt(claimLog.bnbRaw) - BigInt(gasUsed);
-  } catch {
-    return { verified: false, reason: "effect_mismatch", listDisappearanceIsEnough: false };
-  }
-  if (BigInt(nativeDelta) !== expected || requestGone !== true) {
-    return { verified: false, reason: "effect_mismatch", listDisappearanceIsEnough: false };
-  }
-  return { verified: true, reason: null, listDisappearanceIsEnough: false };
+function uintString(value) {
+  return typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value) && BigInt(value) < (1n << 256n);
 }
 
-export function recordEconomicOutcome(track, economics) {
+function wei(value) {
+  if (typeof value === "bigint") {
+    if (value < 0n || value >= (1n << 256n)) return null;
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) return null;
+    return BigInt(value);
+  }
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*|0x[0-9a-fA-F]+)$/.test(value)) return null;
+  try {
+    const parsed = BigInt(value);
+    if (parsed < 0n || parsed >= (1n << 256n)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function word(value) {
+  const parsed = wei(value);
+  if (parsed == null) return null;
+  return parsed.toString(16).padStart(64, "0");
+}
+
+function addressTopic(account) {
+  return "0x" + account.slice(2).toLowerCase().padStart(64, "0");
+}
+
+function sameAccount(left, right) {
+  if (left == null && right == null) return true;
+  return sameAddress(left, right);
+}
+
+function sameUint(left, right) {
+  const a = wei(left);
+  const b = wei(right);
+  return a != null && b != null && a === b;
+}
+
+/** Expected values come from the submission stored at send time, not from the caller's story. */
+function boundSubmission(track) {
+  const submission = track && track.submission;
+  if (!submission || typeof submission !== "object") return null;
+  if (!hashText(track.txHash) || !hashText(submission.txHash)) return null;
+  if (submission.txHash.toLowerCase() !== track.txHash.toLowerCase()) return null;
+  if (!sameAddress(submission.account, submission.account)) return null;
+  if (!sameAddress(submission.to, TRUSTED_LISTA.proxy)) return null;
+  if (!Number.isSafeInteger(submission.idx) || submission.idx < 0) return null;
+  if (submission.chainId !== TRUSTED_LISTA.chainId) return null;
+  if (!uintString(String(submission.uuid)) || !uintString(String(submission.amountOut))) return null;
+  let data;
+  try {
+    data = claimCalldata(submission.idx);
+  } catch {
+    return null;
+  }
+  if (String(submission.calldata).toLowerCase() !== data) return null;
+  return {
+    ...submission,
+    txHash: submission.txHash.toLowerCase(),
+    account: submission.account.toLowerCase(),
+    uuid: String(submission.uuid),
+    amountOut: String(submission.amountOut),
+    calldata: data,
+    to: TRUSTED_LISTA.proxy,
+  };
+}
+
+function unverified(reason, failed) {
+  return { verified: false, failed: failed === true, reason, listDisappearanceIsEnough: false };
+}
+
+/**
+ * A confirmed claim is this task's successful receipt, matching claim event,
+ * original account, request id, and received amount. Caller totals are ignored.
+ * The fee is gasUsed × effectiveGasPrice, never gas units subtracted from wei.
+ */
+export function verifyClaimEconomics(track, evidence) {
+  const current = track && typeof track === "object" ? track : emptyWalletTrack();
+  if (current.status === "replaced") return unverified("replaced", false);
+  if (!hashText(current.txHash)) return unverified("missing_tx", false);
+  const submission = boundSubmission(current);
+  if (!submission) return unverified("missing_submission", false);
+  const receipt = evidence && evidence.receipt;
+  if (!receipt || typeof receipt !== "object") return unverified("missing_receipt", false);
+  if (!hashText(receipt.transactionHash) || receipt.transactionHash.toLowerCase() !== submission.txHash) {
+    return unverified("provenance_mismatch", false);
+  }
+  if (!sameAddress(receipt.from, submission.account) || !sameAddress(receipt.to, submission.to)) {
+    return unverified("provenance_mismatch", false);
+  }
+  if (receipt.status === "0x0") return unverified("receipt_failed", true);
+  if (receipt.status !== "0x1") return unverified("receipt_pending", false);
+  if (!Array.isArray(receipt.logs)) return unverified("missing_claim_event", false);
+  const claimLogs = receipt.logs.filter((log) => {
+    return log && Array.isArray(log.topics) && String(log.topics[0]).toLowerCase() === CLAIM_WITHDRAWAL_TOPIC;
+  });
+  if (claimLogs.length === 0) return unverified("missing_claim_event", false);
+  const expectedData = "0x" + word(submission.idx) + word(submission.amountOut);
+  const expectedAccount = addressTopic(submission.account);
+  for (const log of claimLogs) {
+    if (!sameAddress(log.address, submission.to)) return unverified("provenance_mismatch", false);
+    if (!hashText(log.transactionHash) || log.transactionHash.toLowerCase() !== submission.txHash) {
+      return unverified("provenance_mismatch", false);
+    }
+    if (String(log.topics[1] || "").toLowerCase() !== expectedAccount) return unverified("provenance_mismatch", false);
+    if (String(log.data || "").toLowerCase() !== expectedData) return unverified("provenance_mismatch", false);
+  }
+  const gasUsed = wei(receipt.gasUsed);
+  const price = wei(receipt.effectiveGasPrice);
+  if (gasUsed == null || price == null) return unverified("gas_fee_unknown", false);
+  const fee = gasUsed * price;
+  if (evidence.gasFeeWei != null && wei(evidence.gasFeeWei) !== fee) return unverified("gas_fee_unknown", false);
+  const window = evidence.balanceWindow;
+  if (!window || typeof window !== "object" || !Array.isArray(window.otherTxHashes)) {
+    return unverified("native_delta_ambiguous", false);
+  }
+  if (window.otherTxHashes.length !== 0) return unverified("native_delta_ambiguous", false);
+  if (!sameAddress(window.account, submission.account)) return unverified("provenance_mismatch", false);
+  if (!hashText(window.txHash) || window.txHash.toLowerCase() !== submission.txHash) {
+    return unverified("provenance_mismatch", false);
+  }
+  const before = wei(window.beforeWei);
+  const after = wei(window.afterWei);
+  const amount = wei(submission.amountOut);
+  if (before == null || after == null || amount == null) return unverified("native_delta_ambiguous", false);
+  if (after - before !== amount - fee) return unverified("effect_mismatch", false);
+  const request = evidence.request;
+  if (!request || typeof request !== "object" || request.gone !== true) return unverified("request_not_gone", false);
+  if (!sameAddress(request.account, submission.account)) return unverified("provenance_mismatch", false);
+  if (!sameUint(request.uuid, submission.uuid) || !sameUint(request.idx, submission.idx)) {
+    return unverified("provenance_mismatch", false);
+  }
+  return { verified: true, failed: false, reason: null, listDisappearanceIsEnough: false };
+}
+
+export function recordEconomicOutcome(track, evidence) {
   const current = track && typeof track === "object" ? { ...track } : emptyWalletTrack();
-  const verdict = verifyClaimEconomics(economics || {});
-  const receiptFailed = economics && (economics.receiptStatus === "failed" || economics.receiptStatus === "0x0");
-  if (verdict.verified === true && !receiptFailed) {
+  const verdict = verifyClaimEconomics(current, evidence || {});
+  if (verdict.verified === true) {
     return {
       ...current,
       status: "confirmed",
@@ -164,13 +278,19 @@ export function recordEconomicOutcome(track, economics) {
       hashIsDone: false,
       autoRetry: false,
       newTransaction: false,
+      txHash: current.txHash.toLowerCase(),
       economicVerified: true,
       economicReason: null,
     };
   }
+  const status = verdict.failed
+    ? "failed"
+    : (current.status === "unknown" || current.status === "failed" || current.status === "replaced"
+      ? current.status
+      : "pending");
   return {
     ...current,
-    status: receiptFailed ? "failed" : "pending",
+    status,
     done: false,
     hashIsDone: false,
     autoRetry: false,
@@ -202,6 +322,41 @@ export function retryModeA(track) {
     hashIsDone: false,
     blocked: true,
   };
+}
+
+/** One task, one in-flight guide. The outcome lives here, not only in a caller-supplied prior. */
+export function createModeAFlow() {
+  return {
+    taskKey: null,
+    inFlight: false,
+    flightToken: 0,
+    outcome: emptyWalletTrack(),
+  };
+}
+
+export function outcomeAfterReread(flow) {
+  const outcome = flow && flow.outcome && typeof flow.outcome === "object" ? flow.outcome : emptyWalletTrack();
+  const status = typeof outcome.status === "string" && Object.prototype.hasOwnProperty.call(OUTCOME_TEXT, outcome.status)
+    ? outcome.status
+    : "idle";
+  const confirmed = status === "confirmed" && outcome.economicVerified === true && hashText(outcome.txHash);
+  return {
+    ...emptyWalletTrack(),
+    ...outcome,
+    status,
+    done: confirmed,
+    hashIsDone: false,
+    autoRetry: false,
+    newTransaction: false,
+    economicVerified: confirmed ? true : false,
+  };
+}
+
+/** Check a stored submission against a receipt. This does not call a provider. */
+export function verifyRecordedClaim(flow, evidence) {
+  const next = recordEconomicOutcome(flow && flow.outcome, evidence || {});
+  if (flow && typeof flow === "object") flow.outcome = next;
+  return next;
 }
 
 function fieldValue(claim, field) {
@@ -323,107 +478,267 @@ async function readOnce(input) {
   return reverifyListaClaim(body);
 }
 
+function taskKeyOf(input, identity) {
+  if (identity && typeof identity.taskRef === "string" && identity.taskRef) return identity.taskRef;
+  if (input && input.task && typeof input.task.ref === "string" && input.task.ref) return input.task.ref;
+  if (input && input.plan && input.plan.task_id != null) return String(input.plan.task_id);
+  return null;
+}
+
+function sampleIdentity(input) {
+  const live = typeof input.identity === "function" ? input.identity() : null;
+  const source = live && typeof live === "object" ? live : {};
+  const pick = (field, fallback) => (Object.prototype.hasOwnProperty.call(source, field) ? source[field] : fallback);
+  return {
+    connectedAccount: pick("connectedAccount", input.connectedAccount),
+    walletChainId: pick("walletChainId", input.walletChainId),
+    walletIdentityVerified: pick("walletIdentityVerified", input.walletIdentityVerified),
+    revision: pick("revision", input.revision),
+    planDigest: pick("planDigest", input.planDigest ?? input.plan.digest),
+    taskRef: pick("taskRef", input.task && input.task.ref ? input.task.ref : null),
+  };
+}
+
+function sampleNow(input) {
+  if (typeof input.clock === "function") {
+    const now = input.clock();
+    return Number.isSafeInteger(now) ? now : null;
+  }
+  return Number.isSafeInteger(input.nowUnix) ? input.nowUnix : null;
+}
+
+function identityDrift(previous, next) {
+  if (!previous || !next) return "identity_changed";
+  if (previous.revision !== next.revision || previous.planDigest !== next.planDigest) return "revision_changed";
+  if (previous.taskRef !== next.taskRef) return "identity_changed";
+  if (!sameAccount(previous.connectedAccount, next.connectedAccount)) return "identity_changed";
+  if (previous.walletChainId !== next.walletChainId) return "identity_changed";
+  if (previous.walletIdentityVerified !== next.walletIdentityVerified) return "identity_changed";
+  return null;
+}
+
+function heldPhase(status) {
+  if (status === "pending" || status === "unknown") return "verify_outcome";
+  return "no_auto_retry";
+}
+
+function publish(outcome) {
+  return outcomeAfterReread({ outcome });
+}
+
+function readBody(input, call, identity, nowUnix) {
+  return {
+    ...input,
+    call,
+    connectedAccount: identity.connectedAccount,
+    walletChainId: identity.walletChainId,
+    walletIdentityVerified: identity.walletIdentityVerified,
+    planDigest: identity.planDigest,
+    revision: identity.revision,
+    nowUnix,
+    startedAt: nowUnix,
+    clock: () => nowUnix,
+  };
+}
+
+function rememberSubmission(outcome, observation, prepared, identity) {
+  if (!outcome || outcome.status !== "pending" || !hashText(outcome.txHash)) return outcome;
+  const claim = observation && observation.claim;
+  const account = observation && observation.binding && observation.binding.account;
+  if (!claim || !sameAddress(account, account)) return outcome;
+  return {
+    ...outcome,
+    submission: {
+      txHash: outcome.txHash.toLowerCase(),
+      account,
+      idx: claim.idx,
+      uuid: String(claim.uuid),
+      amountOut: String(claim.amountOut),
+      calldata: prepared.params[0].data,
+      to: prepared.params[0].to,
+      taskRef: identity.taskRef ?? null,
+      revision: identity.revision ?? null,
+      chainId: claim.chainId,
+    },
+  };
+}
+
 /**
  * Open the guided claim: two independent re-reads, then a wallet request only
  * for a test recorder. Re-read pass does not set testOnlyAllowWalletRequest.
+ * The same task takes the in-flight lock before the first wait. Identity, task
+ * version, and the clock are sampled again before any recorder request.
  */
 export async function guideListaModeA(input) {
   if (!input || !input.plan || typeof input.call !== "function") {
     return closedGuide({ phase: "missing_fields", reads: 0 });
   }
+  const flow = input.flow && typeof input.flow === "object" ? input.flow : createModeAFlow();
+  const taskKey = taskKeyOf(input, null);
+  if (flow.inFlight) {
+    const other = flow.taskKey && taskKey && flow.taskKey !== taskKey;
+    return closedGuide({
+      phase: other ? "task_held" : "in_flight",
+      outcome: publish(flow.outcome),
+      reads: 0,
+    });
+  }
+  const stored = flow.outcome && flow.outcome.status ? flow.outcome.status : "idle";
+  if (stored !== "idle") {
+    const other = flow.taskKey && taskKey && flow.taskKey !== taskKey;
+    return closedGuide({
+      phase: other ? "task_held" : heldPhase(stored),
+      outcome: publish(flow.outcome),
+      reads: 0,
+    });
+  }
   const prior = retryModeA(input.prior);
   if (prior.blocked) {
-    const confirmed = input.prior.status === "confirmed" && input.prior.economicVerified === true;
+    flow.outcome = publish(input.prior);
+    if (!flow.taskKey) flow.taskKey = taskKey;
     return closedGuide({
-      phase: "no_auto_retry",
-      outcome: {
-        ...emptyWalletTrack(),
-        ...input.prior,
-        autoRetry: false,
-        newTransaction: false,
-        hashIsDone: false,
-        done: confirmed,
-      },
+      phase: heldPhase(input.prior.status),
+      outcome: flow.outcome,
       reads: 0,
     });
   }
   if (input.batchIndexes != null || input.prefetchedIndex != null || input.mode === "B" || input.mode === "C") {
     return closedGuide({ phase: "batch_preread_rejected", reads: 0 });
   }
+  const token = ++flow.flightToken;
+  flow.inFlight = true;
   let rpcCalls = 0;
-  const counting = async (method, params) => {
-    rpcCalls += 1;
-    return input.call(method, params);
-  };
-  const scoped = { ...input, call: counting };
-  const first = await readOnce(scoped);
-  sendAuthorizedByReread(first);
-  if (first.reread !== "pass") {
-    return closedGuide({ phase: "first_reread", first, second: null, reads: rpcCalls });
-  }
-  const second = await readOnce(scoped);
-  sendAuthorizedByReread(second);
-  const fieldChanges = materialClaimChanges(first, second);
-  const reasonChanges = second.reread === "pass" ? [] : driftReasons(second);
-  const changes = [...new Set([...fieldChanges, ...reasonChanges])];
-  const revision = nextClaimRevision(input.plan, changes);
-  if (second.reread !== "pass" || changes.length) {
-    return closedGuide({
-      phase: changes.length ? "revision_required" : "second_reread",
-      first,
-      second,
-      revision,
-      reads: rpcCalls,
-    });
-  }
-  let prepared;
   try {
-    prepared = exactClaimRequest(second);
-    assertSingleStep(prepared);
-  } catch {
-    return closedGuide({ phase: "not_single_step", first, second, revision, reads: rpcCalls });
-  }
-  const testOnly = input.testOnlyAllowWalletRequest === true;
-  if (!testOnly || sendAuthorizedByReread(second) !== false) {
+    const counting = async (method, params) => {
+      rpcCalls += 1;
+      return input.call(method, params);
+    };
+    const firstIdentity = sampleIdentity(input);
+    flow.taskKey = taskKeyOf(input, firstIdentity) || flow.taskKey;
+    const firstNow = sampleNow(input);
+    const first = await readOnce(readBody(input, counting, firstIdentity, firstNow));
+    sendAuthorizedByReread(first);
+    if (first.reread !== "pass") {
+      return closedGuide({ phase: "first_reread", first, second: null, reads: rpcCalls, outcome: publish(flow.outcome) });
+    }
+    const secondIdentity = sampleIdentity(input);
+    const secondNow = sampleNow(input);
+    const drifted = identityDrift(firstIdentity, secondIdentity);
+    if (drifted) {
+      return closedGuide({ phase: drifted, first, second: null, reads: rpcCalls, outcome: publish(flow.outcome) });
+    }
+    const second = await readOnce(readBody(input, counting, secondIdentity, secondNow));
+    sendAuthorizedByReread(second);
+    const fieldChanges = materialClaimChanges(first, second);
+    const reasonChanges = second.reread === "pass" ? [] : driftReasons(second);
+    const changes = [...new Set([...fieldChanges, ...reasonChanges])];
+    const revision = nextClaimRevision(input.plan, changes);
+    if (second.reread !== "pass" || changes.length) {
+      return closedGuide({
+        phase: changes.length ? "revision_required" : "second_reread",
+        first,
+        second,
+        revision,
+        reads: rpcCalls,
+        outcome: publish(flow.outcome),
+      });
+    }
+    let prepared;
+    try {
+      prepared = exactClaimRequest(second);
+      assertSingleStep(prepared);
+    } catch {
+      return closedGuide({ phase: "not_single_step", first, second, revision, reads: rpcCalls, outcome: publish(flow.outcome) });
+    }
+    const liveIdentity = sampleIdentity(input);
+    const liveNow = sampleNow(input);
+    const liveDrift = identityDrift(secondIdentity, liveIdentity);
+    if (liveDrift) {
+      return closedGuide({
+        phase: liveDrift,
+        first,
+        second,
+        revision,
+        prepared,
+        reads: rpcCalls,
+        outcome: publish(flow.outcome),
+      });
+    }
+    const ttl = input.plan.local_ttl_unix;
+    if (!Number.isSafeInteger(liveNow) || !Number.isSafeInteger(ttl) || liveNow >= ttl) {
+      return closedGuide({
+        phase: "expired_before_wallet",
+        first,
+        second,
+        revision,
+        prepared,
+        reads: rpcCalls,
+        outcome: publish(flow.outcome),
+      });
+    }
+    if (!sameAddress(liveIdentity.connectedAccount, prepared.params[0].from)) {
+      return closedGuide({
+        phase: "identity_changed",
+        first,
+        second,
+        revision,
+        prepared,
+        reads: rpcCalls,
+        outcome: publish(flow.outcome),
+      });
+    }
+    const testOnly = input.testOnlyAllowWalletRequest === true;
+    if (!testOnly || sendAuthorizedByReread(second) !== false) {
+      return closedGuide({
+        phase: "send_closed",
+        first,
+        second,
+        revision,
+        prepared,
+        reads: rpcCalls,
+        reason: "reread_is_not_send_authorization",
+        outcome: publish(flow.outcome),
+      });
+    }
+    if (!isNoBroadcastRecorder(input.provider)) {
+      return closedGuide({
+        phase: "send_closed",
+        first,
+        second,
+        revision,
+        prepared,
+        reads: rpcCalls,
+        reason: "no_broadcast_provider_required",
+        outcome: publish(flow.outcome),
+      });
+    }
+    let value;
+    let error = null;
+    try {
+      value = await input.provider.request(prepared);
+    } catch (caught) {
+      error = caught;
+    }
+    const outcome = rememberSubmission(
+      applyWalletEvent(emptyWalletTrack(), interpretWalletReturn(value, error)),
+      second,
+      prepared,
+      secondIdentity,
+    );
+    flow.outcome = outcome;
     return closedGuide({
-      phase: "send_closed",
+      phase: "test_probe",
       first,
       second,
       revision,
       prepared,
       reads: rpcCalls,
-      reason: "reread_is_not_send_authorization",
+      outcome,
+      walletRequested: true,
+      testProbe: "recorded_not_broadcast",
+      reason: "test_only_no_broadcast",
     });
+  } finally {
+    if (flow.flightToken === token) flow.inFlight = false;
   }
-  if (!isNoBroadcastRecorder(input.provider)) {
-    return closedGuide({
-      phase: "send_closed",
-      first,
-      second,
-      revision,
-      prepared,
-      reads: rpcCalls,
-      reason: "no_broadcast_provider_required",
-    });
-  }
-  let value;
-  let error = null;
-  try {
-    value = await input.provider.request(prepared);
-  } catch (caught) {
-    error = caught;
-  }
-  const outcome = applyWalletEvent(emptyWalletTrack(), interpretWalletReturn(value, error));
-  return closedGuide({
-    phase: "test_probe",
-    first,
-    second,
-    revision,
-    prepared,
-    reads: rpcCalls,
-    outcome,
-    walletRequested: true,
-    testProbe: "recorded_not_broadcast",
-    reason: "test_only_no_broadcast",
-  });
 }

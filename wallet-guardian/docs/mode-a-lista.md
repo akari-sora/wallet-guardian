@@ -6,7 +6,9 @@
 
 按下確認時，引導流程對同一個任務做兩次獨立重讀，再用第二次觀察到的 idx 重建 `claimWithdraw(uint256)` calldata。不改收款人，不預先採用一批舊索引，也不走 `wallet_sendCalls`。idx、數量、部署、calldata 或可領狀態若有實質變化，這次不能送，必須換新的 revision，舊的不能悄悄沿用。
 
-錢包結果只記 pending、unknown、confirmed、replaced、failed。交易雜湊本身不是完成；confirmed 只在經濟結果核對之後。送出結果不明、使用者拒絕、已替代或已失敗時，不會自動再走一次模式 A。
+錢包結果只記 pending、unknown、confirmed、replaced、failed。交易雜湊本身不是完成。confirmed 必須綁到這一筆已送出的交易、成功收據、對得上的 ClaimWithdrawal、原帳戶、請求編號與實收金額。費用是 `gasUsed × effectiveGasPrice`。缺資料、來源對不上，或沒辦法排除其他餘額變動，就維持未核對。呼叫端自己帶的數字即使加減對得上，也不能當成完成。
+
+同一個任務在第一次等待之前就佔住進行中的狀態，結果記在這條流程上，不是只靠呼叫端事後傳回 prior。交給記錄器或錢包之前，會再看一次身分、任務版本與現在時間。pending 與 unknown 跟重讀結果分開放，重讀、重新整理或回到分頁時不會被畫回 idle。結果不明時走核對，不再送一次模式 A。
 
 確認這次領到自己的原地址，只代表這一筆。不是永遠信任這個地址，也不是通訊錄。
 

@@ -41,6 +41,14 @@ export function selectorOf(signature) {
   return bytesToHex(keccak_256(new TextEncoder().encode(signature)).slice(0, 4));
 }
 
+export function eventTopic(signature) {
+  return bytesToHex(keccak_256(new TextEncoder().encode(signature)));
+}
+
+/** Lista stake-manager claim. Indexed account, idx, and amount. The uuid is not in the log. */
+export const CLAIM_WITHDRAWAL_EVENT = "ClaimWithdrawal(address,uint256,uint256)";
+export const CLAIM_WITHDRAWAL_TOPIC = eventTopic(CLAIM_WITHDRAWAL_EVENT);
+
 export const CLAIM_SELECTOR = selectorOf(CLAIM_SIGNATURE);
 if (CLAIM_SELECTOR !== "0xb13acedd") {
   throw new Error("claimWithdraw selector is not the pinned Lista selector");

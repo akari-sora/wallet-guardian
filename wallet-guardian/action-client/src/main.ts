@@ -15,7 +15,7 @@ import {
 } from "./client-flow.mjs";
 import { clientConfirmDecision, eip5792Status, executionMode, simulationAllowsSend } from "./gate.mjs";
 import { emptyRereadView, REASON_TEXT, reverifyListaClaim, settleReread, statusLines } from "./lista-reread.mjs";
-import { guideListaModeA, OUTCOME_TEXT, POISON_NOTE } from "./mode-a.mjs";
+import { createModeAFlow, guideListaModeA, outcomeAfterReread, OUTCOME_TEXT, POISON_NOTE } from "./mode-a.mjs";
 import { validateLoginChallenge } from "./login-challenge.mjs";
 import { assertInertPayload, assertTaskRef, boundedJson, units, validatePlan } from "./plan-validation.mjs";
 import { parsePrivateTaskRef, privateTaskSendAllowed, readBoundedJson } from "./private-task.mjs";
@@ -151,6 +151,7 @@ let walletChainId: number | null = null;
 let watchedProvider: EthereumProvider | null = null;
 const walletHandlers: { event: string; handler: (value: unknown) => void }[] = [];
 const flow = createClientFlow();
+const modeAFlow = createModeAFlow();
 
 type ViewStamp = {
   generation: number;
@@ -202,7 +203,7 @@ function dropReread(reason: string | null = null): void {
   expiryGeneration += 1;
   if (expiryTimer) clearTimeout(expiryTimer);
   expiryTimer = null;
-  paintWalletOutcome("idle");
+  paintWalletOutcome(outcomeAfterReread(modeAFlow).status);
 }
 
 // A network cancellation is best-effort; generations are the authority for
@@ -684,19 +685,23 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
           plan,
           task,
           account: plan.sender,
-          connectedAccount: walletAccount,
-          walletChainId,
-          walletIdentityVerified: walletAccount != null && walletChainId === TRUSTED_LISTA.chainId,
-          planDigest: plan.digest,
-          revision: privateRevision ?? plan.revision ?? null,
-          nowUnix: Math.floor(Date.now() / 1000),
+          flow: modeAFlow,
+          identity: () => ({
+            connectedAccount: walletAccount,
+            walletChainId,
+            walletIdentityVerified: walletAccount != null && walletChainId === TRUSTED_LISTA.chainId,
+            revision: privateRevision ?? lastPlan?.revision ?? plan.revision ?? null,
+            planDigest: lastPlan?.digest ?? plan.digest,
+            taskRef: lastTask?.ref ?? task?.ref ?? null,
+          }),
+          clock: () => Math.floor(Date.now() / 1000),
           call: (method: string, params: unknown[]) => fetchTrustedRpc(method, params, { fetchImpl: fetch }),
           testOnlyAllowWalletRequest: false,
           mainnetSend: MAINNET_SEND,
           provider: null,
         });
         if (clickGeneration !== loadGeneration) return;
-        paintWalletOutcome(String(guided.outcome?.status ?? "idle"));
+        paintWalletOutcome(outcomeAfterReread(modeAFlow).status);
         if (guided.allowSend !== "closed" || guided.walletRequested !== false || guided.broadcast !== false) {
           throw new Error("允許實際送出保持關閉。不會呼叫錢包。");
         }
