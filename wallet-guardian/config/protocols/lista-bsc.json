@@ -1,0 +1,27 @@
+{
+  "protocol_id": "lista-slisbnb",
+  "chain_id": 56,
+  "docs_read_at": "2026-10-07",
+  "proxy": "0x1adB950d8bB3dA4bE104211D5AB038628e477fE6",
+  "slisbnb": "0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B",
+  "sources": [
+    "https://docs.bsc.lista.org/for-developer/liquid-staking-slisbnb/smart-contract",
+    "https://docs.bsc.lista.org/for-developer/liquid-staking-slisbnb/mechanics"
+  ],
+  "methods": {
+    "read": [
+      "getUserWithdrawalRequests(address)",
+      "getUserRequestStatus(address,uint256)",
+      "convertSnBnbToBnb(uint256)",
+      "paused()"
+    ],
+    "planned_write": ["claimWithdraw(uint256)"],
+    "not_planned": ["deposit()", "requestWithdraw(uint256)", "claimWithdrawFor(address,uint256)"]
+  },
+  "notes": [
+    "idx is the current array index and must be reread",
+    "isClaimable comes from getUserRequestStatus, not from a 7-day clock",
+    "slisBNB amount and BNB amount are different numbers",
+    "transactions go to the proxy"
+  ]
+}

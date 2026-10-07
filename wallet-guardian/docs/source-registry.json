@@ -1,0 +1,17 @@
+{
+  "read_at": "2026-10-07",
+  "note": "DOCUMENTED means the public page was read for this build. LIVE_PASS is only claimed in source_registry.json after doctor.",
+  "sources": [
+    {"id": "S01", "url": "https://docs.x.ai/grok-bot/computer-and-apps", "level": "DOCUMENTED", "note": "shared computer is not isolation"},
+    {"id": "S08", "url": "https://docs.etherscan.io/api-reference/endpoint/chainlist", "level": "DOCUMENTED"},
+    {"id": "S09", "url": "https://docs.bsc.lista.org/for-developer/liquid-staking-slisbnb/mechanics", "level": "DOCUMENTED"},
+    {"id": "S09b", "url": "https://docs.bsc.lista.org/for-developer/liquid-staking-slisbnb/smart-contract", "level": "DOCUMENTED"},
+    {"id": "S11", "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint", "level": "DOCUMENTED"},
+    {"id": "S12", "url": "https://docs.gopluslabs.io/docs/getting-started", "level": "DOCUMENTED"},
+    {"id": "N01", "url": "https://ethereum.org/developers/docs/apis/json-rpc/", "level": "DOCUMENTED", "note": "eth_call is not a state-changing receipt"},
+    {"id": "N09", "url": "https://docs.bsc.lista.org/for-developer/liquid-staking-slisbnb/mechanics", "level": "DOCUMENTED"},
+    {"id": "N10", "url": "https://docs.bsc.lista.org/for-developer/liquid-staking-slisbnb/smart-contract", "level": "DOCUMENTED"},
+    {"id": "N11", "url": "https://eips.ethereum.org/EIPS/eip-1967", "level": "DOCUMENTED"},
+    {"id": "bsc-rpc", "url": "https://docs.bnbchain.org/bnb-smart-chain/developers/json_rpc/json-rpc-endpoint/", "level": "DOCUMENTED"}
+  ]
+}

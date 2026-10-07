@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+private/
+data/
+evidence/
+fixtures/private/
+action-client/node_modules/
+action-client/dist/
+*.sqlite
+*.sqlite-journal
+.env
+.env.*

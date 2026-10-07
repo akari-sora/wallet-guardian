@@ -1,0 +1,338 @@
+[
+  {
+    "id": "D01",
+    "group": "discovery",
+    "title": "原生幣為零仍保留非零 ERC-20",
+    "layer": "offline"
+  },
+  {
+    "id": "D02",
+    "group": "discovery",
+    "title": "錢包 token 為零仍保留 DeFi／提款",
+    "layer": "offline"
+  },
+  {
+    "id": "D03",
+    "group": "discovery",
+    "title": "相同 symbol 不同合約不合併",
+    "layer": "offline"
+  },
+  {
+    "id": "D04",
+    "group": "discovery",
+    "title": "垃圾資產無外流不計本金，有外流仍評估",
+    "layer": "offline"
+  },
+  {
+    "id": "D05",
+    "group": "discovery",
+    "title": "分頁最後一頁不漏",
+    "layer": "offline"
+  },
+  {
+    "id": "D06",
+    "group": "discovery",
+    "title": "HTTP 200 加 partialErrors 不是 COMPLETE",
+    "layer": "offline"
+  },
+  {
+    "id": "D07",
+    "group": "discovery",
+    "title": "401／429／timeout 不把餘額改成零",
+    "layer": "offline"
+  },
+  {
+    "id": "D08",
+    "group": "discovery",
+    "title": "token 支援不等於 DeFi 支援",
+    "layer": "offline"
+  },
+  {
+    "id": "D09",
+    "group": "discovery",
+    "title": "歷史窗口不足標 partial approvals",
+    "layer": "offline"
+  },
+  {
+    "id": "D10",
+    "group": "discovery",
+    "title": "chainId、tip 與同源 RPC 要分開看",
+    "layer": "offline"
+  },
+  {
+    "id": "D11",
+    "group": "discovery",
+    "title": "HyperCore 空 master 不是子帳戶為零",
+    "layer": "offline"
+  },
+  {
+    "id": "D12",
+    "group": "discovery",
+    "title": "首次基準的既有風險可告警",
+    "layer": "offline"
+  },
+  {
+    "id": "A01",
+    "group": "accounting",
+    "title": "整數精度含 uint256 與 dust",
+    "layer": "offline"
+  },
+  {
+    "id": "A02",
+    "group": "accounting",
+    "title": "收據與底層不重複計價",
+    "layer": "offline"
+  },
+  {
+    "id": "A03",
+    "group": "accounting",
+    "title": "負債與未知價格",
+    "layer": "offline"
+  },
+  {
+    "id": "A04",
+    "group": "accounting",
+    "title": "自有地址互轉淨流入為零並另計 gas",
+    "layer": "offline"
+  },
+  {
+    "id": "A05",
+    "group": "accounting",
+    "title": "無新轉帳仍可反映利息累計",
+    "layer": "offline"
+  },
+  {
+    "id": "A06",
+    "group": "accounting",
+    "title": "ERC-4626 preview 不等於可提",
+    "layer": "offline"
+  },
+  {
+    "id": "A07",
+    "group": "accounting",
+    "title": "unified margin 不把 spot 與 perp 相加",
+    "layer": "offline"
+  },
+  {
+    "id": "A08",
+    "group": "accounting",
+    "title": "來源陳舊即使觀測時間新仍是 STALE",
+    "layer": "offline"
+  },
+  {
+    "id": "A09",
+    "group": "accounting",
+    "title": "partial 保留 last-known-good 且不標新鮮",
+    "layer": "offline"
+  },
+  {
+    "id": "A10",
+    "group": "accounting",
+    "title": "較舊 run 不能覆蓋新 snapshot",
+    "layer": "offline"
+  },
+  {
+    "id": "R01",
+    "group": "claims-risk",
+    "title": "Lista WAITING、CLAIMABLE、CLAIMED",
+    "layer": "offline"
+  },
+  {
+    "id": "R02",
+    "group": "claims-risk",
+    "title": "idx 移動且相同金額不是身份",
+    "layer": "offline"
+  },
+  {
+    "id": "R03",
+    "group": "claims-risk",
+    "title": "滿 7 日但 isClaimable 為 false 仍等待",
+    "layer": "offline"
+  },
+  {
+    "id": "R04",
+    "group": "claims-risk",
+    "title": "請求消失但無領取證據不是 CLAIMED",
+    "layer": "offline"
+  },
+  {
+    "id": "R05",
+    "group": "claims-risk",
+    "title": "未驗證外部 watcher 的重複與缺口",
+    "layer": "offline"
+  },
+  {
+    "id": "R06",
+    "group": "claims-risk",
+    "title": "Aster 與 Lista 退出階段分開",
+    "layer": "offline"
+  },
+  {
+    "id": "R07",
+    "group": "claims-risk",
+    "title": "無交易時健康因子仍可惡化",
+    "layer": "offline"
+  },
+  {
+    "id": "R08",
+    "group": "claims-risk",
+    "title": "oracle stale 與無債務不是無限大",
+    "layer": "offline"
+  },
+  {
+    "id": "R09",
+    "group": "claims-risk",
+    "title": "LST 市場價與贖回價可以不同",
+    "layer": "offline"
+  },
+  {
+    "id": "R10",
+    "group": "claims-risk",
+    "title": "來源鏈確認不是目的鏈結算",
+    "layer": "offline"
+  },
+  {
+    "id": "R11",
+    "group": "claims-risk",
+    "title": "reorg 需要更正",
+    "layer": "offline"
+  },
+  {
+    "id": "R12",
+    "group": "claims-risk",
+    "title": "短暫價格異常不是確定脫鉤",
+    "layer": "offline"
+  },
+  {
+    "id": "E01",
+    "group": "delivery",
+    "title": "同一事件重送只告警一次",
+    "layer": "offline"
+  },
+  {
+    "id": "E02",
+    "group": "delivery",
+    "title": "同一交易多個 log 都保留",
+    "layer": "offline"
+  },
+  {
+    "id": "E03",
+    "group": "delivery",
+    "title": "告警升級可以更新，重複不洗版",
+    "layer": "offline"
+  },
+  {
+    "id": "E04",
+    "group": "delivery",
+    "title": "回補窗口重疊",
+    "layer": "offline"
+  },
+  {
+    "id": "E05",
+    "group": "delivery",
+    "title": "入庫前當機不能 ACK",
+    "layer": "offline"
+  },
+  {
+    "id": "E06",
+    "group": "delivery",
+    "title": "通知結果不明時先對帳",
+    "layer": "offline"
+  },
+  {
+    "id": "E07",
+    "group": "delivery",
+    "title": "轉載不洗版，升級仍通知",
+    "layer": "offline"
+  },
+  {
+    "id": "E08",
+    "group": "delivery",
+    "title": "沒變化不通知，失明要通知",
+    "layer": "offline"
+  },
+  {
+    "id": "E09",
+    "group": "delivery",
+    "title": "重開後資料還在",
+    "layer": "offline"
+  },
+  {
+    "id": "E10",
+    "group": "delivery",
+    "title": "沒有排程不能稱 MONITORING_ACTIVE",
+    "layer": "offline"
+  },
+  {
+    "id": "S01",
+    "group": "security",
+    "title": "非法地址與惡意 metadata",
+    "layer": "offline"
+  },
+  {
+    "id": "S02",
+    "group": "security",
+    "title": "SSRF 與私網",
+    "layer": "offline"
+  },
+  {
+    "id": "S03",
+    "group": "security",
+    "title": "偽造、過期、重放 webhook 與未固定證書",
+    "layer": "offline"
+  },
+  {
+    "id": "S04",
+    "group": "security",
+    "title": "不可信文字不產生工具呼叫",
+    "layer": "offline"
+  },
+  {
+    "id": "S05",
+    "group": "security",
+    "title": "API key 遮罩",
+    "layer": "offline"
+  },
+  {
+    "id": "S06",
+    "group": "security",
+    "title": "Agent 拒絕簽名與廣播",
+    "layer": "offline"
+  },
+  {
+    "id": "S07",
+    "group": "security",
+    "title": "鏈上 allowance 與未上鏈 permit 分開",
+    "layer": "offline"
+  },
+  {
+    "id": "S08",
+    "group": "security",
+    "title": "預期中的 delegation 不是被駭",
+    "layer": "offline"
+  },
+  {
+    "id": "S09",
+    "group": "security",
+    "title": "租戶隔離",
+    "layer": "offline"
+  },
+  {
+    "id": "S10",
+    "group": "security",
+    "title": "分享包去掉私人資料",
+    "layer": "offline"
+  },
+  {
+    "id": "S11",
+    "group": "security",
+    "title": "未審查 decoder 不能進 production",
+    "layer": "offline"
+  },
+  {
+    "id": "S12",
+    "group": "security",
+    "title": "未識別轉出不稱被盜",
+    "layer": "offline"
+  }
+]

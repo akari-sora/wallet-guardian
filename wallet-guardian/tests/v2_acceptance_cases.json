@@ -1,0 +1,434 @@
+[
+  {
+    "id": "X01",
+    "group": "v2",
+    "title": "官方網站不通但鏈與合約正常，不推論被駭",
+    "layer": "offline"
+  },
+  {
+    "id": "X02",
+    "group": "v2",
+    "title": "indexer 沒資料不等於資產為零",
+    "layer": "offline"
+  },
+  {
+    "id": "X03",
+    "group": "v2",
+    "title": "RPC 故障只能切已核准備援",
+    "layer": "offline"
+  },
+  {
+    "id": "X04",
+    "group": "v2",
+    "title": "WalletConnect relay 故障不假設換網站就好",
+    "layer": "offline"
+  },
+  {
+    "id": "X05",
+    "group": "v2",
+    "title": "依賴同一支 API 不算獨立備援",
+    "layer": "offline"
+  },
+  {
+    "id": "X06",
+    "group": "v2",
+    "title": "方法 pause 時禁止該動作",
+    "layer": "offline"
+  },
+  {
+    "id": "X07",
+    "group": "v2",
+    "title": "賣掉 LST 不是完成原贖回",
+    "layer": "offline"
+  },
+  {
+    "id": "X08",
+    "group": "v2",
+    "title": "停鏈沒有通用立即提款",
+    "layer": "offline"
+  },
+  {
+    "id": "X09",
+    "group": "v2",
+    "title": "缺 proof 就 BLOCKED",
+    "layer": "offline"
+  },
+  {
+    "id": "X10",
+    "group": "v2",
+    "title": "懷疑漏洞時禁止盲簽",
+    "layer": "offline"
+  },
+  {
+    "id": "X11",
+    "group": "v2",
+    "title": "交易送到 proxy 不是 implementation",
+    "layer": "offline"
+  },
+  {
+    "id": "X12",
+    "group": "v2",
+    "title": "未知 proxy 型別不猜測",
+    "layer": "offline"
+  },
+  {
+    "id": "X13",
+    "group": "v2",
+    "title": "實作程式碼變更使舊計畫失效",
+    "layer": "offline"
+  },
+  {
+    "id": "X14",
+    "group": "v2",
+    "title": "verified source 不是審計或安全保證",
+    "layer": "offline"
+  },
+  {
+    "id": "X15",
+    "group": "v2",
+    "title": "code hash 不符就阻擋",
+    "layer": "offline"
+  },
+  {
+    "id": "X16",
+    "group": "v2",
+    "title": "selector 相同不代表可以改呼叫目標",
+    "layer": "offline"
+  },
+  {
+    "id": "X17",
+    "group": "v2",
+    "title": "ERC-1967 可以解析 implementation",
+    "layer": "offline"
+  },
+  {
+    "id": "X18",
+    "group": "v2",
+    "title": "實質變更產生新 revision",
+    "layer": "offline"
+  },
+  {
+    "id": "X19",
+    "group": "v2",
+    "title": "每次規劃都重讀 idx",
+    "layer": "offline"
+  },
+  {
+    "id": "X20",
+    "group": "v2",
+    "title": "快取 idx 與現況不同就拒絕",
+    "layer": "offline"
+  },
+  {
+    "id": "X21",
+    "group": "v2",
+    "title": "相同金額不能單獨當身份",
+    "layer": "offline"
+  },
+  {
+    "id": "X22",
+    "group": "v2",
+    "title": "上一筆之後必須重讀，不能沿用整批 idx",
+    "layer": "offline"
+  },
+  {
+    "id": "X23",
+    "group": "v2",
+    "title": "身份不明確時停止",
+    "layer": "offline"
+  },
+  {
+    "id": "X24",
+    "group": "v2",
+    "title": "清單消失沒有領取證據不是完成",
+    "layer": "offline"
+  },
+  {
+    "id": "X25",
+    "group": "v2",
+    "title": "Safe 部位不能用 owner EOA 冒充",
+    "layer": "offline"
+  },
+  {
+    "id": "X26",
+    "group": "v2",
+    "title": "msg.sender 敏感呼叫不能包進其他合約",
+    "layer": "offline"
+  },
+  {
+    "id": "X27",
+    "group": "v2",
+    "title": "watch-only 不是執行身份",
+    "layer": "offline"
+  },
+  {
+    "id": "X28",
+    "group": "v2",
+    "title": "未證明的帳戶類型保持 unproven",
+    "layer": "offline"
+  },
+  {
+    "id": "X29",
+    "group": "v2",
+    "title": "digest 不符拒絕",
+    "layer": "offline"
+  },
+  {
+    "id": "X30",
+    "group": "v2",
+    "title": "說明文字不能改金額",
+    "layer": "offline"
+  },
+  {
+    "id": "X31",
+    "group": "v2",
+    "title": "任意 hex 意圖拒絕",
+    "layer": "offline"
+  },
+  {
+    "id": "X32",
+    "group": "v2",
+    "title": "客戶端重建 calldata 必須相符",
+    "layer": "offline"
+  },
+  {
+    "id": "X33",
+    "group": "v2",
+    "title": "領取計畫不附帶 deposit 或 approve",
+    "layer": "offline"
+  },
+  {
+    "id": "X34",
+    "group": "v2",
+    "title": "claimWithdraw 的 value 為 0",
+    "layer": "offline"
+  },
+  {
+    "id": "X35",
+    "group": "v2",
+    "title": "餘額 state override 不是現況證據",
+    "layer": "offline"
+  },
+  {
+    "id": "X36",
+    "group": "v2",
+    "title": "關掉 pause 的 override 只是測試",
+    "layer": "offline"
+  },
+  {
+    "id": "X37",
+    "group": "v2",
+    "title": "預先授權 override 不是現況證據",
+    "layer": "offline"
+  },
+  {
+    "id": "X38",
+    "group": "v2",
+    "title": "success=true 但沒核對效果就是不完整",
+    "layer": "offline"
+  },
+  {
+    "id": "X39",
+    "group": "v2",
+    "title": "本地 TTL 過期不能再提出錢包請求",
+    "layer": "offline"
+  },
+  {
+    "id": "X40",
+    "group": "v2",
+    "title": "本地 TTL 不會取消已送出交易",
+    "layer": "offline"
+  },
+  {
+    "id": "X41",
+    "group": "v2",
+    "title": "變更不會悄悄替換舊 revision",
+    "layer": "offline"
+  },
+  {
+    "id": "X42",
+    "group": "v2",
+    "title": "沒有鏈上 deadline 必須揭露",
+    "layer": "offline"
+  },
+  {
+    "id": "X43",
+    "group": "v2",
+    "title": "未知費用不是免費",
+    "layer": "offline"
+  },
+  {
+    "id": "X44",
+    "group": "v2",
+    "title": "即將領到的資產不能當 gas",
+    "layer": "offline"
+  },
+  {
+    "id": "X45",
+    "group": "v2",
+    "title": "授權額度用必要數量，不是無限",
+    "layer": "offline"
+  },
+  {
+    "id": "X46",
+    "group": "v2",
+    "title": "撤銷追不回已轉走資產",
+    "layer": "offline"
+  },
+  {
+    "id": "X47",
+    "group": "v2",
+    "title": "Permit 簽名未開放",
+    "layer": "offline"
+  },
+  {
+    "id": "X48",
+    "group": "v2",
+    "title": "eth_sign 與 personal_sign 拒絕",
+    "layer": "offline"
+  },
+  {
+    "id": "X49",
+    "group": "v2",
+    "title": "錢包拒絕不自動重試",
+    "layer": "offline"
+  },
+  {
+    "id": "X50",
+    "group": "v2",
+    "title": "交易雜湊只是送出證據",
+    "layer": "offline"
+  },
+  {
+    "id": "X51",
+    "group": "v2",
+    "title": "重新整理不另發交易",
+    "layer": "offline"
+  },
+  {
+    "id": "X52",
+    "group": "v2",
+    "title": "同一 revision 重按不重送",
+    "layer": "offline"
+  },
+  {
+    "id": "X53",
+    "group": "v2",
+    "title": "需要原子時不能悄悄改成分步",
+    "layer": "offline"
+  },
+  {
+    "id": "X54",
+    "group": "v2",
+    "title": "capability ready 不自動升級",
+    "layer": "offline"
+  },
+  {
+    "id": "X55",
+    "group": "v2",
+    "title": "帳戶或鏈切換使計畫失效",
+    "layer": "offline"
+  },
+  {
+    "id": "X56",
+    "group": "v2",
+    "title": "手機不只能掃自己的 QR",
+    "layer": "offline"
+  },
+  {
+    "id": "X57",
+    "group": "v2",
+    "title": "部分步驟成功是 PARTIAL",
+    "layer": "offline"
+  },
+  {
+    "id": "X58",
+    "group": "v2",
+    "title": "reorg 要發更正",
+    "layer": "offline"
+  },
+  {
+    "id": "X59",
+    "group": "v2",
+    "title": "完成必須核對 postconditions",
+    "layer": "offline"
+  },
+  {
+    "id": "X60",
+    "group": "v2",
+    "title": "清單消失本身不是完成",
+    "layer": "offline"
+  },
+  {
+    "id": "X61",
+    "group": "v2",
+    "title": "原生幣變化要扣除 gas",
+    "layer": "offline"
+  },
+  {
+    "id": "X62",
+    "group": "v2",
+    "title": "停寫之後讀取仍可用",
+    "layer": "offline"
+  },
+  {
+    "id": "X63",
+    "group": "v2",
+    "title": "代幣名稱裡的指令不執行",
+    "layer": "offline"
+  },
+  {
+    "id": "X64",
+    "group": "v2",
+    "title": "沒有曝險的新聞指令不告警",
+    "layer": "offline"
+  },
+  {
+    "id": "X65",
+    "group": "v2",
+    "title": "metadata IP 請求被擋",
+    "layer": "offline"
+  },
+  {
+    "id": "X66",
+    "group": "v2",
+    "title": "導向 localhost 被擋",
+    "layer": "offline"
+  },
+  {
+    "id": "X67",
+    "group": "v2",
+    "title": "租戶看不到別人的計畫",
+    "layer": "offline"
+  },
+  {
+    "id": "X68",
+    "group": "v2",
+    "title": "救援包不含秘密",
+    "layer": "offline"
+  },
+  {
+    "id": "X69",
+    "group": "v2",
+    "title": "Agent 不能提出錢包請求",
+    "layer": "offline"
+  },
+  {
+    "id": "X70",
+    "group": "v2",
+    "title": "CLI 不能觸發錢包",
+    "layer": "offline"
+  },
+  {
+    "id": "X71",
+    "group": "v2",
+    "title": "未授權主網時客戶端也阻擋",
+    "layer": "offline"
+  },
+  {
+    "id": "X72",
+    "group": "v2",
+    "title": "沒有任意合約呼叫入口",
+    "layer": "offline"
+  }
+]

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>錢包確認｜Wallet Guardian</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>領取確認</h1>
+        <p>這是固定版本的本機審查頁。它只核對未簽名計畫，不會代你簽名，也不會把私鑰送到監控程式。</p>
+      </header>
+      <div class="banner" id="banner">主網簽名未授權。按鈕只會說明阻塞原因，不會呼叫錢包。</div>
+      <div class="row">
+        <button type="button" id="load-sample">載入合成範例</button>
+        <label class="file">
+          開啟計畫檔
+          <input id="file" type="file" accept="application/json,.json" hidden />
+        </label>
+        <button type="button" id="clear">取消</button>
+      </div>
+      <section id="view" class="empty">尚未載入計畫。合成範例不是你的鏈上餘額。</section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

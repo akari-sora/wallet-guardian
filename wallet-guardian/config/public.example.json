@@ -1,0 +1,35 @@
+{
+  "schema_version": 2,
+  "tenant_label": "example",
+  "language": "zh-TW",
+  "timezone": "Asia/Taipei",
+  "mode": "read_only",
+  "wallets": [
+    {
+      "label": "Example",
+      "address": "0x0000000000000000000000000000000000000001",
+      "family": "evm",
+      "ownership_basis": "user_provided_watch_address",
+      "current_balances": "REQUIRES_FRESH_FETCH"
+    }
+  ],
+  "known_pending_actions": [],
+  "notifications": {
+    "changes_only": true,
+    "live_test_requires_confirmation": true
+  },
+  "deployment": {
+    "schedule_state": "NOT_CONFIGURED",
+    "first_phase": "doctor_and_run_once",
+    "allow_public_webhook": false,
+    "allow_new_paid_subscription": false,
+    "allow_trade_or_sign": false
+  },
+  "assisted_actions": {
+    "enabled": false,
+    "mainnet_test_transactions_authorized": false,
+    "agent_may_sign": false,
+    "agent_may_broadcast": false,
+    "arbitrary_calldata": false
+  }
+}
