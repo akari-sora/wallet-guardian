@@ -151,7 +151,7 @@ def dispatch(args: argparse.Namespace) -> tuple[dict, int]:
     if args.command == "replay":
         if not args.no_send:
             raise GuardianError("replay requires --no-send")
-        fixture = json.loads(Path(args.fixture).read_text(encoding="utf-8")))
+        fixture = json.loads(Path(args.fixture).read_text(encoding="utf-8"))
         if fixture.get("method") in {"eth_sendTransaction", "eth_sendRawTransaction"}:
             agent_wallet_request(fixture["method"])
         return {"status": "replayed", "sent": False, "quality": fixture.get("quality", "UNKNOWN")}, 0
