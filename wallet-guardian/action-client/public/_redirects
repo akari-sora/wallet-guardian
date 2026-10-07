@@ -1,0 +1,3 @@
+# /t/<ref> serves the fixed client. Do not rewrite /api to index.html.
+# Pages Functions set Cache-Control themselves. _headers and _redirects do not do that for them.
+/t/*  /index.html  200

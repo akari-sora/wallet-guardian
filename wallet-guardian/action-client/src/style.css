@@ -45,6 +45,8 @@ header p, .status {
   margin: 18px 0;
 }
 
+#session { margin: 0 0 12px; }
+
 .row {
   display: flex;
   flex-wrap: wrap;

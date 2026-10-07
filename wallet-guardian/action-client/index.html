@@ -14,7 +14,11 @@
         <p>在你自己的錢包裡核對目標、資產、接收人與費用。這個頁面是固定版本，只接受 typed 任務資料，不會在執行時產生簽名腳本，也不會把主錢包私鑰送到監控程式。</p>
       </header>
       <div class="banner" id="banner">主網簽名未授權。沒有固定 HTTPS 網域，不會發行可在手機錢包開啟的任務連結。按鈕只會說明阻塞原因，不會呼叫錢包。</div>
+      <p id="session" class="status">尚未登入。登入只建立讀取工作階段，不是交易授權。ERC-1271 合約帳戶不支援。</p>
       <div class="row">
+        <button type="button" id="login">登入（只簽讀取訊息）</button>
+        <button type="button" id="logout" hidden>登出</button>
+        <button type="button" id="cancel-task" hidden>取消未執行任務</button>
         <button type="button" id="load-sample">載入合成範例</button>
         <label class="file">
           開啟任務檔

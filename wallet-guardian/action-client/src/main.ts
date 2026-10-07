@@ -1,6 +1,8 @@
 import { digestBody } from "./canonical.mjs";
 import { clientConfirmDecision, eip5792Status, executionMode, simulationAllowsSend } from "./gate.mjs";
+import { LOGIN_STATEMENT } from "./login-statement.mjs";
 import { assertInertPayload, assertTaskRef, boundedJson, units, validatePlan } from "./plan-validation.mjs";
+import { parsePrivateTaskRef, privateTaskSendAllowed, readBoundedJson } from "./private-task.mjs";
 
 const TASK_VERSION = "guardian.task.v1";
 const PLAN_VERSION = "guardian.action_plan.v1";
@@ -102,6 +104,10 @@ let loadGeneration = 0;
 let observedCapability = "unknown";
 let lastPlan: Plan | null = null;
 let lastTask: Task | null = null;
+let csrfToken: string | null = null;
+let privateRef: string | null = null;
+let privateRevision: number | null = null;
+let privateCancelAllowed = false;
 
 type EthereumProvider = { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> };
 
@@ -134,7 +140,20 @@ function requestUserSend(plan: Plan): void {
   throw new Error("這個建置沒有客戶端鏈上重讀，不會呼叫錢包。");
 }
 
+function syncAccountControls(): void {
+  const logout = document.querySelector<HTMLButtonElement>("#logout");
+  const cancel = document.querySelector<HTMLButtonElement>("#cancel-task");
+  if (logout) logout.hidden = !csrfToken;
+  if (cancel) cancel.hidden = !privateCancelAllowed;
+}
+
+function hideCancel(): void {
+  privateCancelAllowed = false;
+  syncAccountControls();
+}
+
 function renderError(message: string): void {
+  hideCancel();
   view.className = "error";
   view.textContent = message;
 }
@@ -399,46 +418,271 @@ async function renderPayload(payload: unknown, generation: number): Promise<void
   renderError("協議版本不符，已拒絕這個檔案。");
 }
 
-async function loadSameOriginTask(ref: string): Promise<void> {
-  const generation = ++loadGeneration;
+type SessionBody = {
+  authenticated?: boolean;
+  csrf_token?: string;
+  execution_authorized?: boolean;
+  send_authorized?: boolean;
+};
+
+type PrivateTaskBody = {
+  revision?: number;
+  cancel_allowed?: boolean;
+  send_authorized?: boolean;
+  execution_authorized?: boolean;
+  tx_hash_verified?: boolean;
+  on_chain_revoked?: boolean;
+  task?: Task;
+};
+
+function api(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const method = (init.method ?? "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD") {
+    if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+    if (csrfToken) headers.set("x-csrf-token", csrfToken);
+  }
+  return fetch(path, {
+    ...init,
+    method,
+    headers,
+    credentials: "same-origin",
+    cache: "no-store",
+    redirect: "error",
+  });
+}
+
+function applySession(body: unknown): void {
+  if (!body || typeof body !== "object") return;
+  const record = body as SessionBody;
+  if (record.execution_authorized === true || record.send_authorized === true) {
+    csrfToken = null;
+    syncAccountControls();
+    return;
+  }
+  csrfToken = record.authenticated === true && typeof record.csrf_token === "string" ? record.csrf_token : null;
+  syncAccountControls();
+}
+
+async function loadPrivateTask(ref: string, generation: number): Promise<void> {
   try {
-    const response = await fetch(`/tasks/${ref}.json`, {
-      credentials: "same-origin", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(10000),
-    });
-    const payload = await boundedJson(response);
+    const response = await api(`/api/tasks/${ref}`, { signal: AbortSignal.timeout(10000) });
+    const body = (await readBoundedJson(response)) as PrivateTaskBody;
     if (generation !== loadGeneration) return;
-    assertTaskRef(payload, ref);
-    await renderPayload(payload, generation);
+    if (response.status === 401) {
+      csrfToken = null;
+      syncAccountControls();
+      renderError("登入已失效。請重新登入。不會送出交易。");
+      return;
+    }
+    if (response.status === 404) {
+      renderError("找不到這筆任務，或這個登入不能讀取。");
+      return;
+    }
+    if (response.status === 409) {
+      renderError("任務版本已更新。舊版本不能使用，也不會送出交易。");
+      return;
+    }
+    if (response.status === 410) {
+      renderError("任務已過期、取消或被取代。舊資料不能使用。這不是鏈上撤銷，也不會送出交易。");
+      return;
+    }
+    if (!response.ok || !body.task) {
+      renderError("無法讀取任務。");
+      return;
+    }
+    if (body.send_authorized !== false || body.execution_authorized !== false || body.tx_hash_verified !== false || body.on_chain_revoked === true) {
+      renderError("任務回應試圖授權送出，或把交易雜湊當成完成。已拒絕。");
+      return;
+    }
+    if (privateTaskSendAllowed(body.task, false)) {
+      renderError("任務內容不能打開交易送出。已拒絕。");
+      return;
+    }
+    assertTaskRef(body.task, ref);
+    privateRevision = typeof body.revision === "number" ? body.revision : null;
+    privateCancelAllowed = body.cancel_allowed === true && privateRevision != null;
+    syncAccountControls();
+    await renderPayload(body.task, generation);
   } catch {
-    if (generation === loadGeneration) renderError("無法載入同源任務。不跟隨重新導向，也不接受替換參考碼。");
+    if (generation === loadGeneration) renderError("無法載入私人任務。不跟隨重新導向，也不會送出交易。");
+  }
+}
+
+async function openPrivateTask(ref: string): Promise<void> {
+  const generation = ++loadGeneration;
+  privateRef = ref;
+  hideCancel();
+  if (!csrfToken) {
+    renderError("這個任務要先登入才能讀。登入只簽一則讀取訊息，不會送出交易。");
+    return;
+  }
+  await loadPrivateTask(ref, generation);
+}
+
+async function login(): Promise<void> {
+  const ethereum = ethereumProvider();
+  if (!ethereum) {
+    banner.textContent = "找不到瀏覽器錢包，無法登入。不會送出交易。";
+    return;
+  }
+  try {
+    const accounts = await ethereum.request({ method: "eth_requestAccounts" });
+    const address = Array.isArray(accounts) ? String(accounts[0] ?? "") : "";
+    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+      banner.textContent = "錢包沒有提供可用帳戶。不會送出交易。";
+      return;
+    }
+    const challengeResponse = await api("/api/auth/challenge", {
+      method: "POST",
+      body: JSON.stringify({ address }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const issued = (await readBoundedJson(challengeResponse)) as {
+      message?: string;
+      csrf_token?: string;
+      execution_authorized?: boolean;
+      send_authorized?: boolean;
+      erc1271?: string;
+    };
+    if (!challengeResponse.ok || issued.execution_authorized !== false || issued.send_authorized !== false || issued.erc1271 !== "unsupported") {
+      banner.textContent = "登入挑戰不符合唯讀規則。不會簽名。";
+      return;
+    }
+    if (typeof issued.message !== "string" || typeof issued.csrf_token !== "string" || issued.message.length > 4096) {
+      banner.textContent = "登入挑戰不完整。不會簽名。";
+      return;
+    }
+    if (!issued.message.includes(LOGIN_STATEMENT) || !issued.message.includes("wants you to sign in with your Ethereum account:")) {
+      banner.textContent = "登入訊息不是固定的讀取聲明。不會簽名。";
+      return;
+    }
+    csrfToken = issued.csrf_token;
+    const signature = await ethereum.request({ method: "personal_sign", params: [issued.message, address] });
+    if (typeof signature !== "string") {
+      banner.textContent = "錢包沒有回傳登入簽名。不會送出交易。";
+      return;
+    }
+    const verifyResponse = await api("/api/auth/verify", {
+      method: "POST",
+      body: JSON.stringify({ message: issued.message, signature }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const verified = await readBoundedJson(verifyResponse);
+    if (!verifyResponse.ok) {
+      csrfToken = null;
+      syncAccountControls();
+      banner.textContent = "登入沒有完成。不會送出交易。";
+      return;
+    }
+    applySession(verified);
+    banner.textContent = "已登入。這只是讀取身分，不是交易授權。主網送出保持關閉。";
+    if (privateRef) {
+      const generation = ++loadGeneration;
+      await loadPrivateTask(privateRef, generation);
+    }
+  } catch {
+    banner.textContent = "登入已停止。不會送出交易。";
+  }
+}
+
+async function logout(): Promise<void> {
+  try {
+    const response = await api("/api/auth/logout", {
+      method: "POST",
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) {
+      banner.textContent = "登出沒有完成。";
+      return;
+    }
+  } catch {
+    banner.textContent = "登出沒有完成。";
+    return;
+  }
+  csrfToken = null;
+  privateRef = null;
+  privateRevision = null;
+  hideCancel();
+  banner.textContent = "已登出。伺服器會作廢這個工作階段。不會送出交易。";
+  renderEmpty();
+}
+
+async function cancelPrivateTask(): Promise<void> {
+  if (!privateRef || privateRevision == null || !privateCancelAllowed || !csrfToken) return;
+  const ref = privateRef;
+  const revision = privateRevision;
+  try {
+    const response = await api(`/api/tasks/${ref}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ revision }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const body = (await readBoundedJson(response)) as PrivateTaskBody;
+    if (body.on_chain_revoked === true || body.tx_hash_verified === true || body.send_authorized === true || body.execution_authorized === true) {
+      renderError("取消回應試圖宣稱鏈上撤銷或授權送出。已拒絕。");
+      return;
+    }
+    if (!response.ok) {
+      banner.textContent = "任務沒有取消。不會送出交易。";
+      return;
+    }
+    hideCancel();
+    view.className = "card";
+    view.textContent = "未執行任務已取消。這只更新讀取紀錄，不是鏈上撤銷，也沒有送出交易。";
+    banner.textContent = "主網送出保持關閉。取消不是交易。";
+  } catch {
+    banner.textContent = "任務沒有取消。不會送出交易。";
   }
 }
 
 function inspectLocation(): void {
+  const pathRef = parsePrivateTaskRef(window.location.pathname);
+  if (pathRef) {
+    void openPrivateTask(pathRef);
+    return;
+  }
+  if (window.location.pathname.startsWith("/t/")) {
+    renderError("任務參考碼格式不對。頁面不會向其他路徑索取資料，連結也不是執行授權。");
+    return;
+  }
   const params = new URLSearchParams(window.location.search);
-  let foreign = false;
-  params.forEach((_value, key) => {
-    if (key !== "ref") foreign = true;
-  });
-  if (foreign) {
-    renderError("任務連結只能帶不透明參考碼，不能帶地址、金額或其他私人欄位。連結不是執行授權。");
+  const keys = [...params.keys()];
+  if (keys.some((key) => key !== "ref") || params.getAll("ref").length > 1) {
+    renderError("任務連結只能使用 /t/ 後面的不透明參考碼，不能帶地址、金額或其他私人欄位。連結不是執行授權。");
     return;
   }
-  if (params.getAll("ref").length > 1) {
-    renderError("任務參考碼不能重複。");
-    return;
+  if (params.get("ref")) {
+    renderError("私人任務請改走 /t/ 參考碼。這個頁面不會讀取公開靜態任務。連結不是執行授權。");
   }
-  const ref = params.get("ref");
-  if (!ref) return;
-  if (!REF_PATTERN.test(ref)) {
-    renderError("任務參考碼格式不對。頁面不會用它向其他網站索取資料，連結也不是執行授權。");
-    return;
-  }
-  void loadSameOriginTask(ref);
 }
+
+async function restoreSession(): Promise<void> {
+  try {
+    const response = await api("/api/session", { signal: AbortSignal.timeout(10000) });
+    applySession(await readBoundedJson(response));
+  } catch {
+    csrfToken = null;
+    syncAccountControls();
+  }
+}
+
+document.querySelector("#login")!.addEventListener("click", () => {
+  void login();
+});
+
+document.querySelector("#logout")!.addEventListener("click", () => {
+  void logout();
+});
+
+document.querySelector("#cancel-task")!.addEventListener("click", () => {
+  void cancelPrivateTask();
+});
 
 document.querySelector("#load-sample")!.addEventListener("click", async () => {
   const generation = ++loadGeneration;
+  hideCancel();
   try {
     const response = await fetch("/sample-task.json", { redirect: "error", cache: "no-store", signal: AbortSignal.timeout(10000) });
     await renderPayload(await boundedJson(response), generation);
@@ -449,6 +693,7 @@ document.querySelector("#load-sample")!.addEventListener("click", async () => {
 
 document.querySelector<HTMLInputElement>("#file")!.addEventListener("change", async (event) => {
   const generation = ++loadGeneration;
+  hideCancel();
   const file = (event.target as HTMLInputElement).files?.[0];
   if (!file) return;
   try {
@@ -463,9 +708,12 @@ document.querySelector("#clear")!.addEventListener("click", () => {
   ++loadGeneration;
   lastPlan = null;
   lastTask = null;
+  privateRef = null;
+  privateRevision = null;
+  hideCancel();
   renderEmpty();
   document.querySelector<HTMLInputElement>("#file")!.value = "";
   banner.textContent = BANNER;
 });
 
-inspectLocation();
+void restoreSession().then(() => inspectLocation());
