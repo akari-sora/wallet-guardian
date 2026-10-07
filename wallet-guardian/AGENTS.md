@@ -10,7 +10,9 @@ This repository is a read-only monitor plus an unsigned action planner.
 - Limited execution credentials are secrets. Do not place them in this shared workspace.
 - Do not ask for arbitrary EIP-7702 delegation, unlimited approval, a new admin, asset migration, or an account upgrade to save clicks.
 - Mode B requires a checked EIP-5792 capability and a verified same-chain set. Otherwise stay on mode A. `ready` does not auto-upgrade.
-- Mode C stays off unless a verified on-chain mechanism enforces task, chain, original account, contract, method, asset, amount, recipient, deadline, count, and fee. Prompt, UI, and backend checks are not that mechanism.
+- Mode C stays off. This repository has no permission contract. A caller-supplied enforcer object is not enforcement.
+- `GUARDIAN_MAINNET_SEND` defaults false and only concerns the user wallet. It never lets the agent sign or broadcast.
+- Load API keys from the environment or gitignored `.env.local`. Do not commit them. Etherscan V2 uses one `ETHERSCAN_API_KEY`.
 - A new smart account cannot operate a position that still sits on the original address.
 - A transaction hash is not completion. Waiting periods can be tracked and cannot be skipped.
 - Do not print API keys. Read them only from environment variables.

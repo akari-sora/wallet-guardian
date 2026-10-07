@@ -1,6 +1,6 @@
 import { digestBody } from "./canonical.mjs";
+import { confirmDecision, eip5792Status, executionMode, listaCallsOnly } from "./gate.mjs";
 
-const WALLET_REQUESTS_ENABLED = false;
 const TASK_VERSION = "guardian.task.v1";
 const PLAN_VERSION = "guardian.action_plan.v1";
 const CLIENT_BUILD = "action-client@0.3.0";
@@ -81,10 +81,16 @@ type Task = {
   plan: Plan;
   requests_7702?: boolean;
   unlimited_approval?: boolean;
+  requires_user_wallet_confirmation?: boolean;
+  preflight?: { preflight_ok?: boolean; revision_required?: boolean; changes?: string[] };
 };
 
 const view = document.querySelector<HTMLElement>("#view")!;
 const banner = document.querySelector<HTMLElement>("#banner")!;
+const MAINNET_SEND = import.meta.env.VITE_GUARDIAN_MAINNET_SEND === "true";
+let observedCapability = "unknown";
+let lastPlan: Plan | null = null;
+let lastTask: Task | null = null;
 
 function units(raw: string, decimals: number): string {
   const negative = raw.startsWith("-");
@@ -97,15 +103,65 @@ function units(raw: string, decimals: number): string {
   return negative ? `-${text}` : text;
 }
 
-function requestWallet(): void {
-  if (!WALLET_REQUESTS_ENABLED) {
-    throw new Error("這個建置的錢包請求已關閉");
+type EthereumProvider = { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> };
+
+function ethereumProvider(): EthereumProvider | null {
+  return (window as unknown as { ethereum?: EthereumProvider }).ethereum ?? null;
+}
+
+function presentedMode(task: Task | null, plan: Plan): "A" | "B" {
+  if (!task || task.mode === "C") return "A";
+  return executionMode({
+    capability: observedCapability,
+    callCount: plan.calls.length,
+    sameChain: plan.chain_id === 56,
+  });
+}
+
+function preflightOk(task: Task | null): boolean {
+  const preflight = task?.preflight;
+  return Boolean(
+    preflight &&
+      preflight.preflight_ok === true &&
+      preflight.revision_required === false &&
+      Array.isArray(preflight.changes) &&
+      preflight.changes.length === 0,
+  );
+}
+
+function requestUserSend(plan: Plan, mode: "A" | "B", sendAllowed: boolean): void {
+  if (!sendAllowed) {
+    throw new Error("主網送出開關是關閉的。不會呼叫錢包。");
   }
-  const ethereum = (window as unknown as { ethereum?: { request: (args: unknown) => Promise<unknown> } }).ethereum;
+  if (!listaCallsOnly(plan.calls)) {
+    throw new Error("只接受送到 Lista proxy 的 claimWithdraw。不會送出其他呼叫。");
+  }
+  if (mode === "A" && plan.calls.length !== 1) {
+    throw new Error("模式 A 一次只確認一筆原地址交易。");
+  }
+  const ethereum = ethereumProvider();
   if (!ethereum) {
     throw new Error("找不到瀏覽器錢包");
   }
-  void ethereum.request;
+  if (mode === "B") {
+    void ethereum.request({
+      method: "wallet_sendCalls",
+      params: [
+        {
+          version: "1.0",
+          chainId: "0x38",
+          from: plan.sender,
+          calls: plan.calls.map((call) => ({ to: call.to, data: call.data, value: "0x0" })),
+        },
+      ],
+    });
+    return;
+  }
+  const call = plan.calls[0];
+  void ethereum.request({
+    method: "eth_sendTransaction",
+    params: [{ from: plan.sender, to: call.to, data: call.data, value: "0x0" }],
+  });
 }
 
 function renderError(message: string): void {
@@ -128,12 +184,15 @@ function containsSecret(value: unknown): boolean {
   return typeof value === "string" && value.startsWith("wc:");
 }
 
-function modeLine(task: Task | null): string {
-  if (task?.mode === "B") {
-    return "模式 A：資料寫了批次，但這個頁面沒有向錢包查詢 EIP-5792，也不會送出批次。";
-  }
+function modeLine(task: Task | null, mode: "A" | "B"): string {
   if (task?.mode === "C") {
-    return "模式 A：資料寫了限權執行，但這個固定版本沒有已驗證的鏈上強制機制，所以改以一般確認審查。";
+    return "模式 A：資料寫了限權執行。這個版本沒有鏈上權限合約，模式 C 保持關閉。";
+  }
+  if (mode === "B") {
+    return "模式 B：這台錢包回報同鏈批次可用。真錢包批次仍未測，預設也不會送出。";
+  }
+  if (observedCapability === "unsupported" || observedCapability === "ready") {
+    return "模式 A：這台錢包沒有可用的同鏈批次，或 ready 不會自動升級。改以一般確認。";
   }
   if (task?.mode_reason === "single_step_original_account") {
     return "模式 A：原地址單步領取。即使錢包支援批次，這一步也不合併。";
@@ -189,11 +248,19 @@ async function renderPlan(plan: Plan, task: Task | null): Promise<void> {
     renderError("畫面上的金額或地址和計畫不一致。");
     return;
   }
+  const modeName = presentedMode(task, plan);
+  const decision = confirmDecision({
+    requiresUserWalletConfirmation: task?.requires_user_wallet_confirmation === true,
+    preflightOk: preflightOk(task),
+    mainnetSend: MAINNET_SEND,
+    mode: task?.mode === "C" ? "C" : modeName,
+  });
   const reasons = [...(plan.block_reasons ?? [])];
-  if (!plan.wallet_request_allowed) reasons.push("計畫本身不允許提出錢包請求。");
-  if (!WALLET_REQUESTS_ENABLED) reasons.push("這個頁面的發布開關是關閉的。");
-  if (task && !task.link?.issued) reasons.push("沒有固定 HTTPS 網域，所以沒有發行公開任務連結。");
-  banner.textContent = "尚未對錢包提出交易。主網簽名未授權，也沒有固定 HTTPS 網域。下列原因需要先解除，才可能進入確認。";
+  if (!decision.buttonEnabled) reasons.push("確認鈕關閉：需要你明確要求錢包確認，而且執行前重讀必須通過。");
+  if (decision.buttonEnabled && !decision.sendAllowed) reasons.push("確認鈕可按，但主網送出開關是關閉的，按下去也不會呼叫錢包。");
+  if (!MAINNET_SEND) reasons.push("GUARDIAN_MAINNET_SEND 預設是 false。監控程式不能簽名。");
+  if (task && !task.link?.issued) reasons.push("沒有已驗證的固定 HTTPS 網域，所以沒有發行公開任務連結。");
+  banner.textContent = "尚未對錢包提出交易。主網送出預設關閉，也沒有已驗證的固定 HTTPS 網域。";
 
   const alternatives = (plan.alternatives ?? [])
     .map((item) => `${item.id}${item.completes_original_redeem ? "" : "（不是完成原贖回）"}`)
@@ -205,7 +272,7 @@ async function renderPlan(plan: Plan, task: Task | null): Promise<void> {
 
   const mode = document.createElement("p");
   mode.className = "mode";
-  mode.textContent = modeLine(task);
+  mode.textContent = modeLine(task, modeName);
 
   const heading = document.createElement("h2");
   heading.textContent = summary.purpose;
@@ -283,16 +350,22 @@ async function renderPlan(plan: Plan, task: Task | null): Promise<void> {
   const confirm = document.createElement("button");
   confirm.type = "button";
   confirm.className = "primary";
-  confirm.disabled = true;
+  confirm.disabled = !decision.buttonEnabled;
   confirm.textContent = "在我的錢包確認";
   confirm.addEventListener("click", () => {
     try {
-      requestWallet();
+      requestUserSend(plan, modeName, decision.sendAllowed);
     } catch (error) {
       banner.textContent = error instanceof Error ? error.message : "已停止";
     }
   });
-  actions.append(confirm);
+  const capability = document.createElement("button");
+  capability.type = "button";
+  capability.textContent = "查詢批次能力";
+  capability.addEventListener("click", () => {
+    void queryCapability(plan.chain_id);
+  });
+  actions.append(confirm, capability);
 
   const details = document.createElement("details");
   const summaryNode = document.createElement("summary");
@@ -301,7 +374,25 @@ async function renderPlan(plan: Plan, task: Task | null): Promise<void> {
   pre.textContent = JSON.stringify(task ?? plan, null, 2);
   details.append(summaryNode, pre);
 
+  lastPlan = plan;
+  lastTask = task;
   view.append(mode, heading, list, stepHeading, steps, wait, actions, reasonList, evidenceHeading, evidence, details);
+}
+
+async function queryCapability(chainId: number): Promise<void> {
+  const ethereum = ethereumProvider();
+  if (!ethereum) {
+    banner.textContent = "找不到瀏覽器錢包，無法查詢 EIP-5792。維持模式 A，不會送出交易。";
+    return;
+  }
+  try {
+    const capabilities = await ethereum.request({ method: "wallet_getCapabilities" });
+    observedCapability = eip5792Status(capabilities, chainId);
+  } catch {
+    observedCapability = "unknown";
+    banner.textContent = "批次能力查詢失敗。維持模式 A，不會送出交易。";
+  }
+  if (lastPlan) await renderPlan(lastPlan, lastTask);
 }
 
 async function renderPayload(payload: unknown): Promise<void> {
@@ -343,7 +434,11 @@ async function loadSameOriginTask(ref: string): Promise<void> {
 
 function inspectLocation(): void {
   const params = new URLSearchParams(window.location.search);
-  if ([...params.keys()].some((key) => key !== "ref")) {
+  let foreign = false;
+  params.forEach((_value, key) => {
+    if (key !== "ref") foreign = true;
+  });
+  if (foreign) {
     renderError("任務連結只能帶不透明參考碼，不能帶地址、金額或其他私人欄位。連結不是執行授權。");
     return;
   }
