@@ -2,7 +2,7 @@
 
 狀態：**VERIFIED_ORIGIN（2026-10-07）**。公開固定來源已上線：https://wallet-guardian-action-client.pages.dev/（Cloudflare Pages Direct Upload，HTTP 200 已回讀）。套件內 `workbench` 預設 `fixed_https_origin` 仍是程式常數 `False`，要發行任務連結還需把 origin 接進設定／環境（見下方「已驗證固定 HTTPS」）。主網送出預設關閉。
 
-固定客戶端是 `action-client@0.3.0`。它只接受 `guardian.task.v1`。網址只允許 `?ref=ref_` 加 32 個十六進位字，再向同一個來源讀 `/tasks/<ref>.json`。網址不放地址、金額或金鑰。
+固定客戶端是 `action-client@0.3.0`。它只接受 `guardian.task.v1`。私人任務頁是 `/t/<ref>`，資料來自 Pages Function `/api/tasks/<ref>`，不是公開的 `/tasks/<ref>.json`。網址不放地址、金額或金鑰。`fixed_https_origin` 仍是 false。API 與負例見 `docs/p1-private-task-api.md`。這份路由變更尚未部署。
 
 建置不會設定 `VITE_GUARDIAN_MAINNET_SEND`。預設主網送出是關閉的。
 
