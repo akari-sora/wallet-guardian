@@ -16,8 +16,18 @@ _LOCAL_NAMES = {
 }
 
 
-def _blocked_ip(addr: str) -> bool:
+# Hosts that may resolve through transparent egress proxies (e.g. 198.18.0.0/15).
+_PROXY_OK_HOSTS = {
+    "api.etherscan.io",
+    "api.etherscan.io.",
+}
+
+def _blocked_ip(addr: str, *, host: str | None = None) -> bool:
     ip = ipaddress.ip_address(addr)
+    # Cloudflare/WARP-style synthetic answers for allowlisted public APIs.
+    if host and host.lower().rstrip(".") in {h.rstrip(".") for h in _PROXY_OK_HOSTS}:
+        if ip in ipaddress.ip_network("198.18.0.0/15"):
+            return False
     return (
         not ip.is_global
         or ip.is_loopback
@@ -49,7 +59,7 @@ def validate_url(url: str, *, resolve=None) -> str:
         literal = ipaddress.ip_address(lowered)
     except ValueError:
         literal = None
-    if literal is not None and _blocked_ip(str(literal)):
+    if literal is not None and _blocked_ip(str(literal), host=lowered):
         raise SecurityError("private or non-global ip is not allowed")
     if literal is None:
         resolver = resolve or _default_resolve
@@ -60,7 +70,7 @@ def validate_url(url: str, *, resolve=None) -> str:
         if not addresses:
             raise SecurityError("dns returned no addresses")
         for addr in addresses:
-            if _blocked_ip(addr):
+            if _blocked_ip(addr, host=lowered):
                 raise SecurityError("dns answer points at a blocked address")
     return url
 
