@@ -77,7 +77,8 @@ export function simulationEffectStatus(simulation) {
  *   simulation: string,
  *   allowSend: "closed",
  *   reasons: string[],
- *   binding: { chainId?: number, account?: string, planDigest?: string, taskRef?: string | null, revision?: number | null, freshUntil?: number } | null
+ *   binding: { chainId?: number, account?: string, planDigest?: string, taskRef?: string | null, revision?: number | null, freshUntil?: number } | null,
+ *   claim: null | { idx: number, uuid: string, calldata: string, recipient: string }
  * }} RereadView
  */
 
@@ -89,6 +90,7 @@ export function emptyRereadView(simulation) {
     allowSend: "closed",
     reasons: [],
     binding: null,
+    claim: null,
   };
 }
 
@@ -102,7 +104,7 @@ export function statusLines(view) {
   };
 }
 
-function view(status, reasons, binding, simulation, deployment = null) {
+function view(status, reasons, binding, simulation, deployment = null, claim = null) {
   return {
     reread: status,
     simulation: simulationEffectStatus(simulation),
@@ -110,6 +112,7 @@ function view(status, reasons, binding, simulation, deployment = null) {
     reasons,
     binding,
     deployment,
+    claim: claim ?? null,
   };
 }
 
@@ -397,18 +400,33 @@ function judge(input, snap, located, status) {
     reasons.push("stale");
   }
   const deployment = { matchesTask, approvedDeployment: approval.active };
+  const claim = located.kind === "one" && status ? {
+    idx: located.idx,
+    uuid: located.row.uuid,
+    amountIn: located.row.amountIn,
+    amountOut: status.bnbAmount,
+    implementation: snap.implementation,
+    proxyCodeSha256: snap.proxyCodeSha256,
+    implementationCodeSha256: snap.implementationCodeSha256,
+    calldata: claimCalldata(located.idx),
+    to: trustedQuerySources(null).proxy,
+    value: "0",
+    recipient: input.account,
+    chainId: snap.chainId,
+  } : null;
   const soft = new Set(["stale_block", "plan_expired", "plan_ttl_missing", "stale"]);
   const hard = reasons.filter((reason) => !soft.has(reason));
-  if (hard.length) return view("fail", reasons, binding, simulation, deployment);
-  if (reasons.length) return view("insufficient", reasons, null, simulation, deployment);
+  if (hard.length) return view("fail", reasons, binding, simulation, deployment, claim);
+  if (reasons.length) return view("insufficient", reasons, null, simulation, deployment, null);
   if (!approval.active) {
     const reason = approval.retired ? "approval_retired" : approval.unbounded ? "approval_unbounded" : "unapproved_deployment";
-    return view("insufficient", [reason], binding, simulation, { matchesTask, approvedDeployment: false });
+    return view("insufficient", [reason], binding, simulation, { matchesTask, approvedDeployment: false }, null);
   }
   if (!walletBoundThisRound(input)) {
-    return view("insufficient", ["wallet_unverified"], binding, simulation, deployment);
+    return view("insufficient", ["wallet_unverified"], binding, simulation, deployment, null);
   }
-  return view("pass", [], binding, simulation, deployment);
+  if (!claim) return view("insufficient", ["undecodable"], null, simulation, deployment, null);
+  return view("pass", [], binding, simulation, deployment, claim);
 }
 
 export async function reverifyListaClaim(input) {
@@ -464,11 +482,12 @@ export function settleReread(observation, context) {
       allowSend: "closed",
       reasons: observation && Array.isArray(observation.reasons) ? observation.reasons : ["unbound"],
       binding: null,
+      claim: null,
     };
   }
   const binding = observation.binding;
   if (typeof binding.freshUntil !== "number" || typeof context.nowUnix !== "number") {
-    return { reread: "insufficient", simulation, allowSend: "closed", reasons: ["unbound"], binding: null };
+    return { reread: "insufficient", simulation, allowSend: "closed", reasons: ["unbound"], binding: null, claim: null };
   }
   const reasons = [];
   if (Number.isSafeInteger(binding.planExpiresAt) && context.nowUnix >= binding.planExpiresAt) reasons.push("plan_expired");
@@ -485,7 +504,15 @@ export function settleReread(observation, context) {
   if ((context.taskRef ?? null) !== binding.taskRef) reasons.push("task_changed");
   if (context.revision !== binding.revision) reasons.push("revision_changed");
   if (reasons.length) {
-    return { reread: "insufficient", simulation, allowSend: "closed", reasons, binding: null, invalidated: true };
+    return {
+      reread: "insufficient",
+      simulation,
+      allowSend: "closed",
+      reasons,
+      binding: null,
+      claim: null,
+      invalidated: true,
+    };
   }
   return {
     reread: observation.reread,
@@ -493,5 +520,6 @@ export function settleReread(observation, context) {
     allowSend: "closed",
     reasons: observation.reasons ?? [],
     binding,
+    claim: observation.reread === "pass" ? observation.claim ?? null : null,
   };
 }

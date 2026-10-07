@@ -59,7 +59,7 @@ export async function harness({ onFetch, onWallet, initialSession = session(), p
   for (const match of source.matchAll(/from\s+["'](\.\/[^"']+)["']/g)) {
     imports.set(match[1], await import(pathToFileURL(resolve(sourceRoot, match[1])).href));
   }
-  const elements = new Map(['view','banner','login','logout','cancel-task','load-sample','file','clear','session','verify','verify-reread','verify-simulation','verify-send','verify-reasons'].map(x => [x, new Element()]));
+  const elements = new Map(['view','banner','login','logout','cancel-task','load-sample','file','clear','session','verify','verify-reread','verify-simulation','verify-send','verify-reasons','wallet-outcome','poison-note'].map(x => [x, new Element()]));
   const calls = [], walletCalls = [];
   const providerListeners = new Map();
   const documentListeners = new Map();

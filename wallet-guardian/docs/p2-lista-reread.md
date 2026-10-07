@@ -24,4 +24,4 @@ JSON-RPC 回應最多讀 1 MiB，必須是 UTF-8 的 JSON-RPC 2.0，id 要對上
 
 ## 不做
 
-主網送出、模式 B／C、TUF、Pages 部署、讓確認鈕真正送出。
+主網送出、模式 B／C、TUF、Pages 部署、讓確認鈕真正送出。模式 A 的引導路徑與不廣播測試見 `docs/mode-a-lista.md`。重讀通過仍然不是送出授權。

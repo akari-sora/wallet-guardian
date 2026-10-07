@@ -92,7 +92,7 @@ npm run dev
 
 頁面會重算 digest。金額、收款地址與計畫不一致就拒絕。連接錢包、登入簽名、代幣授權、批次確認、限定執行權限、帳戶升級與「確認這筆領取」分開列出。Lista 原地址單步領取只有最後一項需要確認。
 
-`在我的錢包確認` 不會因為任務 JSON 自述 `preflight_ok` 而送出。計畫 `wallet_request_allowed=false`、未完成模擬或阻塞原因都會關掉送出。獨立鏈上重讀、效果模擬、允許送出分開顯示；重讀通過也不會打開送出。見 `docs/p2-lista-reread.md`。`VITE_GUARDIAN_MAINNET_SEND` 預設不設定。監控程式永遠不能簽名。
+`在我的錢包確認` 不會因為任務 JSON 自述 `preflight_ok` 而送出。計畫 `wallet_request_allowed=false`、未完成模擬或阻塞原因都會關掉送出。獨立鏈上重讀、效果模擬、允許送出分開顯示；重讀通過也不會打開送出。見 `docs/p2-lista-reread.md`。模式 A 單步領取的引導路徑與不廣播測試見 `docs/mode-a-lista.md`：正式送出仍關閉，交易雜湊不是完成。`VITE_GUARDIAN_MAINNET_SEND` 預設不設定。監控程式永遠不能簽名。
 
 `查詢批次能力` 是另一個按鈕。它只在你按下時讀 `wallet_getCapabilities`。不支援、查到別的鏈、或狀態是 `ready`，都留在模式 A。同鏈而且多於一筆、能力是 `supported`，畫面才標模式 B。真錢包批次未測。這個預覽不呼叫 `wallet_sendCalls`。
 

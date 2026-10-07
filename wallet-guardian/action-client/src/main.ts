@@ -15,6 +15,7 @@ import {
 } from "./client-flow.mjs";
 import { clientConfirmDecision, eip5792Status, executionMode, simulationAllowsSend } from "./gate.mjs";
 import { emptyRereadView, REASON_TEXT, reverifyListaClaim, settleReread, statusLines } from "./lista-reread.mjs";
+import { guideListaModeA, OUTCOME_TEXT, POISON_NOTE } from "./mode-a.mjs";
 import { validateLoginChallenge } from "./login-challenge.mjs";
 import { assertInertPayload, assertTaskRef, boundedJson, units, validatePlan } from "./plan-validation.mjs";
 import { parsePrivateTaskRef, privateTaskSendAllowed, readBoundedJson } from "./private-task.mjs";
@@ -185,6 +186,14 @@ function viewStamp(generation: number, epoch: number, ref: string | null, revisi
   return { generation, epoch, ref, revision };
 }
 
+function paintWalletOutcome(status: string): void {
+  const key = (status in OUTCOME_TEXT ? status : "idle") as keyof typeof OUTCOME_TEXT;
+  const node = document.querySelector<HTMLElement>("#wallet-outcome");
+  if (!node) return;
+  node.textContent = OUTCOME_TEXT[key];
+  if (node.dataset) node.dataset.state = key === "confirmed" ? "pass" : key === "failed" ? "fail" : "closed";
+}
+
 function dropReread(reason: string | null = null): void {
   rereadSeq += 1;
   rereadResult = null;
@@ -193,6 +202,7 @@ function dropReread(reason: string | null = null): void {
   expiryGeneration += 1;
   if (expiryTimer) clearTimeout(expiryTimer);
   expiryTimer = null;
+  paintWalletOutcome("idle");
 }
 
 // A network cancellation is best-effort; generations are the authority for
@@ -596,6 +606,7 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
     ["原申請數量（非本次支出）", `${units(summary.amount_in_raw, plan.asset_in.decimals)} ${summary.amount_in_unit}`],
     ["計畫中的領取數量（待重查）", `${units(summary.amount_out_raw, plan.asset_out.decimals)} ${summary.amount_out_unit}`],
     ["接收地址", summary.recipient],
+    ["這次確認", plan.sender.toLowerCase() === plan.recipient.toLowerCase() ? POISON_NOTE : "接收地址不是原地址。"],
     ["費用", summary.fee_label],
     ["模擬", `${summary.simulation_status}（${plan.simulation.source}，區塊 ${plan.simulation.block_number ?? "未知"}）`],
     ["其他路徑", alternatives || "無"],
@@ -645,7 +656,7 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
   evidence.className = "evidence";
   const evidenceRows = [
     "手機錢包內建瀏覽器：未測",
-    "模式 A 真錢包：未測",
+    "模式 A：引導路徑與不廣播測試已寫入。真錢包未測，主網送出未授權",
     "模式 B 真錢包：未測",
     "模式 C：不支援。沒有已驗證、能在鏈上強制限制的權限機制",
     "固定 HTTPS 網域：見部署紀錄；這個預覽沒有把它當成執行授權",
@@ -665,12 +676,36 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
   confirm.disabled = !decision.buttonEnabled || plan.wallet_request_allowed !== true || !simulationAllowsSend(plan.simulation);
   confirm.textContent = "在我的錢包確認";
   confirm.addEventListener("click", () => {
-    try {
-      if (generation !== loadGeneration) return;
-      requestUserSend(plan);
-    } catch (error) {
-      banner.textContent = error instanceof Error ? error.message : "已停止";
-    }
+    const clickGeneration = generation;
+    void (async () => {
+      try {
+        if (clickGeneration !== loadGeneration) return;
+        const guided = await guideListaModeA({
+          plan,
+          task,
+          account: plan.sender,
+          connectedAccount: walletAccount,
+          walletChainId,
+          walletIdentityVerified: walletAccount != null && walletChainId === TRUSTED_LISTA.chainId,
+          planDigest: plan.digest,
+          revision: privateRevision ?? plan.revision ?? null,
+          nowUnix: Math.floor(Date.now() / 1000),
+          call: (method: string, params: unknown[]) => fetchTrustedRpc(method, params, { fetchImpl: fetch }),
+          testOnlyAllowWalletRequest: false,
+          mainnetSend: MAINNET_SEND,
+          provider: null,
+        });
+        if (clickGeneration !== loadGeneration) return;
+        paintWalletOutcome(String(guided.outcome?.status ?? "idle"));
+        if (guided.allowSend !== "closed" || guided.walletRequested !== false || guided.broadcast !== false) {
+          throw new Error("允許實際送出保持關閉。不會呼叫錢包。");
+        }
+        requestUserSend(plan);
+      } catch (error) {
+        if (clickGeneration !== loadGeneration) return;
+        banner.textContent = error instanceof Error ? error.message : "已停止";
+      }
+    })();
   });
   const capability = document.createElement("button");
   capability.type = "button";
