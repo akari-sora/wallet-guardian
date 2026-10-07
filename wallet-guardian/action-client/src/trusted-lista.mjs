@@ -1,6 +1,7 @@
 /** Client-trusted Lista read policy. Task JSON cannot name these sources. */
 
 import { keccak_256 } from "@noble/hashes/sha3.js";
+import { readRpcResult } from "./rpc-result.mjs";
 
 export const CLAIM_SIGNATURE = "claimWithdraw(uint256)";
 export const TRUSTED_LISTA = Object.freeze({
@@ -17,6 +18,8 @@ export const TRUSTED_LISTA = Object.freeze({
     "getUserWithdrawalRequests(address)",
     "getUserRequestStatus(address,uint256)",
   ]),
+  approvalRegistryVersion: 1,
+  approvals: Object.freeze([]),
 });
 
 const READ_METHODS = new Set([
@@ -74,22 +77,25 @@ export function sameAddress(left, right) {
     /^0x[0-9a-fA-F]{40}$/.test(left) && left.toLowerCase() === right.toLowerCase();
 }
 
+const RPC_REQUEST_ID = 1;
+
 export async function fetchTrustedRpc(method, params, { fetchImpl, signal } = {}) {
   assertReadMethod(method);
   const response = await (fetchImpl ?? globalThis.fetch)(TRUSTED_LISTA.rpcUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    body: JSON.stringify({ jsonrpc: "2.0", id: RPC_REQUEST_ID, method, params }),
     redirect: "error",
     cache: "no-store",
     signal,
   });
-  if (!response.ok) throw new Error("rpc http");
-  const body = await response.json();
-  if (!body || typeof body !== "object" || body.error || !("result" in body) || body.result == null) {
-    throw new Error("rpc body");
+  if (!response.ok) {
+    await response.body?.cancel?.().catch(() => {});
+    throw new Error("rpc http");
   }
-  return body.result;
+  const result = await readRpcResult(response, RPC_REQUEST_ID);
+  if (result == null) throw new Error("rpc body");
+  return result;
 }
 
 function hexToBytes(hex) {
