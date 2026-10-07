@@ -27,6 +27,7 @@
   },
   "assisted_actions": {
     "enabled": false,
+    "requires_user_wallet_confirmation": false,
     "mainnet_test_transactions_authorized": false,
     "agent_may_sign": false,
     "agent_may_broadcast": false,

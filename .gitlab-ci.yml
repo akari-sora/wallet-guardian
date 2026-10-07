@@ -1,0 +1,35 @@
+# Static Action Client on GitLab Pages, plus the offline test suite.
+# The pages job does not set VITE_GUARDIAN_MAINNET_SEND, so the published button cannot broadcast.
+
+stages:
+  - test
+  - deploy
+
+pytest:
+  stage: test
+  image: python:3.12
+  before_script:
+    - pip install --user uv
+    - export PATH="$HOME/.local/bin:$PATH"
+  script:
+    - cd wallet-guardian
+    - uv sync --dev
+    - uv run pytest -q
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event"
+
+pages:
+  stage: deploy
+  image: node:22
+  script:
+    - cd wallet-guardian/action-client
+    - npm ci
+    - npm run build
+    - rm -rf ../../public
+    - mkdir -p ../../public
+    - cp -a dist/. ../../public/
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
