@@ -1,8 +1,8 @@
 # Wallet Guardian
 
-跨鏈錢包的唯讀監控，以及 Lista `claimWithdraw` 的未簽名計畫。使用者可見文字預設繁體中文，時區 `Asia/Taipei`。
+跨鏈錢包的唯讀監控，以及錢包瀏覽器裡的任務工作台。使用者可見文字預設繁體中文，時區 `Asia/Taipei`。
 
-這不是投資建議，也不是「已經可以在主網一鍵領取」的證明。
+這不是投資建議。建置與測試也不等於獲准執行任何主網資產交易。
 
 ## 現在做得到
 
@@ -10,7 +10,7 @@
 - `guardian run-once --config private/config.json --json`：對設定裡的 watch-only 地址讀取 BNB Chain 官方 RPC。Lista 提款會重讀 `idx`、`isClaimable` 與 BNB 數量。
 - 快照、差異、告警去重、外部 watcher 未驗證時的重複／缺口標記。
 - 缺 API key 時標 `LIMITED_DISCOVERY` 或 `BLOCKED`，不會把失敗讀成餘額 0。
-- 固定版本 Action Client：檢查未簽名計畫的摘要與金額。錢包按鈕保持關閉。
+- 固定版本任務工作台（`action-client@0.3.0`）：載入 typed 任務，核對目標、資產、接收人與費用，並把連接、登入、授權、批次、執行權限、升級與確認分開列出。模式 A 是原地址單步引導。錢包按鈕保持關閉。
 
 ## 現在做不到
 
@@ -20,13 +20,21 @@
 - 沒有 DeBank、Zerion、Alchemy、Tenderly、GoPlus key 時，不能宣稱全鏈 discovery 或保證模擬。
 - 官方 BSC dataseed 停用 `eth_getLogs`，沒有 Etherscan key 就無法回補歷史領取。
 - 沒有公開 webhook、沒有付費套餐、沒有持續監控。`monitoring_active` 是 false。
-- Grok 的 localhost 不是你手機上的 localhost。這個頁面沒有對外網址。
+- 沒有固定 HTTPS 網域，所以不會發行可在手機錢包開啟的公開任務連結。localhost 不是你手機上的 localhost。
+- 模式 B 只在查到錢包的 EIP-5792 能力、而且是同鏈多筆操作時才考慮。這個建置沒有對真錢包送出 `wallet_sendCalls`，證據是未測。
+- 模式 C 不支援。沒有已驗證、能在鏈上強制任務／鏈／原帳戶／合約／方法／資產／金額／接收人／期限／次數／費用的權限機制。Prompt、畫面或後端 if 不能代替。
+- 新的智慧帳戶不能拿來假裝能操作原地址上既有的 Lista 部位。
+- 手機錢包內建瀏覽器未測。模式 A 的真錢包流程也未測。
 
 ## 安全邊界
 
-監控程式只做讀取與未簽名計畫。禁止的 RPC 方法包含 `eth_sendTransaction`、`eth_sendRawTransaction`、`wallet_sendCalls`、`eth_sign`、`personal_sign`、`eth_signTypedData`。
+監控程式只做讀取與 typed 任務資料。禁止的 RPC 方法包含 `eth_sendTransaction`、`eth_sendRawTransaction`、`wallet_sendCalls`、`eth_sign`、`personal_sign`、`eth_signTypedData`。
 
-私鑰與助記詞不要貼進設定、對話或這個目錄。`private/`、`data/`、`evidence/` 已在 gitignore。公開範例是 `config/public.example.json`，裡面不是真實地址。
+Grok 只產生 `guardian.task.v1`。它不能在運行時產生並執行任意簽名 JavaScript。任務連結只帶 `ref_` 參考碼，本身不是執行授權，也不能帶其他使用者的私人資料。沒有固定 HTTPS 網域時，公開連結不會發行。
+
+主錢包私鑰留在使用者的錢包。限定執行憑證是秘密，不要放進這個共用工作區、任務 JSON 或對話。
+
+私鑰與助記詞不要貼進設定、對話或這個目錄。`private/`、`data/`、`evidence/` 已在 gitignore。公開範例是 `config/public.example.json`，裡面不是真實地址。頁面上的合成任務也不是真實餘額。
 
 Watch-only 地址只代表「拿來觀察」，不代表這個系統可以動用它。
 
@@ -48,6 +56,7 @@ uv run guardian doctor --json
 uv run guardian run-once --config private/config.json --json
 uv run guardian self-check --json
 uv run guardian operation-coverage --json
+uv run guardian workbench --json
 uv run guardian alerts test --dry-run
 ```
 
@@ -68,7 +77,7 @@ uv run guardian alerts test --dry-run
 
 設定後重新執行 doctor。日誌會把 key 遮成 `***`。不要購買套餐，除非另外授權。
 
-## Action Client
+## 任務工作台
 
 ```bash
 cd action-client
@@ -76,15 +85,19 @@ npm install
 npm run dev
 ```
 
-開發伺服器是 `http://127.0.0.1:43127`。可載入 `run-once` 產出的計畫，或頁面上的合成範例。合成範例不是你的餘額。
+開發伺服器是 `http://127.0.0.1:43127`。可開啟任務檔，或載入頁面上的合成範例。合成範例不是你的餘額。`?ref=` 只接受 `ref_` 加 32 個十六進位字，並且只向同一個來源要 `/tasks/<ref>.json`。它不會跟隨任務資料裡的網址，也不會把地址或金額放進網址。
 
-頁面會重算 digest。金額、收款地址與計畫不一致就拒絕。`在我的錢包確認` 目前禁用，因為：
+頁面會重算 digest。金額、收款地址與計畫不一致就拒絕。連接錢包、登入簽名、代幣授權、批次確認、限定執行權限、帳戶升級與「確認這筆領取」分開列出。Lista 原地址單步領取只有最後一項需要確認。`在我的錢包確認` 目前禁用，因為：
 
 1. 主網簽名未授權。
-2. `eth_call` 成功看不到 BNB 餘額與 `ClaimWithdrawal` 事件，模擬不完整。
-3. 設定中的地址仍是 watch-only。
+2. 沒有固定 HTTPS 網域，公開任務連結不會發行。
+3. `eth_call` 成功看不到 BNB 餘額與領取事件，模擬不完整。
+4. 設定中的地址仍是 watch-only。
+5. 模式 C 沒有可強制限制的鏈上機制；模式 B 還沒有真錢包測試。
 
-剩餘工作：固定區塊的 fork 測試、有 trace 的模擬、使用者裝置上的真錢包拒絕／恢復測試、獨立發布與完整性檢查。完成前不能說領取功能已上線。
+即使執行前重讀沒有變化，這個建置的 preflight 仍是 `continue_to_wallet=false`。交易雜湊不算完成。
+
+剩餘工作：固定 HTTPS 網域與固定版本發布、手機錢包內建瀏覽器實測、模式 A 的真錢包拒絕／送出不明／替代／完成核對、先查能力再決定要不要做模式 B、以及一個真的能在鏈上強制限制的模式 C。完成前不能說領取功能已上線。
 
 ## 測試
 
@@ -93,9 +106,10 @@ uv run pytest -q
 ```
 
 - `tests/v1_acceptance_cases.json`：原有 56 項監控案例，離線。
-- `tests/v2_acceptance_cases.json`：新增 72 項操作案例，離線。
-- fork、真錢包、手機與部署沒有在這輪執行，報告裡維持 `BLOCKED`。
-- 真網讀取與離線測試要分開看。HTTP 200 本身不算通過。
+- `tests/v2_acceptance_cases.json`：72 項操作案例，離線。
+- `tests/workbench_acceptance_cases.json`：31 項任務工作台案例，離線。不併入前面兩份，也不把未測項目算成通過。
+- fork、真錢包、手機內建瀏覽器與部署沒有在這輪執行。模式 A／B 標未測，模式 C 標不支援。
+- 真網讀取與離線測試要分開看。HTTP 200 本身不算通過。建置與測試不等於獲准執行主網交易。
 
 ## 資料來源
 

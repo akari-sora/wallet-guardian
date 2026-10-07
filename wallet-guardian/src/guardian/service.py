@@ -17,6 +17,7 @@ from guardian import __version__
 from guardian.amounts import format_units
 from guardian.actions.lista_plan import build_lista_claim_plan
 from guardian.actions.policy import KillSwitch
+from guardian.actions.workbench import CLIENT_BUILD, TASK_VERSION, evidence_status
 from guardian.domain import (
     WithdrawalRequest,
     baseline_alerts,
@@ -678,6 +679,15 @@ def operation_coverage() -> dict[str, Any]:
                 ],
             }
         ],
+        "workbench": {
+            "protocol_version": TASK_VERSION,
+            "client_build": CLIENT_BUILD,
+            "mode_a": "original_address_single_step_guided_confirmation",
+            "mode_b": "eip5792_only_after_capability_check_real_wallet_UNTESTED",
+            "mode_c": "UNSUPPORTED_until_verified_on_chain_enforcer",
+            "evidence": evidence_status(),
+            "link_is_execution_authorization": False,
+        },
         "arbitrary_contract_call": "UNSUPPORTED",
         "wallet_requests_enabled": False,
     }

@@ -81,6 +81,42 @@ button:disabled {
 
 .card h2 { margin-top: 0; }
 
+.card h3 {
+  margin: 18px 0 8px;
+  font-size: 1rem;
+}
+
+.mode {
+  display: inline-block;
+  margin: 0 0 12px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  line-height: 1.4;
+}
+
+.steps, .evidence {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.steps li, .evidence li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.need { color: var(--warn); font-weight: 600; }
+.skip { color: var(--muted); }
+
 dl {
   display: grid;
   grid-template-columns: 8.5rem 1fr;

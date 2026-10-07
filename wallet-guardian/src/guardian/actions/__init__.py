@@ -1,1 +1,1 @@
-"""Unsigned action planning. This package cannot sign or broadcast."""
+"""Unsigned action planning and typed task data. This package cannot sign or broadcast."""

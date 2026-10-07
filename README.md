@@ -1,6 +1,6 @@
 # Wallet Guardian
 
-唯讀的錢包監控與 Lista 提款計畫工具，程式在 `wallet-guardian/`。
+唯讀的錢包監控與錢包瀏覽器任務工作台，程式在 `wallet-guardian/`。
 
 ```bash
 cd wallet-guardian

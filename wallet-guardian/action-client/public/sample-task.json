@@ -1,0 +1,213 @@
+{
+  "protocol_version": "guardian.task.v1",
+  "client_build": "action-client@0.3.0",
+  "ref": "ref_abababababababababababababababab",
+  "execution_authorized": false,
+  "mode": "A",
+  "mode_reason": "fallback_to_guided_confirmation",
+  "wallet_request_allowed": false,
+  "steps": [
+    {
+      "id": "connect_wallet",
+      "label": "連接錢包",
+      "required": false,
+      "separate": true,
+      "status": "not_required",
+      "requests_7702": false,
+      "unlimited_approval": false,
+      "adds_admin": false,
+      "migrates_assets": false,
+      "upgrades_account": false
+    },
+    {
+      "id": "login_signature",
+      "label": "登入簽名",
+      "required": false,
+      "separate": true,
+      "status": "not_required",
+      "requests_7702": false,
+      "unlimited_approval": false,
+      "adds_admin": false,
+      "migrates_assets": false,
+      "upgrades_account": false
+    },
+    {
+      "id": "erc20_approve",
+      "label": "代幣授權",
+      "required": false,
+      "separate": true,
+      "status": "not_required",
+      "requests_7702": false,
+      "unlimited_approval": false,
+      "adds_admin": false,
+      "migrates_assets": false,
+      "upgrades_account": false
+    },
+    {
+      "id": "batch_confirm",
+      "label": "批次確認",
+      "required": false,
+      "separate": true,
+      "status": "not_required",
+      "requests_7702": false,
+      "unlimited_approval": false,
+      "adds_admin": false,
+      "migrates_assets": false,
+      "upgrades_account": false
+    },
+    {
+      "id": "execution_permission",
+      "label": "限定執行權限",
+      "required": false,
+      "separate": true,
+      "status": "not_required",
+      "requests_7702": false,
+      "unlimited_approval": false,
+      "adds_admin": false,
+      "migrates_assets": false,
+      "upgrades_account": false
+    },
+    {
+      "id": "account_upgrade",
+      "label": "帳戶升級",
+      "required": false,
+      "separate": true,
+      "status": "not_required",
+      "requests_7702": false,
+      "unlimited_approval": false,
+      "adds_admin": false,
+      "migrates_assets": false,
+      "upgrades_account": false
+    },
+    {
+      "id": "execute",
+      "label": "確認這筆領取",
+      "required": true,
+      "separate": true,
+      "status": "needs_user_confirm",
+      "requests_7702": false,
+      "unlimited_approval": false,
+      "adds_admin": false,
+      "migrates_assets": false,
+      "upgrades_account": false
+    }
+  ],
+  "link": {
+    "issued": false,
+    "reason": "no_fixed_https_origin",
+    "url": null,
+    "ref": "ref_abababababababababababababababab",
+    "execution_authorized": false,
+    "contains_private_state": false
+  },
+  "plan": {
+    "notice": {
+      "synthetic": true,
+      "notice": "這不是真實餘額，也不是可簽名交易。"
+    },
+    "protocol_version": "guardian.action_plan.v1",
+    "task_id": "synthetic-lista-claim",
+    "revision": 1,
+    "chain_namespace": "evm",
+    "chain_id": 56,
+    "sender": "0x1111111111111111111111111111111111111111",
+    "execution_account": "0x1111111111111111111111111111111111111111",
+    "execution_account_type": "unproven",
+    "recipient": "0x1111111111111111111111111111111111111111",
+    "protocol_id": "lista-slisbnb",
+    "deployment": {
+      "proxy": "0x1adB950d8bB3dA4bE104211D5AB038628e477fE6",
+      "implementation": "0xF9a3702659d8bFDb2ff5E3c3f264E479801F63Bf",
+      "proxy_code_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "implementation_code_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "method": "claimWithdraw(uint256)"
+    },
+    "intent": {
+      "type": "lista_claim_withdraw",
+      "uuid": "42",
+      "idx": 0
+    },
+    "calls": [
+      {
+        "to": "0x1adB950d8bB3dA4bE104211D5AB038628e477fE6",
+        "data": "0xb13acedd0000000000000000000000000000000000000000000000000000000000000000",
+        "value": "0"
+      }
+    ],
+    "asset_in": {
+      "symbol": "slisBNB",
+      "raw_amount": "8107360000000000000",
+      "decimals": 18
+    },
+    "asset_out": {
+      "symbol": "BNB",
+      "raw_amount": "8300000000000000000",
+      "decimals": 18
+    },
+    "preconditions": {
+      "paused": false,
+      "is_claimable": true,
+      "idx_reread": true,
+      "stale_cache_rejected": false,
+      "request_count": 1
+    },
+    "bounds": {
+      "min_out_raw": "8300000000000000000",
+      "slippage_bps": null
+    },
+    "max_fee_wei": null,
+    "simulation": {
+      "status": "INCOMPLETE",
+      "source": "eth_call_without_trace",
+      "effects_checked": false,
+      "state_overrides": false,
+      "block_number": 1,
+      "block_hash": "0xabc"
+    },
+    "wallet_request_allowed": false,
+    "digest": "f344f7373ee32a45362c323da36c29f9c4afd434063a243d603135c1ee692f80",
+    "human_summary": {
+      "purpose": "合成範例：領取已解鎖的 Lista 提款",
+      "sender": "0x1111111111111111111111111111111111111111",
+      "recipient": "0x1111111111111111111111111111111111111111",
+      "chain_id": 56,
+      "chain_label": "BNB Smart Chain (chain ID 56)",
+      "amount_out_raw": "8300000000000000000",
+      "amount_out_unit": "BNB",
+      "amount_in_raw": "8107360000000000000",
+      "amount_in_unit": "slisBNB",
+      "fee_label": "費用未知",
+      "simulation_status": "INCOMPLETE",
+      "wallet_request_allowed": false
+    },
+    "state": "SIMULATED",
+    "block_reasons": [
+      "監控地址只是 watch-only，尚未證明這次操作的錢包身份",
+      "輔助簽名尚未由使用者啟用",
+      "這次建置沒有主網交易授權",
+      "現有模擬無法核對餘額與領取事件，不能當作可以簽名的證據"
+    ],
+    "alternatives": [
+      {
+        "id": "claim_withdraw",
+        "kind": "protocol_redeem",
+        "completes_original_redeem": true
+      }
+    ],
+    "local_ttl_unix": 120,
+    "onchain_deadline": false,
+    "idx_source": "reread"
+  },
+  "evidence": {
+    "mobile_wallet_inapp_browser": "UNTESTED",
+    "mode_a_real_wallet": "UNTESTED",
+    "mode_b_real_wallet": "UNTESTED",
+    "mode_c_real_wallet": "UNSUPPORTED",
+    "mode_c_reason": "沒有已驗證、能在鏈上強制任務限制的權限合約",
+    "fixed_https_origin": false,
+    "mainnet_execution_authorized": false,
+    "build_is_execution_authorization": false
+  },
+  "requests_7702": false,
+  "unlimited_approval": false
+}

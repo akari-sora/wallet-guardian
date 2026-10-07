@@ -1,10 +1,10 @@
 # 覆蓋範圍
 
-更新時間：2026-10-07 13:28 Asia/Taipei。離線測試與一次唯讀 `doctor` / `run-once`。私人餘額只留在 gitignore 的 `evidence/`。
+更新時間：2026-10-07。離線測試，加上先前一次唯讀 `doctor` / `run-once`（約 13:28 Asia/Taipei）。這次沒有重跑鏈上讀取。私人餘額只留在 gitignore 的 `evidence/`。套件版本是 0.3.0。
 
 ## 這次實際執行
 
-- `uv run pytest -q`：138 passed。其中 v1 文件 56 項、v2 文件 72 項，其餘是目錄對照與 CLI 安全檢查。
+- `uv run pytest -q`：172 passed。v1 文件 56 項、v2 文件 72 項、工作台文件 31 項，其餘是目錄對照、CLI 與合成任務檢查。工作台 31 項全部是離線政策，不能當成真錢包或手機通過。
 - `guardian doctor --json`：exit 0。BNB Chain 官方 RPC `LIVE_PASS`（約 block 126196077）。Etherscan V2 chainlist `LIVE_PASS`（回傳 63 列，監控只啟用 chain 56）。Hyperliquid info `LIVE_PASS`。
 - `guardian run-once --config private/config.json --json`：exit 0，`completed_with_limitations`，`monitoring_active=false`。Lista proxy 的 ERC-1967 implementation 讀到 `0xF9a3702659d8bFDb2ff5E3c3f264E479801F63Bf`，`paused=false`。一個 watch 地址的目前提款陣列有一筆且 `isClaimable=true`；另一個陣列是空的。未簽名計畫是 `SIMULATED`，`wallet_request_allowed=false`。
 - 沒有送出通知，沒有簽名，沒有廣播。
@@ -13,6 +13,11 @@
 |---|---|---|
 | BNB Chain chain id 56，官方 RPC 讀 native、slisBNB、Lista 提款 | 由 run-once 實測 | `eth_getLogs` 在官方 dataseed 不可用 |
 | Lista `claimWithdraw` 未簽名計畫 | DRAFT / BLOCKED | 會重讀 idx；不簽名 |
+| 任務工作台模式 A | 政策與本機頁面 | 原地址單步引導。真錢包未測。確認鈕關閉 |
+| 任務工作台模式 B | 未測 | 只有查到 EIP-5792 且同鏈多筆才考慮。沒有送出 `wallet_sendCalls` |
+| 任務工作台模式 C | 不支援 | 沒有已驗證的鏈上強制機制。不能用畫面或後端 if 代替 |
+| 手機錢包內建瀏覽器 | 未測 | 沒有固定 HTTPS 網域，沒有發行公開任務連結 |
+| 固定 HTTPS 網域 | 沒有 | localhost 不能當成手機上的任務入口 |
 | Ethereum、其他 EVM | 未啟用 | 沒有預先核准的 RPC |
 | DeBank / Zerion / Alchemy discovery | BLOCKED | 沒有 key |
 | GoPlus | LIMITED_DISCOVERY | 沒有 key，不宣稱已做風險篩選 |
@@ -23,4 +28,6 @@
 | 持續監控 | 未啟用 | 沒有讀回 next run，不能稱 MONITORING_ACTIVE |
 | Fork / 真錢包 / 公開部署 | BLOCKED | 沒有這些證據就不是上線功能 |
 
-操作覆蓋與監控覆蓋分開。能讀 Lista 不代表能執行 Lista 的每一個寫入方法。
+操作覆蓋與監控覆蓋分開。能讀 Lista 不代表能執行 Lista 的每一個寫入方法。建置與測試不等於獲准執行任何主網資產交易。
+
+先前 run-once 的鏈上事實仍有效：Lista implementation `0xF9a3702659d8bFDb2ff5E3c3f264E479801F63Bf`，`paused=false`。一個 watch 地址當時有一筆 `isClaimable=true` 的提款，另一個陣列是空的。未簽名計畫 `wallet_request_allowed=false`。這次工作台沒有把那次讀取變成一筆已送出的交易。

@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from guardian.actions.policy import agent_wallet_request, parse_intent
+from guardian.actions.workbench import workbench_status
 from guardian.domain import format_alert
 from guardian.errors import GuardianError
 from guardian.security.redact import redact
@@ -84,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("rescue", parents=[common])
     sub.add_parser("operation-coverage", parents=[common])
+    sub.add_parser("workbench", parents=[common])
     return parser
 
 
@@ -98,6 +100,8 @@ def dispatch(args: argparse.Namespace) -> tuple[dict, int]:
         return result, 0 if result["status"] == "pass" else 1
     if args.command == "operation-coverage":
         return operation_coverage(), 0
+    if args.command == "workbench":
+        return workbench_status(), 0
     if args.command == "rescue":
         return rescue_doctor(), 0
     if args.command == "coverage":
