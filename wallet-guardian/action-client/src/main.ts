@@ -1,6 +1,7 @@
 import { digestBody } from "./canonical.mjs";
 import { clientConfirmDecision, eip5792Status, executionMode, simulationAllowsSend } from "./gate.mjs";
 import { LOGIN_STATEMENT } from "./login-statement.mjs";
+import { validateLoginChallenge } from "./login-challenge.mjs";
 import { assertInertPayload, assertTaskRef, boundedJson, units, validatePlan } from "./plan-validation.mjs";
 import { parsePrivateTaskRef, privateTaskSendAllowed, readBoundedJson } from "./private-task.mjs";
 
@@ -108,6 +109,23 @@ let csrfToken: string | null = null;
 let privateRef: string | null = null;
 let privateRevision: number | null = null;
 let privateCancelAllowed = false;
+let authGeneration = 0;
+let authBusy = false;
+let sessionAddress: string | null = null;
+
+// A network cancellation is best-effort; generations are the authority for
+// whether a late response may mutate this page after a security boundary.
+function invalidatePrivateView(keepRef = true): number {
+  ++loadGeneration;
+  lastPlan = null;
+  lastTask = null;
+  observedCapability = "unknown";
+  privateRevision = null;
+  if (!keepRef) privateRef = null;
+  hideCancel();
+  renderEmpty();
+  return loadGeneration;
+}
 
 type EthereumProvider = { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> };
 
@@ -143,8 +161,14 @@ function requestUserSend(plan: Plan): void {
 function syncAccountControls(): void {
   const logout = document.querySelector<HTMLButtonElement>("#logout");
   const cancel = document.querySelector<HTMLButtonElement>("#cancel-task");
-  if (logout) logout.hidden = !csrfToken;
-  if (cancel) cancel.hidden = !privateCancelAllowed;
+  const loginButton = document.querySelector<HTMLButtonElement>("#login");
+  const identity = document.querySelector<HTMLElement>("#session");
+  if (logout) { logout.hidden = !csrfToken; logout.disabled = authBusy; }
+  if (loginButton) loginButton.disabled = authBusy;
+  if (cancel) { cancel.hidden = !privateCancelAllowed; cancel.disabled = authBusy; }
+  if (identity) identity.textContent = csrfToken && sessionAddress
+    ? `讀取身分：${sessionAddress}。不是交易授權。`
+    : "尚未登入。登入只建立讀取工作階段，不是交易授權。";
 }
 
 function hideCancel(): void {
@@ -153,6 +177,10 @@ function hideCancel(): void {
 }
 
 function renderError(message: string): void {
+  ++loadGeneration;
+  lastPlan = null;
+  lastTask = null;
+  observedCapability = "unknown";
   hideCancel();
   view.className = "error";
   view.textContent = message;
@@ -420,6 +448,7 @@ async function renderPayload(payload: unknown, generation: number): Promise<void
 
 type SessionBody = {
   authenticated?: boolean;
+  address?: string;
   csrf_token?: string;
   execution_authorized?: boolean;
   send_authorized?: boolean;
@@ -440,7 +469,7 @@ function api(path: string, init: RequestInit = {}): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
   if (method !== "GET" && method !== "HEAD") {
     if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
-    if (csrfToken) headers.set("x-csrf-token", csrfToken);
+    if (csrfToken && !headers.has("x-csrf-token")) headers.set("x-csrf-token", csrfToken);
   }
   return fetch(path, {
     ...init,
@@ -452,16 +481,16 @@ function api(path: string, init: RequestInit = {}): Promise<Response> {
   });
 }
 
-function applySession(body: unknown): void {
-  if (!body || typeof body !== "object") return;
-  const record = body as SessionBody;
-  if (record.execution_authorized === true || record.send_authorized === true) {
-    csrfToken = null;
-    syncAccountControls();
-    return;
-  }
-  csrfToken = record.authenticated === true && typeof record.csrf_token === "string" ? record.csrf_token : null;
+function applySession(body: unknown): boolean {
+  const record = body && typeof body === "object" ? body as SessionBody : {};
+  const valid = record.authenticated === true && record.execution_authorized === false &&
+    record.send_authorized === false && typeof record.csrf_token === "string" &&
+    /^[a-f0-9]{64}$/.test(record.csrf_token) && typeof record.address === "string" &&
+    /^0x[a-fA-F0-9]{40}$/.test(record.address);
+  csrfToken = valid ? record.csrf_token! : null;
+  sessionAddress = valid ? record.address! : null;
   syncAccountControls();
+  return valid;
 }
 
 async function loadPrivateTask(ref: string, generation: number): Promise<void> {
@@ -470,8 +499,7 @@ async function loadPrivateTask(ref: string, generation: number): Promise<void> {
     const body = (await readBoundedJson(response)) as PrivateTaskBody;
     if (generation !== loadGeneration) return;
     if (response.status === 401) {
-      csrfToken = null;
-      syncAccountControls();
+      applySession(null);
       renderError("登入已失效。請重新登入。不會送出交易。");
       return;
     }
@@ -521,98 +549,96 @@ async function openPrivateTask(ref: string): Promise<void> {
 }
 
 async function login(): Promise<void> {
+  if (authBusy) return;
   const ethereum = ethereumProvider();
   if (!ethereum) {
     banner.textContent = "找不到瀏覽器錢包，無法登入。不會送出交易。";
     return;
   }
+  authBusy = true;
+  const authEpoch = ++authGeneration;
+  invalidatePrivateView();
+  syncAccountControls();
   try {
     const accounts = await ethereum.request({ method: "eth_requestAccounts" });
     const address = Array.isArray(accounts) ? String(accounts[0] ?? "") : "";
-    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
-      banner.textContent = "錢包沒有提供可用帳戶。不會送出交易。";
-      return;
+    const chain = await ethereum.request({ method: "eth_chainId" });
+    if (!/^0x[a-fA-F0-9]{40}$/.test(address) || typeof chain !== "string" || !/^0x[0-9a-f]+$/i.test(chain)) {
+      throw new Error("錢包沒有提供可用帳戶與鏈。");
     }
+    const chainId = Number(BigInt(chain));
+    if (!Number.isSafeInteger(chainId) || chainId <= 0 || authEpoch !== authGeneration) return;
     const challengeResponse = await api("/api/auth/challenge", {
-      method: "POST",
-      body: JSON.stringify({ address }),
-      signal: AbortSignal.timeout(10000),
+      method: "POST", body: JSON.stringify({ address, chainId }), signal: AbortSignal.timeout(10000),
     });
-    const issued = (await readBoundedJson(challengeResponse)) as {
-      message?: string;
-      csrf_token?: string;
-      execution_authorized?: boolean;
-      send_authorized?: boolean;
-      erc1271?: string;
-    };
-    if (!challengeResponse.ok || issued.execution_authorized !== false || issued.send_authorized !== false || issued.erc1271 !== "unsupported") {
-      banner.textContent = "登入挑戰不符合唯讀規則。不會簽名。";
-      return;
+    const issued = await readBoundedJson(challengeResponse);
+    if (authEpoch !== authGeneration) return;
+    if (!challengeResponse.ok) throw new Error("無法取得這條鏈的唯讀登入挑戰。");
+    const challenge = validateLoginChallenge(issued, { origin: window.location.origin, address, chainId });
+    // Also pin the wallet identity immediately before offering the message.
+    const currentAccounts = await ethereum.request({ method: "eth_accounts" });
+    const currentChain = await ethereum.request({ method: "eth_chainId" });
+    if (authEpoch !== authGeneration || !Array.isArray(currentAccounts) ||
+        String(currentAccounts[0]).toLowerCase() !== address.toLowerCase() || currentChain !== chain) {
+      throw new Error("錢包帳戶或鏈已變更，請重新登入。");
     }
-    if (typeof issued.message !== "string" || typeof issued.csrf_token !== "string" || issued.message.length > 4096) {
-      banner.textContent = "登入挑戰不完整。不會簽名。";
-      return;
-    }
-    if (!issued.message.includes(LOGIN_STATEMENT) || !issued.message.includes("wants you to sign in with your Ethereum account:")) {
-      banner.textContent = "登入訊息不是固定的讀取聲明。不會簽名。";
-      return;
-    }
-    csrfToken = issued.csrf_token;
-    const signature = await ethereum.request({ method: "personal_sign", params: [issued.message, address] });
-    if (typeof signature !== "string") {
-      banner.textContent = "錢包沒有回傳登入簽名。不會送出交易。";
-      return;
-    }
+    // Keep the challenge CSRF local. A rejected login must not corrupt the
+    // existing session's CSRF token used by logout and task cancellation.
+    const signature = await ethereum.request({ method: "personal_sign", params: [challenge.message, address] });
+    if (authEpoch !== authGeneration) return;
+    if (typeof signature !== "string") throw new Error("未取得登入簽名。");
     const verifyResponse = await api("/api/auth/verify", {
-      method: "POST",
-      body: JSON.stringify({ message: issued.message, signature }),
-      signal: AbortSignal.timeout(10000),
+      method: "POST", headers: { "x-csrf-token": challenge.csrfToken },
+      body: JSON.stringify({ message: challenge.message, signature }), signal: AbortSignal.timeout(10000),
     });
     const verified = await readBoundedJson(verifyResponse);
-    if (!verifyResponse.ok) {
-      csrfToken = null;
-      syncAccountControls();
-      banner.textContent = "登入沒有完成。不會送出交易。";
-      return;
-    }
-    applySession(verified);
+    if (authEpoch !== authGeneration) return;
+    if (!verifyResponse.ok) throw new Error("登入沒有完成。");
+    if (!applySession(verified)) throw new Error("登入回應不完整。");
     banner.textContent = "已登入。這只是讀取身分，不是交易授權。主網送出保持關閉。";
     if (privateRef) {
       const generation = ++loadGeneration;
       await loadPrivateTask(privateRef, generation);
     }
   } catch {
-    banner.textContent = "登入已停止。不會送出交易。";
+    if (authEpoch === authGeneration) banner.textContent = "登入未完成；既有登入不會因此獲得新權限。可重試或登出，不會送出交易。";
+  } finally {
+    authBusy = false;
+    syncAccountControls();
   }
 }
 
 async function logout(): Promise<void> {
+  // Serialize authentication mutations so an older verify response cannot
+  // install a new cookie after logout has completed.
+  if (authBusy) return;
+  authBusy = true;
+  ++authGeneration;
+  invalidatePrivateView(false);
+  syncAccountControls();
   try {
     const response = await api("/api/auth/logout", {
-      method: "POST",
-      body: JSON.stringify({}),
-      signal: AbortSignal.timeout(10000),
+      method: "POST", body: JSON.stringify({}), signal: AbortSignal.timeout(10000),
     });
-    if (!response.ok) {
-      banner.textContent = "登出沒有完成。";
-      return;
+    const result = await readBoundedJson(response) as { authenticated?: boolean; revoked?: boolean };
+    if (response.status !== 401 && (!response.ok || result.authenticated !== false || result.revoked !== true)) {
+      throw new Error("logout unconfirmed");
     }
+    applySession(null);
+    banner.textContent = "已登出。此工作階段已失效。不會送出交易。";
   } catch {
-    banner.textContent = "登出沒有完成。";
-    return;
+    banner.textContent = "畫面已清除，但伺服器登出結果未確認。請重試登出；不會送出交易。";
+  } finally {
+    authBusy = false;
+    syncAccountControls();
   }
-  csrfToken = null;
-  privateRef = null;
-  privateRevision = null;
-  hideCancel();
-  banner.textContent = "已登出。伺服器會作廢這個工作階段。不會送出交易。";
-  renderEmpty();
 }
 
 async function cancelPrivateTask(): Promise<void> {
-  if (!privateRef || privateRevision == null || !privateCancelAllowed || !csrfToken) return;
+  if (authBusy || !privateRef || privateRevision == null || !privateCancelAllowed || !csrfToken) return;
   const ref = privateRef;
   const revision = privateRevision;
+  const generation = invalidatePrivateView();
   try {
     const response = await api(`/api/tasks/${ref}/cancel`, {
       method: "POST",
@@ -620,12 +646,13 @@ async function cancelPrivateTask(): Promise<void> {
       signal: AbortSignal.timeout(10000),
     });
     const body = (await readBoundedJson(response)) as PrivateTaskBody;
+    if (generation !== loadGeneration) return;
     if (body.on_chain_revoked === true || body.tx_hash_verified === true || body.send_authorized === true || body.execution_authorized === true) {
       renderError("取消回應試圖宣稱鏈上撤銷或授權送出。已拒絕。");
       return;
     }
     if (!response.ok) {
-      banner.textContent = "任務沒有取消。不會送出交易。";
+      banner.textContent = "取消未確認，請重新讀取任務狀態。不會送出交易。";
       return;
     }
     hideCancel();
@@ -633,7 +660,7 @@ async function cancelPrivateTask(): Promise<void> {
     view.textContent = "未執行任務已取消。這只更新讀取紀錄，不是鏈上撤銷，也沒有送出交易。";
     banner.textContent = "主網送出保持關閉。取消不是交易。";
   } catch {
-    banner.textContent = "任務沒有取消。不會送出交易。";
+    if (generation === loadGeneration) banner.textContent = "取消結果未確認，請重新讀取任務狀態。不會送出交易。";
   }
 }
 
@@ -658,14 +685,18 @@ function inspectLocation(): void {
   }
 }
 
-async function restoreSession(): Promise<void> {
+async function restoreSession(): Promise<boolean> {
+  const authEpoch = authGeneration;
   try {
     const response = await api("/api/session", { signal: AbortSignal.timeout(10000) });
-    applySession(await readBoundedJson(response));
+    const body = await readBoundedJson(response);
+    if (authEpoch !== authGeneration || authBusy) return false;
+    applySession(response.ok ? body : null);
   } catch {
-    csrfToken = null;
-    syncAccountControls();
+    if (authEpoch !== authGeneration || authBusy) return false;
+    applySession(null);
   }
+  return true;
 }
 
 document.querySelector("#login")!.addEventListener("click", () => {
@@ -716,4 +747,4 @@ document.querySelector("#clear")!.addEventListener("click", () => {
   banner.textContent = BANNER;
 });
 
-void restoreSession().then(() => inspectLocation());
+void restoreSession().then((current) => { if (current) inspectLocation(); });
