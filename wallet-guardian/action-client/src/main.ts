@@ -1,4 +1,5 @@
 import { digestBody } from "./canonical.mjs";
+import { assertInertPayload, assertTaskRef, boundedJson, units, validatePlan } from "./plan-validation.mjs";
 
 const WALLET_REQUESTS_ENABLED = false;
 const TASK_VERSION = "guardian.task.v1";
@@ -85,17 +86,7 @@ type Task = {
 
 const view = document.querySelector<HTMLElement>("#view")!;
 const banner = document.querySelector<HTMLElement>("#banner")!;
-
-function units(raw: string, decimals: number): string {
-  const negative = raw.startsWith("-");
-  const digits = negative ? raw.slice(1) : raw;
-  if (!/^\d+$/.test(digits)) return raw;
-  const padded = digits.padStart(decimals + 1, "0");
-  const whole = padded.slice(0, padded.length - decimals);
-  const frac = padded.slice(padded.length - decimals).replace(/0+$/, "");
-  const text = frac ? `${whole}.${frac}` : whole;
-  return negative ? `-${text}` : text;
-}
+let loadGeneration = 0;
 
 function requestWallet(): void {
   if (!WALLET_REQUESTS_ENABLED) {
@@ -170,12 +161,15 @@ function appendFacts(list: HTMLElement, rows: Array<[string, string]>): void {
   }
 }
 
-async function renderPlan(plan: Plan, task: Task | null): Promise<void> {
+async function renderPlan(plan: Plan, task: Task | null, generation: number): Promise<void> {
+  if (generation !== loadGeneration) return;
+  validatePlan(plan);
   if (plan.protocol_version !== PLAN_VERSION) {
     renderError("協議版本不符，已拒絕這個檔案。");
     return;
   }
   const digest = await digestBody(plan);
+  if (generation !== loadGeneration) return;
   if (digest !== plan.digest) {
     renderError("計畫摘要比對失敗。檔案可能被改過，不會拿去簽名。");
     return;
@@ -193,7 +187,7 @@ async function renderPlan(plan: Plan, task: Task | null): Promise<void> {
   if (!plan.wallet_request_allowed) reasons.push("計畫本身不允許提出錢包請求。");
   if (!WALLET_REQUESTS_ENABLED) reasons.push("這個頁面的發布開關是關閉的。");
   if (task && !task.link?.issued) reasons.push("沒有固定 HTTPS 網域，所以沒有發行公開任務連結。");
-  banner.textContent = "尚未對錢包提出交易。主網簽名未授權，也沒有固定 HTTPS 網域。下列原因需要先解除，才可能進入確認。";
+  banner.textContent = "尚未對錢包提出交易。主網簽名未授權，也沒有固定 HTTPS 網域。格式核對不是來源認證或安全保證；此頁沒有重新讀取鏈上狀態。";
 
   const alternatives = (plan.alternatives ?? [])
     .map((item) => `${item.id}${item.completes_original_redeem ? "" : "（不是完成原贖回）"}`)
@@ -208,14 +202,14 @@ async function renderPlan(plan: Plan, task: Task | null): Promise<void> {
   mode.textContent = modeLine(task);
 
   const heading = document.createElement("h2");
-  heading.textContent = summary.purpose;
+  heading.textContent = "Lista 提款計畫預覽（尚未驗證可執行）";
 
   const list = document.createElement("dl");
   appendFacts(list, [
     ["來源錢包", summary.sender],
     ["鏈", summary.chain_label],
-    ["你會付出", `${units(summary.amount_in_raw, plan.asset_in.decimals)} ${summary.amount_in_unit}`],
-    ["你會收到", `${units(summary.amount_out_raw, plan.asset_out.decimals)} ${summary.amount_out_unit}`],
+    ["原申請數量（非本次支出）", `${units(summary.amount_in_raw, plan.asset_in.decimals)} ${summary.amount_in_unit}`],
+    ["計畫中的領取數量（待重查）", `${units(summary.amount_out_raw, plan.asset_out.decimals)} ${summary.amount_out_unit}`],
     ["接收地址", summary.recipient],
     ["費用", summary.fee_label],
     ["模擬", `${summary.simulation_status}（${plan.simulation.source}，區塊 ${plan.simulation.block_number ?? "未知"}）`],
@@ -304,7 +298,9 @@ async function renderPlan(plan: Plan, task: Task | null): Promise<void> {
   view.append(mode, heading, list, stepHeading, steps, wait, actions, reasonList, evidenceHeading, evidence, details);
 }
 
-async function renderPayload(payload: unknown): Promise<void> {
+async function renderPayload(payload: unknown, generation: number): Promise<void> {
+  if (generation !== loadGeneration) return;
+  assertInertPayload(payload);
   if (!payload || typeof payload !== "object") {
     renderError("這個檔案不是可讀的任務 JSON。");
     return;
@@ -317,27 +313,28 @@ async function renderPayload(payload: unknown): Promise<void> {
       renderError(problem);
       return;
     }
-    await renderPlan(task.plan, task);
+    await renderPlan(task.plan, task, generation);
     return;
   }
   if (record.protocol_version === PLAN_VERSION) {
-    await renderPlan(payload as Plan, null);
+    await renderPlan(payload as Plan, null, generation);
     return;
   }
   renderError("協議版本不符，已拒絕這個檔案。");
 }
 
 async function loadSameOriginTask(ref: string): Promise<void> {
-  const response = await fetch(`/tasks/${ref}.json`, { credentials: "same-origin" });
-  const type = response.headers.get("content-type") ?? "";
-  if (!response.ok || !type.includes("json")) {
-    renderError("這個來源沒有該任務的內容。參考碼不能換成其他網址，也不是執行授權。");
-    return;
-  }
+  const generation = ++loadGeneration;
   try {
-    await renderPayload(await response.json());
+    const response = await fetch(`/tasks/${ref}.json`, {
+      credentials: "same-origin", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(10000),
+    });
+    const payload = await boundedJson(response);
+    if (generation !== loadGeneration) return;
+    assertTaskRef(payload, ref);
+    await renderPayload(payload, generation);
   } catch {
-    renderError("同源任務內容不是可讀的 JSON。不會改向其他網站。");
+    if (generation === loadGeneration) renderError("無法載入同源任務。不跟隨重新導向，也不接受替換參考碼。");
   }
 }
 
@@ -345,6 +342,10 @@ function inspectLocation(): void {
   const params = new URLSearchParams(window.location.search);
   if ([...params.keys()].some((key) => key !== "ref")) {
     renderError("任務連結只能帶不透明參考碼，不能帶地址、金額或其他私人欄位。連結不是執行授權。");
+    return;
+  }
+  if (params.getAll("ref").length > 1) {
+    renderError("任務參考碼不能重複。");
     return;
   }
   const ref = params.get("ref");
@@ -357,26 +358,31 @@ function inspectLocation(): void {
 }
 
 document.querySelector("#load-sample")!.addEventListener("click", async () => {
-  const response = await fetch("/sample-task.json");
-  if (!response.ok) {
-    renderError("讀不到合成範例。");
-    return;
+  const generation = ++loadGeneration;
+  try {
+    const response = await fetch("/sample-task.json", { redirect: "error", cache: "no-store", signal: AbortSignal.timeout(10000) });
+    await renderPayload(await boundedJson(response), generation);
+  } catch {
+    if (generation === loadGeneration) renderError("讀不到有效合成範例。");
   }
-  await renderPayload(await response.json());
 });
 
 document.querySelector<HTMLInputElement>("#file")!.addEventListener("change", async (event) => {
+  const generation = ++loadGeneration;
   const file = (event.target as HTMLInputElement).files?.[0];
   if (!file) return;
   try {
-    await renderPayload(JSON.parse(await file.text()) as unknown);
+    if (file.size > 1024 * 1024) throw new Error("檔案超過大小限制");
+    await renderPayload(JSON.parse(await file.text()) as unknown, generation);
   } catch {
-    renderError("這個檔案不是可讀的任務 JSON。");
+    if (generation === loadGeneration) renderError("無效的任務資料。檢查格式、大小、摘要及固定協議規則。");
   }
 });
 
 document.querySelector("#clear")!.addEventListener("click", () => {
+  ++loadGeneration;
   renderEmpty();
+  document.querySelector<HTMLInputElement>("#file")!.value = "";
   banner.textContent = BANNER;
 });
 
