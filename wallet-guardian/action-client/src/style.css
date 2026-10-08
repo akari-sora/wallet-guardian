@@ -374,7 +374,7 @@ h2, h3 { scroll-margin-top: 16px; text-wrap: balance; }
 
 @media (min-width: 960px) {
   .workspace {
-    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+    grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
     gap: var(--space-5);
     align-items: start;
   }
@@ -640,7 +640,8 @@ summary {
   grid-column: 2;
   grid-row: 2;
   color: var(--muted);
-  font-size: 1rem;
+  font-size: 0.9375rem;
+  font-weight: 400;
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -810,6 +811,20 @@ summary {
   background-color: var(--danger);
   -webkit-mask-image: var(--glyph-alert);
   mask-image: var(--glyph-alert);
+}
+
+/* 401 on /t/<ref>: a "log in first" state, presented as guidance rather than a failure. */
+#view.error[data-tone="login"] {
+  border: 1px solid var(--info);
+  background: var(--info-bg);
+  color: var(--info);
+  font-weight: 600;
+}
+
+#view.error[data-tone="login"]::before {
+  background-color: var(--info);
+  -webkit-mask-image: var(--glyph-lock);
+  mask-image: var(--glyph-lock);
 }
 
 #view.card { padding: var(--space-4) var(--space-4) var(--space-5); }

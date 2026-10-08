@@ -682,7 +682,13 @@ function paintStatus(rootId: string, valueId: string, value: string, state: stri
   if (root?.dataset) root.dataset.state = state;
 }
 
+// The 401 message from loadPrivateTask() is a "please log in" state, not a failure.
+function needsLoginView(): boolean {
+  return view.className === "error" && (view.textContent ?? "").startsWith("這個任務要先登入");
+}
+
 function taskStatusLabel(): string {
+  if (needsLoginView()) return "需要登入";
   if (view.className === "error") return "無法顯示";
   if ((view.textContent ?? "").startsWith("未執行任務已取消")) return "已取消";
   if (view.className === "empty") return "尚未載入";
@@ -710,6 +716,15 @@ function walletStatusLabel(): { text: string; state: string } {
 }
 
 function paintStatusChips(): void {
+  // Presentation must never interrupt a login, wallet, or task path.
+  try {
+    paintStatusChipsUnsafe();
+  } catch {
+    // Chips keep their previous text; the authoritative state lives in #session, #verify and #view.
+  }
+}
+
+function paintStatusChipsUnsafe(): void {
   const loggedIn = Boolean(csrfToken && sessionAddress);
   paintStatus(
     "#chip-login",
@@ -723,7 +738,8 @@ function paintStatusChips(): void {
   const chainMismatch = walletChainId != null && lastPlan != null && walletChainId !== lastPlan.chain_id;
   paintStatus("#chip-chain", "#chip-chain-value", chainText, chainMismatch ? "warn" : chainText === "未知" ? "idle" : "ok");
   const taskText = taskStatusLabel();
-  const taskState = taskText === "無法顯示" ? "danger" : taskText === "已取消" ? "warn" : taskText === "已載入" || taskText === "本機計畫" ? "ok" : "idle";
+  if (view.dataset) view.dataset.tone = needsLoginView() ? "login" : "";
+  const taskState = taskText === "無法顯示" ? "danger" : taskText === "已取消" || taskText === "需要登入" ? "warn" : taskText === "已載入" || taskText === "本機計畫" ? "ok" : "idle";
   paintStatus("#chip-task", "#chip-task-value", taskText, taskState);
   const sendValue = document.querySelector<HTMLElement>("#chip-send-value");
   if (sendValue) sendValue.textContent = "允許實際送出：關閉";
