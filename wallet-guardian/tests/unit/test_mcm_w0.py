@@ -295,14 +295,14 @@ def test_mcm_w0_02_readonly_boundary_monitoring_modules():
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         parsed.append(relative)
-        monitoring = path.name in MONITOR_NAMES or (relative.parts and relative.parts[0] == "security")
-        if not monitoring:
-            continue
+        # Every non-action, non-wiring module is on the monitor side, including the
+        # MCM modules added by later packages (sources/, configuration, identities ...).
         assert not _imports_actions(tree), relative
         assert _forbidden_uses(tree, allow_deny_list=path.name == "rpc_guard.py") == [], relative
 
     parsed_names = {path.name for path in parsed}
     assert {"domain.py", "amounts.py", "network_registry.py", "rpc_guard.py"} <= parsed_names
+    assert MONITOR_NAMES <= parsed_names
     assert "service.py" not in parsed_names and "cli.py" not in parsed_names
     assert _imports_actions(ast.parse((SRC / "service.py").read_text(encoding="utf-8")))
     assert _imports_actions(ast.parse((SRC / "cli.py").read_text(encoding="utf-8")))

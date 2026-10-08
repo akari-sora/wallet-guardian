@@ -43,6 +43,7 @@ _DEFAULT_TIER_PLAN = _ROOT / "docs" / "mcm-01" / "network-tiers.plan.json"
 _ADDRESS = re.compile(r"(?<![0-9A-Fa-f])0x[0-9A-Fa-f]{40}(?![0-9A-Fa-f])")
 _SYNTHETIC_ADDRESS = re.compile(r"0x0{39}[0-9A-Fa-f]$", re.IGNORECASE)
 _SECRET_MARKERS = ("apikey=", "glpat-", "nodereal.io/v1/")
+_RETRIEVED = re.compile(r"20[0-9]{2}-[01][0-9]-[0-3][0-9]")
 
 
 class RegistryError(ValueError):
@@ -223,8 +224,8 @@ def _validate_entry(entry: dict[str, Any]) -> None:
             raise RegistryError(f"source url looks like a secret: {network}")
         if not isinstance(kind, str) or not kind.strip():
             raise RegistryError(f"source kind is empty: {network}")
-        if retrieved != "2026-10-08":
-            raise RegistryError(f"source retrieved date is not the package date: {network}")
+        if not isinstance(retrieved, str) or _RETRIEVED.fullmatch(retrieved) is None:
+            raise RegistryError(f"source retrieved date must be YYYY-MM-DD: {network}")
 
 
 def _read_tier_plan(path: Path) -> list[dict[str, Any]]:
