@@ -1,0 +1,246 @@
+{
+  "adapter": "nodereal_transfers",
+  "allowed_operations": [
+    {
+      "method": "eth_blockNumber",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "eth_call",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "eth_chainId",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "eth_feeHistory",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "eth_gasPrice",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "eth_getBalance",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "eth_getBlockByHash",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "eth_getBlockByNumber",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "eth_getCode",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "eth_getLogs",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "eth_getStorageAt",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "eth_getTransactionByHash",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "eth_getTransactionCount",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "eth_getTransactionReceipt",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "net_version",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "nr_getAssetTransfers",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "web3_clientVersion",
+      "protocol": "jsonrpc"
+    }
+  ],
+  "backend": "nodereal",
+  "capabilities": {
+    "address_risk": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "asset_risk": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.fungible": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.native": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.nft": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "bridges": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "exposure_news": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "history.fungible": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "history.native_external": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "history.native_internal": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "history.nft": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.cosmos_authz": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.cosmos_feegrant": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.erc1155_operator": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.erc20": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.erc721_operator": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.erc721_token": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.move_capability": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.spl_authority": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.spl_delegate": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.ton_extensions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.tron_account": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permits.dai_variant": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permits.erc2612_observed": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permits.offchain_unused": {
+      "notes": "未提交的離線簽名不可觀察，不能標成 complete。",
+      "probe": "documented",
+      "support": "not_observable"
+    },
+    "permit2.allowance": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permit2.signature_usage": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "positions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "sanctions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "withdrawals": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    }
+  },
+  "families": [
+    "evm"
+  ],
+  "limits": [
+    {
+      "name": "nr_getAssetTransfers",
+      "notes": "文件記載區塊跨度最多 100,000、maxCount 最大 1000（0x3E8），後續頁用 pageKey。本包只把這個額度記在 BSC 與 ETH，不外推到 getLogs 或其他鏈。",
+      "retrieved": "2026-10-08",
+      "source_url": "https://docs.nodereal.io/reference/nr_getassettransfers",
+      "max_block_span": 100000,
+      "max_count": 1000
+    }
+  ],
+  "networks": [
+    "ethereum-mainnet",
+    "bsc-mainnet"
+  ],
+  "notes": "nr_getAssetTransfers 文件的區塊跨度最多 100,000，maxCount 1000，並用 pageKey。本包點名的是 BSC 與 ETH。這不是 getLogs 的額度，也不套到其他鏈。單頁不是完整歷史。沒有 live 驗證。",
+  "probe": "untested",
+  "protocol": "jsonrpc"
+}

@@ -180,6 +180,27 @@ W1 在這個分支落地公開設定、私人帳戶與穩定身份。上面「�
 
 POSIX 上帳戶檔與秘密檔要是擁有者才可讀寫（0600 這一類，群組與其他人不可讀）。狀態目錄建立為 0700。Windows 不檢查這組權限位元。日誌不印秘密值。這裡不寫真實路徑、地址或 key。
 
+## W2 實作狀態
+
+W2 在這個分支加上唯讀 transport、共享預算、有限重試、分頁上限、來源切換與端點政策。鏈 adapter 還沒有。`run-once`、`SnapshotCycle`、Lista 與 CLI 的行為沒有改。
+
+現在有的東西：
+
+- `guardian.security.transport_policy` 在碰到 socket 之前拒絕寫入、簽名、廣播，以及批次裡夾帶的那一筆。允許的是操作語義，不是 HTTP 方法：唯讀 POST 可以，GET 的廣播不行。JSON-RPC 方法整段比對，不折大小寫，不去空白，也不吃前綴。
+- `guardian.sources` 是新套件。既有的 `providers.py` 仍是那個模組，沒有同名 package 蓋住它。
+- 同一個 `budget_group` 共用一個 token bucket、併發上限、每日次數與每月 credits。低優先先被拒絕。高優先與 health 可以用到硬上限。額度用盡會 raise，不會靜默跳過，也不會把失敗寫成 0。用量寫到私人狀態目錄的 `provider-usage/`，POSIX 上是 0600。
+- 429 會看 Retry-After（秒數或 HTTP-date），等待有上限。5xx、逾時、連線錯誤會有限重試，每一次都扣預算。400、401、403、404 不重試。401 是 `credential_rejected`，403 是 `forbidden`，來源視為 BLOCKED。Etherscan HTTP 200 且內容是 rate limit 會重試；`No transactions found` 是該次查詢的空結果，不是失敗變 0。JSON-RPC 的 error 物件不是空歷史。
+- 分頁走到 page cap、item cap、預算或錯誤時，`pagination_complete` 是 false。
+- `SourceRouter` 只對該來源在該網路上宣告了的能力做 fallback。沒有的能力是 `fallback_lacks_capability`，quality 是 unknown 或 error，不會是 complete。全部失敗回傳 error，不回傳空陣列或 0，也不覆蓋舊值。不同網域、同一個 `backend` 只算一個獨立來源；quorum 不夠會拒絕。
+- 端點只來自私人 profile 或環境變數解出來的登錄。任務、metadata、回應內容不能新增或改 RPC URL。重新導向不自動跟著走；每一跳都再檢查，而且必須留在同一個已登錄的 host。每次請求都看 DNS。私網、loopback、LAN 只有私人 profile 的 `allow_private_network: true` 才開放。公開設定不能帶這個旗標。
+- `config/source-capabilities/` 每個 adapter 一份。support 只有 `partial`、`unsupported`、`not_applicable`、`not_observable`。probe 只有 `documented` 或 `untested`。沒有 `live_pass`。`permits.offchain_unused` 維持 `not_observable`。Etherscan 不把 opBNB 列進來（API 支援 2026-10-12 停止）。Sui 不用 JSON-RPC。TON Center v2 與 v3 的 backend 都是 `toncenter`。
+
+還沒接上的東西：
+
+- 沒有鏈 adapter，沒有餘額、歷史、權限或風險的解碼。能力檔裡的 `partial` 只表示這個來源以後打算讀那一格，不是這次已經讀到。
+- gRPC 只有方法名稱的 allowlist，沒有 gRPC 客戶端，也沒有新的相依套件。
+- 沒有任何 live 來源驗證。fixture 通過不是節點通過。缺 key 仍是 BLOCKED，不是已驗證，也不是沒有資產。
+
 ## 本包明確沒做的事
 
 - 沒有修改 `action-client/`、`.gitlab-ci.yml` 或部署設定。

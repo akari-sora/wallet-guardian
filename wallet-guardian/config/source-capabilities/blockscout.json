@@ -1,0 +1,188 @@
+{
+  "adapter": "blockscout",
+  "allowed_operations": [
+    {
+      "http_method": "GET",
+      "path": "*",
+      "protocol": "rest"
+    }
+  ],
+  "backend": "blockscout",
+  "capabilities": {
+    "address_risk": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "asset_risk": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.fungible": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.native": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "balances.nft": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "bridges": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "exposure_news": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "history.fungible": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "history.native_external": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "history.native_internal": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "history.nft": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.cosmos_authz": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.cosmos_feegrant": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.erc1155_operator": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.erc20": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.erc721_operator": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.erc721_token": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.move_capability": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.spl_authority": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.spl_delegate": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.ton_extensions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.tron_account": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permits.dai_variant": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permits.erc2612_observed": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permits.offchain_unused": {
+      "notes": "未提交的離線簽名不可觀察，不能標成 complete。",
+      "probe": "documented",
+      "support": "not_observable"
+    },
+    "permit2.allowance": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permit2.signature_usage": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "positions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "sanctions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "withdrawals": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    }
+  },
+  "families": [
+    "evm"
+  ],
+  "limits": [],
+  "networks": [
+    "ethereum-mainnet",
+    "bsc-mainnet",
+    "arbitrum-one",
+    "base-mainnet",
+    "optimism-mainnet",
+    "polygon-pos",
+    "avalanche-c",
+    "linea-mainnet",
+    "zksync-era",
+    "scroll-mainnet",
+    "mantle-mainnet",
+    "sonic-mainnet",
+    "unichain-mainnet",
+    "hyperevm-mainnet",
+    "blast-mainnet",
+    "opbnb-mainnet"
+  ],
+  "notes": "鏈別 indexer 或使用者提供的同能力來源。原生幣查到了不能把 history、token、permissions 升級成完整覆蓋。兩個網域若是同一個營運者，backend 仍是一個。本檔沒有 live 驗證。",
+  "probe": "untested",
+  "protocol": "rest"
+}

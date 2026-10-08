@@ -5,3 +5,4 @@ schemas/*.json text eol=lf
 examples/*.json text eol=lf
 config/chains/*.json text eol=lf
 docs/mcm-01/*.json text eol=lf
+config/source-capabilities/*.json text eol=lf

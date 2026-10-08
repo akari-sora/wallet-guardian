@@ -1,0 +1,219 @@
+{
+  "adapter": "sui_grpc",
+  "allowed_operations": [
+    {
+      "method": "sui.rpc.v2.LedgerService/BatchGetObjects",
+      "protocol": "grpc"
+    },
+    {
+      "method": "sui.rpc.v2.LedgerService/GetCheckpoint",
+      "protocol": "grpc"
+    },
+    {
+      "method": "sui.rpc.v2.LedgerService/GetEpoch",
+      "protocol": "grpc"
+    },
+    {
+      "method": "sui.rpc.v2.LedgerService/GetObject",
+      "protocol": "grpc"
+    },
+    {
+      "method": "sui.rpc.v2.LedgerService/GetServiceInfo",
+      "protocol": "grpc"
+    },
+    {
+      "method": "sui.rpc.v2.LedgerService/GetTransaction",
+      "protocol": "grpc"
+    },
+    {
+      "method": "sui.rpc.v2.StateService/GetBalance",
+      "protocol": "grpc"
+    },
+    {
+      "method": "sui.rpc.v2.StateService/GetCoinInfo",
+      "protocol": "grpc"
+    },
+    {
+      "method": "sui.rpc.v2.StateService/ListBalances",
+      "protocol": "grpc"
+    },
+    {
+      "method": "sui.rpc.v2.StateService/ListDynamicFields",
+      "protocol": "grpc"
+    },
+    {
+      "method": "sui.rpc.v2.StateService/ListOwnedObjects",
+      "protocol": "grpc"
+    }
+  ],
+  "backend": "sui-grpc",
+  "capabilities": {
+    "address_risk": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "asset_risk": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.fungible": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.native": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "balances.nft": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "bridges": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "exposure_news": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "history.fungible": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "history.native_external": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "history.native_internal": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "history.nft": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.cosmos_authz": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.cosmos_feegrant": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.erc1155_operator": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.erc20": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.erc721_operator": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.erc721_token": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.move_capability": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.spl_authority": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.spl_delegate": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.ton_extensions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.tron_account": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permits.dai_variant": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permits.erc2612_observed": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permits.offchain_unused": {
+      "notes": "未提交的離線簽名不可觀察，不能標成 complete。",
+      "probe": "documented",
+      "support": "not_observable"
+    },
+    "permit2.allowance": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permit2.signature_usage": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "positions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "sanctions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "withdrawals": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    }
+  },
+  "families": [
+    "sui"
+  ],
+  "limits": [
+    {
+      "name": "json_rpc_retired",
+      "notes": "Sui JSON-RPC 不作為來源。這裡不記載一個未經驗證的數值額度。",
+      "retrieved": "2026-10-08",
+      "source_url": "https://docs.sui.io/references/sui-api"
+    }
+  ],
+  "networks": [
+    "sui-mainnet"
+  ],
+  "notes": "Sui JSON-RPC 不使用。gRPC 只有唯讀方法名稱的 allowlist，這個套件沒有 gRPC 客戶端。ExecuteTransaction 與 SimulateTransaction 在政策層拒絕。沒有 live 驗證。",
+  "probe": "untested",
+  "protocol": "grpc"
+}
