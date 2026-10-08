@@ -243,6 +243,31 @@ def test_mcm_live_l0_04_configured_indexer_protocol_path(tmp_path: Path, monkeyp
     assert "credential_missing" not in external["reason_codes"]
 
 
+def test_mcm_live_l0_04_position_interest_drift_does_not_realert(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """MCM-LIVE-L0-04. Small interest drift is quiet. A material move alerts once."""
+    desk = _desk(tmp_path, monkeypatch)
+    _three_rounds(desk, capsys)
+    argv = ["run-once", "--mcm-config", str(desk.config), "--no-send"]
+
+    def position_rows() -> list[dict]:
+        return [row for row in _outbox(desk) if row["payload"]["kind"] == "position_change"]
+
+    assert len(position_rows()) == 1
+    desk.backend.aave = (100, 41, 1, 1, 1, 2 * WEI + WEI // 50)
+    assert _cli(capsys, desk, argv)["outbox_written"] == 0
+    desk.backend.aave = (100, 43, 1, 1, 1, 2 * WEI + WEI // 25)
+    assert _cli(capsys, desk, argv)["outbox_written"] == 0
+    assert len(position_rows()) == 1
+    desk.backend.aave = (100, 44, 1, 1, 1, 2 * WEI + WEI // 20)
+    moved = _cli(capsys, desk, argv)
+    assert moved["outbox_written"] == 1
+    assert len(position_rows()) == 2
+    assert _cli(capsys, desk, argv)["outbox_written"] == 0
+    desk.backend.aave = (100, 44, 1, 1, 1, WEI + WEI // 5)
+    assert _cli(capsys, desk, argv)["outbox_written"] == 1
+    assert len(position_rows()) == 3
+
+
 def test_mcm_live_l0_05_non_native_health_and_missing_required_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """MCM-LIVE-L0-05. Non-native failure, a vanished required key, and recovery."""
     desk = _desk(tmp_path, monkeypatch, interval=60)

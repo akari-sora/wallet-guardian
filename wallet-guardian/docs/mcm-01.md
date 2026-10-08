@@ -392,3 +392,10 @@ L0 只把已經做好的讀取接到公開 CLI `guardian run-once --mcm-config -
 | G7 送出租約比外部接受更長，本地崩潰後可能重送 | 已知缺口，留給 L4（`mcm/single-channel-delivery`，MCM-LIVE-L4-03／04／05）。本包不改 `delivery.py`。 | 文件紀錄，沒有改送出語意 |
 
 基準輪只出摘要。同一鏈狀態重跑不新增 outbox 列。`test_mcm_live_l0_08_baseline_evidence_no_synthetic_live_pass` 鎖定基準標籤與 `live_verified: false`。
+
+Reviewer 補充（L0 review）：
+
+- 部位事件只在實質變化時產生：出現、消失、資產或債務腿改變、`collateral_base`／`debt_base`／腿數量相對上次參考狀態變動至少 10%，或 health factor 跨過 1.1／1.25／1.5／2 的區間。儲存的 prior 是上次參考狀態（基準或上次告警），所以利息慢慢累積到 10% 仍會告警一次。`test_mcm_live_l0_04_position_interest_drift_does_not_realert` 鎖定這條。
+- watchdog 判定最新 run 過期的門檻是 2 倍輪詢間隔，跟 `last_success_at` 一致，避免獨立觸發的 watchdog 在下一輪跑完前誤報失明。
+- `compare-legacy` 只比對有完整事件身份（錢包、鏈、交易、位置、種類、標的）的舊紀錄。現行舊例行的 state 只有 `alerted` 字串與 `latest_seen`，沒有 `events` 清單，所以對真實舊 state 比較時會全部落在 `uncomparable`。把舊例行輸出轉成事件列的工作屬於 L3（`ops/mcm-shadow-evidence`，legacy import／comparison 更新），正式 shadow 計數前要完成。
+

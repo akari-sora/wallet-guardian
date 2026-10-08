@@ -182,7 +182,8 @@ def _finished_stale(report: Any, now: datetime, interval: int) -> bool:
         previous = _parse(finished)
     except ValueError:
         return True
-    return (now - previous).total_seconds() > interval
+    # Same grace as last_success_at: a scheduled run plus its own duration is not blind.
+    return (now - previous).total_seconds() > 2 * interval
 
 
 def _shrunk(previous: Any, current: Any) -> bool:

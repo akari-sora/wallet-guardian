@@ -10,6 +10,7 @@ import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import uuid4
 
@@ -1186,12 +1187,15 @@ def _read_positions(
             "status": observation.status,
             "wallet_id": wallet_id,
         })
-        if observation.status == "unknown" and isinstance(prior, dict):
+        change = _position_change(prior, observation)
+        if isinstance(prior, dict) and (
+            observation.status == "unknown"
+            or (change is None and prior.get("status") == observation.status)
+        ):
             stored = dict(prior)
         else:
             stored = _position_record(plugin_id, observation)
         position_state.setdefault((wallet_id, network), []).append(stored)
-        change = _position_change(prior, observation)
         if change:
             candidates.append(Candidate(
                 tenant_id=tenant,
@@ -1239,7 +1243,17 @@ def _position_fingerprint(observation) -> str:
     return "|".join(parts)
 
 
+_POSITION_RELATIVE = Decimal("0.10")
+_HEALTH_BANDS = (Decimal("1.1"), Decimal("1.25"), Decimal("1.5"), Decimal("2"))
+_WAD = Decimal(10) ** 18
+
+
 def _position_change(prior: Any, observation) -> str | None:
+    """Material change only. Interest drift inside the bands is not an event.
+
+    The stored prior is the last reference state (baseline or last alert), so slow drift
+    still alerts once it adds up to a material change.
+    """
     if observation.status == "unknown":
         return None
     if not isinstance(prior, dict) or prior.get("status") in {None, "unknown"}:
@@ -1251,18 +1265,52 @@ def _position_change(prior: Any, observation) -> str | None:
         return "disappeared"
     old_metrics = prior.get("metrics") if isinstance(prior.get("metrics"), dict) else {}
     new_metrics = {key: value for key, value in observation.metrics}
-    for key in ("collateral_base", "debt_base", "health_factor"):
-        if str(old_metrics.get(key, "")) != str(new_metrics.get(key, "")) and (key in old_metrics or key in new_metrics):
+    for key in ("collateral_base", "debt_base"):
+        if _material(old_metrics.get(key), new_metrics.get(key)):
             return "changed"
+    if _health_band(old_metrics.get("health_factor")) != _health_band(new_metrics.get("health_factor")):
+        return "changed"
     old_legs = {
         (item.get("kind"), item.get("identity")): item.get("raw_amount")
         for item in prior.get("legs") or []
         if isinstance(item, dict)
     }
     new_legs = {(leg.kind, leg.identity): leg.raw_amount for leg in observation.legs}
-    if old_legs != new_legs:
+    if set(old_legs) != set(new_legs):
         return "changed"
+    for key, value in new_legs.items():
+        if _material(old_legs.get(key), value):
+            return "changed"
     return None
+
+
+def _material(old: Any, new: Any) -> bool:
+    left = _decimal_or_none(old)
+    right = _decimal_or_none(new)
+    if left is None and right is None:
+        return False
+    if left is None or right is None:
+        return True
+    if left == 0:
+        return right != 0
+    return abs(right - left) / abs(left) >= _POSITION_RELATIVE
+
+
+def _health_band(value: Any) -> int | None:
+    number = _decimal_or_none(value)
+    if number is None:
+        return None
+    ratio = number / _WAD
+    return sum(1 for band in _HEALTH_BANDS if ratio >= band)
+
+
+def _decimal_or_none(value: Any) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
 
 
 def _load_position_state(database: Database, tenant: str) -> dict[tuple[str, str, str], dict[str, Any]]:
