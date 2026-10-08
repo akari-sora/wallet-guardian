@@ -431,6 +431,7 @@ Reviewer 在 2026-10-09 用唯讀 `eth_call` 看過：BSC 與 Ethereum 上 `getP
 - Kinza 插件先對 Provider／Pool，再讀 `getUserAccountData`。準備金用鏈上 `getReservesList()`，再讀 `getReserveData` 的 word 8／10，並核對 aToken 與 variable debt 的 `POOL()` 與 `UNDERLYING_ASSET_ADDRESS()`。對不上是 `reserve_identity_mismatch`。帳戶總額沒有對應的腿是 `reserves_incomplete`。單次超過 40 個準備金是 `reserve_bound`，不會把讀到一半當成完整部位。
 - UXLINK 持倉走同一條 L0 插件路徑（`uxlink-holdings`）。部位摘要與部位變化告警帶著舊幣標籤。
 - `run-once` 可選 `--news-input`（呼叫端給的 RSS／Atom 或既有結構化列，不抓取，來源標成 `caller_supplied`）與 `--price-input`。Kinza 新聞只連到觀察到的 Kinza 部位，或 spender 是 Kinza Pool 的有效授權。UXLINK 新聞只連到釘死代幣的有效授權，或 UXLINK 持倉腿。沒有部位也沒有有效授權就沒有通知。部位 unknown 時每個錢包一筆去重的 `exposure_unknown`，不是損失告警。沒有 `--news-input` 時 `exposure_news` 維持缺口（`news_not_supplied`），不是「沒有新聞」。
+- 有效授權存在 `permissions.erc20` 的 capability state（`active_approvals`，依錢包與網路）。每輪只用這輪讀到的列更新：`active` 加入或更新，其他狀態（revoked／consumed／expired／inactive）移除。授權讀取失敗或游標被 hold 時保留上一輪的集合，不清空。所以前幾輪給 Kinza Pool 的授權，之後才來的新聞仍會連上；撤銷之後就不會。
 
 還沒做的：
 
@@ -439,4 +440,5 @@ Reviewer 在 2026-10-09 用唯讀 `eth_call` 看過：BSC 與 Ethereum 上 `getP
 - opBNB Kinza 與 Mantle UXLINK 只有文件，沒有插件網路。
 - 沒有改 `action-client`、送出語意、`.gitlab-ci.yml`，也沒有把 Pool 放進執行白名單。
 - 例子設定 `examples/monitor.json` 的插件清單維持 L0 的三個，避免既有測試把 Kinza 當成預設啟用。
+- Kinza 讀取成本沒有快取：每錢包每輪約為準備金數 × 9 個 `eth_call`（BSC 25、Ethereum 15 個準備金）。L2／L3 量預算時要算進去；之後可以把準備金 metadata 做成每輪跨錢包共用。
 

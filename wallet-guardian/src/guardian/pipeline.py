@@ -139,6 +139,7 @@ def run_capability_pipeline(
     seen = _seen(database, tenant)
     stored_cursors = _stored_cursors(database, tenant)
     position_prior = _load_position_state(database, tenant)
+    approval_state = _load_approval_state(database, tenant)
     previous_native = _previous_native(database, tenant)
     events: list[ChainEvent] = []
     seen_transfers: set[tuple[str, ...]] = set()
@@ -147,7 +148,6 @@ def run_capability_pipeline(
     position_state: dict[tuple[str, str], list[dict[str, Any]]] = {}
     position_summaries: list[dict[str, Any]] = []
     position_rows: list[Any] = []
-    active_approvals: list[dict[str, Any]] = []
     position_labels: dict[str, list[dict[str, Any]]] = {}
     news_book = None
     news_reason = "news_not_supplied"
@@ -169,7 +169,7 @@ def run_capability_pipeline(
                 explicit_cursors=explicit_cursors,
                 held_cursors=held_cursors,
                 started=started,
-                active_approvals=active_approvals,
+                active_approvals=approval_state,
             )
         elif family == "solana":
             _read_solana(
@@ -200,6 +200,7 @@ def run_capability_pipeline(
             payload["labels"] = labels
         alerts.append(payload)
     if news_book is not None:
+        active_approvals = _active_from_state(approval_state, enabled)
         for notice in link_exposure(news_book.incidents, _wallet_exposures(position_rows, active_approvals)):
             alerts.append(exposure_alert(tenant, notice, _notice_network(notice.wallet_id, position_rows, active_approvals)))
     cursors = _merge_cursors(observations, explicit_cursors, held_cursors)
@@ -208,7 +209,7 @@ def run_capability_pipeline(
         incoming=_incoming(native_reads, registry),
         results=_result_map(native_reads, registry),
         events=events,
-        capability_rows=_storage_rows(rows, position_state),
+        capability_rows=_storage_rows(rows, position_state, approval_state),
         cursors=cursors,
         alerts=alerts,
     )
@@ -1014,21 +1015,32 @@ def _read_approvals(
     for capability in _PERMISSION_CAPABILITIES:
         _advance_cursor(explicit_cursors, held_cursors, wallet_id, network, capability, head if head is not None else ranges[-1][1])
     seen_rows: set[tuple[Any, ...]] = set()
-    seen_active: set[tuple[str, str, str, str]] = set()
+    # active_approvals is the persisted approval state keyed by (wallet, network).
+    # Rows read this run update it: active adds, any other status removes. A failed
+    # read returns earlier and keeps the stored state untouched.
+    merged = {
+        (str(item.get("token")), str(item.get("spender"))): dict(item)
+        for item in active_approvals.get((wallet_id, network), [])
+        if isinstance(item, dict)
+    }
+    for scan in scans:
+        for row in scan.rows:
+            pair = (str(row.token).lower(), str(row.spender).lower())
+            if row.status == "active":
+                merged[pair] = {
+                    "network": network,
+                    "spender": pair[1],
+                    "status": "active",
+                    "token": pair[0],
+                    "wallet_id": wallet_id,
+                }
+            else:
+                merged.pop(pair, None)
+    active_approvals[(wallet_id, network)] = [merged[key] for key in sorted(merged)]
     for scan in scans:
         for row in scan.rows:
             if row.status != "active":
                 continue
-            active_key = (wallet_id, network, str(row.token), str(row.spender))
-            if active_key not in seen_active:
-                seen_active.add(active_key)
-                active_approvals.append({
-                    "network": network,
-                    "spender": row.spender,
-                    "status": row.status,
-                    "token": row.token,
-                    "wallet_id": wallet_id,
-                })
             if "unlimited" not in row.flags and row.change not in _APPROVAL_ALERTS:
                 continue
             marker = (row.tx_id, row.log_index, row.token, row.spender, row.change)
@@ -1448,6 +1460,24 @@ def _decimal_or_none(value: Any) -> Decimal | None:
         return None
 
 
+def _load_approval_state(database: Database, tenant: str) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    """Active approvals persisted by earlier runs, keyed by (wallet, network)."""
+    found: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in database.capability_state_for(tenant):
+        if row["capability"] != "permissions.erc20":
+            continue
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        state = payload.get("active_approvals")
+        if isinstance(state, list):
+            found[(row["wallet_id"], row["network"])] = [item for item in state if isinstance(item, dict)]
+    return found
+
+
+def _active_from_state(state: Mapping[tuple[str, str], list[dict[str, Any]]], enabled) -> list[dict[str, Any]]:
+    pairs = {(account.wallet_id, network) for account, network in enabled}
+    return [item for key in sorted(state) if key in pairs for item in state[key]]
+
+
 def _load_position_state(database: Database, tenant: str) -> dict[tuple[str, str, str], dict[str, Any]]:
     found: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in database.capability_state_for(tenant):
@@ -1530,7 +1560,11 @@ def _health_from_observation(observation: CoverageObservation | None) -> str:
     return "unknown"
 
 
-def _storage_rows(rows: list[dict[str, Any]], position_state: Mapping[tuple[str, str], list[dict[str, Any]]]) -> list[dict[str, Any]]:
+def _storage_rows(
+    rows: list[dict[str, Any]],
+    position_state: Mapping[tuple[str, str], list[dict[str, Any]]],
+    approval_state: Mapping[tuple[str, str], list[dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
     stored = []
     for row in rows:
         scope = row.get("scope") if isinstance(row.get("scope"), dict) else {}
@@ -1538,6 +1572,8 @@ def _storage_rows(rows: list[dict[str, Any]], position_state: Mapping[tuple[str,
         key = (row["wallet_id"], row["network"])
         if row["capability"] == "positions" and key in position_state:
             payload["position_state"] = position_state[key]
+        if row["capability"] == "permissions.erc20" and approval_state is not None and key in approval_state:
+            payload["active_approvals"] = approval_state[key]
         stored.append({
             "capability": row["capability"],
             "cursor": scope.get("cursor"),

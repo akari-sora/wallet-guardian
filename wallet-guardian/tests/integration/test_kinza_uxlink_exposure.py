@@ -581,6 +581,43 @@ def test_mcm_live_l1_06_position_or_permission_news_relevance(
     assert [row for row in _outbox(unknown) if row["id"] not in again] == []
 
 
+def test_mcm_live_l1_06_earlier_approval_still_links_later_news(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """MCM-LIVE-L1-06. An approval from an earlier round still links news that arrives later."""
+    wallet = _wallet(1)
+    owner = _addr(1)
+    network = "bsc-mainnet"
+    desk = _desk(tmp_path, monkeypatch, [_account(wallet, owner, (network,))], ["kinza"])
+    _install_kinza(desk.backend, network)
+    _cli(capsys, desk, _argv(desk))
+    desk.backend.head = 130
+    desk.backend.logs = [_approval_log(network, TOKEN, owner, KINZA_POOLS[network], _tx(31), 125, 1)]
+    _cli(capsys, desk, _argv(desk))
+    assert len(_of_kind(_outbox(desk), "first_observed")) == 1
+    assert not _of_kind(_outbox(desk), "exposure")
+    desk.backend.head = 1000
+    news = _news_file(tmp_path, _incidents())
+    _cli(capsys, desk, _argv(desk, news))
+    notices = _of_kind(_outbox(desk), "exposure")
+    assert len(notices) == 1
+    assert notices[0]["payload"]["wallet_id"] == wallet
+    assert notices[0]["payload"]["via"] == "approval"
+    assert notices[0]["payload"]["protocols"] == ["kinza"]
+    assert len(_of_kind(_outbox(desk), "first_observed")) == 1
+    desk.backend.head = 1100
+    _cli(capsys, desk, _argv(desk, news))
+    assert len(_of_kind(_outbox(desk), "exposure")) == 1
+    revoke = _approval_log(network, TOKEN, owner, KINZA_POOLS[network], _tx(32), 1150, 1)
+    revoke["data"] = "0x" + (0).to_bytes(32, "big").hex()
+    desk.backend.logs.append(revoke)
+    desk.backend.answers[(HOST[network], TOKEN.lower(), SEL_ALLOWANCE, None)] = _abi(["uint256"], [0])
+    desk.backend.head = 1200
+    later = [dict(_incidents()[0], url="https://news.example.invalid/pool-note-2", title="Second documented pool note")]
+    _cli(capsys, desk, _argv(desk, _news_file(tmp_path / "later", later)))
+    assert len(_of_kind(_outbox(desk), "exposure")) == 1
+
+
 def _install_kinza(backend: ChainBackend, network: str, **flags: object) -> None:
     host = HOST[network]
     pool = KINZA_POOLS[network]
