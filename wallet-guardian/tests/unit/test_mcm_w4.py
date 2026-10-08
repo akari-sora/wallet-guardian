@@ -896,3 +896,18 @@ def test_mcm_w4_04_unknown_topic_layout_is_unknown():
     assert all(item.raw_amount != "0" for item in ledger.movements)
     assert ledger.net(TOKEN) == 0
     assert ledger.inbound(TOKEN) == 0
+
+
+def test_mcm_w4_03_etherscan_real_empty_shape_is_empty_not_partial():
+    # Shape observed from the live Etherscan V2 API (synthetic here): message carries the
+    # text and result is an empty list. It is a complete empty answer for that query.
+    from guardian.sources.retry import classify_response
+
+    empty = classify_response(200, {"status": "0", "message": "No transactions found", "result": []})
+    assert (empty.category, empty.quality) == ("empty", "complete_in_declared_scope")
+    legacy = classify_response(200, {"status": "0", "message": "NOTOK", "result": "No records found"})
+    assert legacy.category == "empty"
+    not_empty = classify_response(200, {"status": "0", "message": "No transactions found", "result": [{"hash": "0x" + "ab" * 32}]})
+    assert not_empty.category == "partial"
+    limited = classify_response(200, {"status": "0", "message": "NOTOK", "result": "Max rate limit reached"})
+    assert limited.category == "rate_limited" and limited.retryable

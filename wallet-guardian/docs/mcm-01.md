@@ -248,3 +248,7 @@ W4 在這個分支加上 T0 七條 EVM 的資產與歷史讀取。上面 W3「�
 - 沒有 live 來源驗證。fixture 通過不是節點通過。沒有 `live_pass`。缺 key 仍是 BLOCKED，不是已驗證，也不是沒有資產。
 - 真的要打來源時，操作者自己提供 `ETHERSCAN_API_KEY`、各鏈的 EVM RPC endpoint，以及選用的 NodeReal endpoint。公開設定只放環境變數名稱，不放 key，也不放帶 key 的 URL。
 - 權限與 permit 是 W5，不在這包。
+
+W4 審查補充：
+- Etherscan V2 實際的空結果是 `{"status":"0","message":"No transactions found","result":[]}`（文字在 message、result 是空陣列）。W2 的分類原本只認 result 是字串，會把它當 `partial`；已修正為 `empty`（該查詢範圍內完整），非空陣列仍是 `partial`。
+- 2026-10-08 審查者在 box 上的唯讀 smoke（只查公開合約，key 遮罩，結果未寫入設定）：Ethereum 的 txlist／tokentx 正常回 ok／empty；用同一把免費 key 查 BSC 回 `plan_not_supported`（BLOCKED，不是空錢包）。這不是 live_pass，能力檔的 probe 仍是 untested。
