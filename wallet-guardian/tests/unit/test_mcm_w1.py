@@ -594,21 +594,29 @@ def test_mcm_w1_03_state_migration_preserves_rows_and_reopen_is_idempotent(tmp_p
         assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 1
         assert "mcm_schema_migrations" in db.table_names()
         assert "wallet_identities" in db.table_names()
+        assert "chain_events" in db.table_names()
         recorded = db.conn.execute(
-            "SELECT migration_id, sha256, applied_at FROM mcm_schema_migrations"
+            "SELECT migration_id, sha256, applied_at FROM mcm_schema_migrations ORDER BY migration_id"
         ).fetchall()
-        assert [row["migration_id"] for row in recorded] == ["0001_mcm_identity"]
-        applied_at = recorded[0]["applied_at"]
+        assert [row["migration_id"] for row in recorded] == [
+            "0001_mcm_identity",
+            "0002_mcm_events_coverage",
+        ]
+        applied = {row["migration_id"]: row["applied_at"] for row in recorded}
     finally:
         db.close()
     assert _dump(path) == before
     db = Database(path)
     try:
         again = db.conn.execute(
-            "SELECT migration_id, sha256, applied_at FROM mcm_schema_migrations"
-        ).fetchone()
-        assert again["applied_at"] == applied_at
-        assert db.conn.execute("SELECT COUNT(*) FROM mcm_schema_migrations").fetchone()[0] == 1
+            "SELECT migration_id, sha256, applied_at FROM mcm_schema_migrations ORDER BY migration_id"
+        ).fetchall()
+        assert {row["migration_id"]: row["applied_at"] for row in again} == applied
+        assert [row["migration_id"] for row in again] == [
+            "0001_mcm_identity",
+            "0002_mcm_events_coverage",
+        ]
+        assert db.conn.execute("SELECT COUNT(*) FROM mcm_schema_migrations").fetchone()[0] == 2
     finally:
         db.close()
     conn = sqlite3.connect(path)

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from guardian.errors import ConfigError, StaleSnapshot
+from guardian.events import ChainEvent
 from guardian.identities import IdentityError
 
 SCHEMA = """
@@ -490,6 +491,318 @@ class Database:
             (now, tenant, label),
         )
 
+    def commit_capability_cycle(
+        self,
+        tenant_id: str,
+        *,
+        events: list[Any],
+        capability_rows: list[dict[str, Any]],
+        cursors: list[dict[str, Any]],
+        alerts: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Write events, capability state, cursors, and outbox alerts in one transaction.
+
+        A failure rolls every write back, so a cursor cannot move without its events.
+        A cursor moves backwards only when the caller sets rollback=True.
+        """
+        coerced = [_coerce_event(tenant_id, item) for item in events]
+        rows = [_capability_row(item) for item in capability_rows]
+        cursor_rows = [_cursor_row(item) for item in cursors]
+        alert_rows = list(alerts or [])
+        _reject_duplicate_events(coerced)
+        _reject_duplicate_keys(rows, ("wallet_id", "network", "capability"), "duplicate capability row")
+        _reject_duplicate_keys(cursor_rows, ("wallet_id", "network", "capability"), "duplicate cursor")
+        emitted: list[dict[str, Any]] = []
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._guard_cursors(tenant_id, cursor_rows, rows)
+            for event in coerced:
+                self._upsert_chain_event(event)
+            for row in rows:
+                self._upsert_capability_state(tenant_id, row)
+            for cursor in cursor_rows:
+                self._upsert_capability_cursor(tenant_id, cursor)
+            for alert in alert_rows:
+                if self._add_alert(tenant_id, alert["dedup_key"], alert):
+                    emitted.append(alert)
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        return emitted
+
+    def _guard_cursors(self, tenant_id: str, cursors: list[dict[str, Any]], rows: list[dict[str, Any]]) -> None:
+        errored = {
+            (row["wallet_id"], row["network"], row["capability"])
+            for row in rows
+            if row["quality"] == "error"
+        }
+        for cursor in cursors:
+            key = (cursor["wallet_id"], cursor["network"], cursor["capability"])
+            existing = self.conn.execute(
+                """
+                SELECT cursor, block_number FROM capability_cursors
+                WHERE tenant_id=? AND wallet_id=? AND network=? AND capability=?
+                """,
+                (tenant_id, key[0], key[1], key[2]),
+            ).fetchone()
+            if cursor.get("rollback") is True:
+                continue
+            if existing is not None and _cursor_regressed(
+                existing["cursor"], existing["block_number"], cursor["cursor"], cursor.get("block_number"),
+            ):
+                raise ValueError("cursor_regressed")
+            if key in errored and _cursor_advanced(
+                None if existing is None else existing["cursor"],
+                None if existing is None else existing["block_number"],
+                cursor["cursor"],
+                cursor.get("block_number"),
+                existed=existing is not None,
+            ):
+                raise ValueError("cursor_advanced_on_error")
+
+    def _upsert_chain_event(self, event: ChainEvent) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO chain_events(
+                tenant_id, identity, wallet_id, network, block_number, block_hash, finality, tx_status, payload
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tenant_id, identity) DO UPDATE SET
+              wallet_id=excluded.wallet_id,
+              network=excluded.network,
+              block_number=excluded.block_number,
+              block_hash=excluded.block_hash,
+              finality=excluded.finality,
+              tx_status=excluded.tx_status,
+              payload=excluded.payload
+            """,
+            (
+                event.tenant_id, event.identity, event.wallet_id, event.network,
+                event.block_number, event.block_hash, event.finality, event.tx_status,
+                _json(event.as_dict()),
+            ),
+        )
+
+    def _upsert_capability_state(self, tenant_id: str, row: dict[str, Any]) -> None:
+        existing = self.conn.execute(
+            """
+            SELECT last_success_at, cursor FROM capability_state
+            WHERE tenant_id=? AND wallet_id=? AND network=? AND capability=?
+            """,
+            (tenant_id, row["wallet_id"], row["network"], row["capability"]),
+        ).fetchone()
+        payload = dict(row["payload"])
+        last_success = row["last_success_at"]
+        if row["quality"] == "error" and existing is not None and existing["last_success_at"]:
+            last_success = existing["last_success_at"]
+            if isinstance(payload.get("last_success_at"), str):
+                payload["last_success_at"] = last_success
+            coverage = payload.get("coverage")
+            if isinstance(coverage, dict) and isinstance(coverage.get("last_success_at"), str):
+                coverage = dict(coverage)
+                coverage["last_success_at"] = last_success
+                payload["coverage"] = coverage
+        cursor_value = row["cursor"]
+        if cursor_value is None and existing is not None:
+            cursor_value = existing["cursor"]
+        self.conn.execute(
+            """
+            INSERT INTO capability_state(
+                tenant_id, wallet_id, network, capability, quality, last_success_at, valid_until, cursor, payload
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tenant_id, wallet_id, network, capability) DO UPDATE SET
+              quality=excluded.quality,
+              last_success_at=excluded.last_success_at,
+              valid_until=excluded.valid_until,
+              cursor=excluded.cursor,
+              payload=excluded.payload
+            """,
+            (
+                tenant_id, row["wallet_id"], row["network"], row["capability"], row["quality"],
+                last_success, row["valid_until"], cursor_value, _json(payload),
+            ),
+        )
+
+    def _upsert_capability_cursor(self, tenant_id: str, cursor: dict[str, Any]) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO capability_cursors(
+                tenant_id, wallet_id, network, capability, cursor, block_number
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tenant_id, wallet_id, network, capability) DO UPDATE SET
+              cursor=excluded.cursor,
+              block_number=excluded.block_number
+            """,
+            (
+                tenant_id, cursor["wallet_id"], cursor["network"], cursor["capability"],
+                cursor["cursor"], cursor.get("block_number"),
+            ),
+        )
+
+    def chain_events_for(
+        self, tenant_id: str, *, wallet_id: str | None = None, network: str | None = None,
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT payload FROM chain_events WHERE tenant_id=?"
+        args: list[Any] = [tenant_id]
+        if wallet_id is not None:
+            sql += " AND wallet_id=?"
+            args.append(wallet_id)
+        if network is not None:
+            sql += " AND network=?"
+            args.append(network)
+        rows = [json.loads(row["payload"]) for row in self.conn.execute(sql, args)]
+        return sorted(rows, key=_event_sort_key)
+
+    def capability_state_for(
+        self, tenant_id: str, *, wallet_id: str | None = None, network: str | None = None,
+    ) -> list[dict[str, Any]]:
+        sql = (
+            "SELECT wallet_id, network, capability, quality, last_success_at, valid_until, cursor, payload "
+            "FROM capability_state WHERE tenant_id=?"
+        )
+        args: list[Any] = [tenant_id]
+        if wallet_id is not None:
+            sql += " AND wallet_id=?"
+            args.append(wallet_id)
+        if network is not None:
+            sql += " AND network=?"
+            args.append(network)
+        sql += " ORDER BY wallet_id, network, capability"
+        found = []
+        for row in self.conn.execute(sql, args):
+            found.append({
+                "wallet_id": row["wallet_id"],
+                "network": row["network"],
+                "capability": row["capability"],
+                "quality": row["quality"],
+                "last_success_at": row["last_success_at"],
+                "valid_until": row["valid_until"],
+                "cursor": row["cursor"],
+                "payload": json.loads(row["payload"]),
+            })
+        return found
+
+    def capability_cursors_for(
+        self, tenant_id: str, *, wallet_id: str | None = None, network: str | None = None,
+    ) -> list[dict[str, Any]]:
+        sql = (
+            "SELECT wallet_id, network, capability, cursor, block_number "
+            "FROM capability_cursors WHERE tenant_id=?"
+        )
+        args: list[Any] = [tenant_id]
+        if wallet_id is not None:
+            sql += " AND wallet_id=?"
+            args.append(wallet_id)
+        if network is not None:
+            sql += " AND network=?"
+            args.append(network)
+        sql += " ORDER BY wallet_id, network, capability"
+        return [
+            {
+                "wallet_id": row["wallet_id"],
+                "network": row["network"],
+                "capability": row["capability"],
+                "cursor": row["cursor"],
+                "block_number": row["block_number"],
+            }
+            for row in self.conn.execute(sql, args)
+        ]
+
+    def capability_items(self, tenant_id: str) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for row in self.capability_state_for(tenant_id):
+            found = row["payload"].get("items")
+            if isinstance(found, list):
+                items.extend(item for item in found if isinstance(item, dict))
+        return items
+
+    def outbox_for(self, tenant_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT id, status, payload FROM outbox WHERE tenant_id=? ORDER BY id",
+            (tenant_id,),
+        ).fetchall()
+        return [
+            {"id": row["id"], "status": row["status"], "payload": json.loads(row["payload"])}
+            for row in rows
+        ]
+
+    def rollback_reorg(
+        self,
+        tenant_id: str,
+        *,
+        network: str,
+        block_number: str,
+        wallet_id: str | None = None,
+    ) -> dict[str, int]:
+        """Explicit reorg rollback. May move cursors backwards. Does not delete events."""
+        target = _digits(block_number)
+        if target is None:
+            raise ValueError("rollback block is required")
+        replacement = str(target - 1) if target > 0 else "0"
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            event_sql = "SELECT identity, block_number, block_hash, finality, payload FROM chain_events WHERE tenant_id=? AND network=?"
+            event_args: list[Any] = [tenant_id, network]
+            if wallet_id is not None:
+                event_sql += " AND wallet_id=?"
+                event_args.append(wallet_id)
+            orphaned = 0
+            for row in self.conn.execute(event_sql, event_args).fetchall():
+                number = _digits(row["block_number"])
+                if number is None or number < target or row["finality"] == "orphaned":
+                    continue
+                payload = json.loads(row["payload"])
+                payload["finality"] = "orphaned"
+                payload["correction"] = {
+                    "reason": "rollback",
+                    "block_number": row["block_number"],
+                    "previous_block_hash": row["block_hash"],
+                    "previous_finality": row["finality"],
+                }
+                self.conn.execute(
+                    "UPDATE chain_events SET finality=?, payload=? WHERE tenant_id=? AND identity=?",
+                    ("orphaned", _json(payload), tenant_id, row["identity"]),
+                )
+                orphaned += 1
+            cursor_sql = "SELECT wallet_id, capability, cursor, block_number FROM capability_cursors WHERE tenant_id=? AND network=?"
+            cursor_args: list[Any] = [tenant_id, network]
+            if wallet_id is not None:
+                cursor_sql += " AND wallet_id=?"
+                cursor_args.append(wallet_id)
+            moved = 0
+            for row in self.conn.execute(cursor_sql, cursor_args).fetchall():
+                rank = _cursor_rank(row["cursor"], row["block_number"])
+                if rank[0] != 0 or rank[1] < target:
+                    continue
+                self.conn.execute(
+                    """
+                    UPDATE capability_cursors SET cursor=?, block_number=?
+                    WHERE tenant_id=? AND wallet_id=? AND network=? AND capability=?
+                    """,
+                    (replacement, replacement, tenant_id, row["wallet_id"], network, row["capability"]),
+                )
+                moved += 1
+            state_sql = "SELECT wallet_id, capability, cursor FROM capability_state WHERE tenant_id=? AND network=?"
+            state_args: list[Any] = [tenant_id, network]
+            if wallet_id is not None:
+                state_sql += " AND wallet_id=?"
+                state_args.append(wallet_id)
+            for row in self.conn.execute(state_sql, state_args).fetchall():
+                if _digits(row["cursor"]) is None or _digits(row["cursor"]) < target:
+                    continue
+                self.conn.execute(
+                    """
+                    UPDATE capability_state SET cursor=?
+                    WHERE tenant_id=? AND wallet_id=? AND network=? AND capability=?
+                    """,
+                    (replacement, tenant_id, row["wallet_id"], network, row["capability"]),
+                )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        return {"orphaned": orphaned, "cursors": moved}
+
 
 def _normalized_sql(path: Path) -> str:
     """Migration text with LF line endings, so a CRLF checkout (Windows autocrlf)
@@ -508,3 +821,138 @@ def mcm_migration_directory() -> Path:
 _WALLET_ID = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
+_EVENT_FIELDS = (
+    "tenant_id", "wallet_id", "network", "chain_uid", "tx_id", "sub_index", "kind", "asset",
+    "raw_amount", "block_number", "block_hash", "tx_status", "finality", "source_ids", "observed_at",
+)
+
+
+def _coerce_event(tenant_id: str, value: Any) -> ChainEvent:
+    if isinstance(value, ChainEvent):
+        event = value
+    elif isinstance(value, dict):
+        data = {key: value[key] for key in _EVENT_FIELDS if key in value}
+        event = ChainEvent(**data)
+    else:
+        raise ValueError("event must be a chain event")
+    if event.tenant_id != tenant_id:
+        raise ValueError("event tenant does not match")
+    return event
+
+
+def _capability_row(row: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        raise ValueError("capability row must be an object")
+    if "schema_version" in row and "payload" not in row:
+        payload = dict(row)
+        scope = payload.get("scope") if isinstance(payload.get("scope"), dict) else {}
+        return {
+            "wallet_id": payload["wallet_id"],
+            "network": payload["network"],
+            "capability": payload["capability"],
+            "quality": payload["quality"],
+            "last_success_at": payload.get("last_success_at"),
+            "valid_until": payload.get("valid_until"),
+            "cursor": scope.get("cursor"),
+            "payload": {"coverage": payload},
+        }
+    for key in ("wallet_id", "network", "capability", "quality"):
+        if not isinstance(row.get(key), str) or not row[key]:
+            raise ValueError(f"capability {key} is required")
+    payload = row.get("payload", {})
+    if not isinstance(payload, dict):
+        raise ValueError("capability payload must be an object")
+    return {
+        "wallet_id": row["wallet_id"],
+        "network": row["network"],
+        "capability": row["capability"],
+        "quality": row["quality"],
+        "last_success_at": row.get("last_success_at"),
+        "valid_until": row.get("valid_until"),
+        "cursor": row.get("cursor"),
+        "payload": dict(payload),
+    }
+
+
+def _cursor_row(row: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        raise ValueError("cursor must be an object")
+    for key in ("wallet_id", "network", "capability", "cursor"):
+        if not isinstance(row.get(key), str) or not row[key]:
+            raise ValueError(f"cursor {key} is required")
+    block_number = row.get("block_number")
+    if block_number is not None and not isinstance(block_number, str):
+        raise ValueError("cursor block_number must be a string")
+    return {
+        "wallet_id": row["wallet_id"],
+        "network": row["network"],
+        "capability": row["capability"],
+        "cursor": row["cursor"],
+        "block_number": block_number,
+        "rollback": row.get("rollback") is True,
+    }
+
+
+def _reject_duplicate_events(events: list[ChainEvent]) -> None:
+    seen = set()
+    for event in events:
+        if event.identity in seen:
+            raise ValueError("duplicate event identity")
+        seen.add(event.identity)
+
+
+def _reject_duplicate_keys(rows: list[dict[str, Any]], fields: tuple[str, ...], message: str) -> None:
+    seen = set()
+    for row in rows:
+        key = tuple(row[field] for field in fields)
+        if key in seen:
+            raise ValueError(message)
+        seen.add(key)
+
+
+def _digits(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _cursor_rank(cursor: str | None, block_number: str | None) -> tuple[int, int | str]:
+    number = _digits(block_number if block_number not in (None, "") else cursor)
+    if number is not None:
+        return (0, number)
+    token = "" if cursor is None else str(cursor)
+    return (1, token)
+
+
+def _cursor_regressed(
+    old_cursor: str | None,
+    old_block: str | None,
+    new_cursor: str,
+    new_block: str | None,
+) -> bool:
+    return _cursor_rank(new_cursor, new_block) < _cursor_rank(old_cursor, old_block)
+
+
+def _cursor_advanced(
+    old_cursor: str | None,
+    old_block: str | None,
+    new_cursor: str,
+    new_block: str | None,
+    *,
+    existed: bool,
+) -> bool:
+    if not existed:
+        return True
+    return _cursor_rank(new_cursor, new_block) > _cursor_rank(old_cursor, old_block)
+
+
+def _event_sort_key(payload: dict[str, Any]) -> tuple[Any, ...]:
+    number = _digits(payload.get("block_number"))
+    block_key: tuple[Any, ...] = (0, number) if number is not None else (1, payload.get("block_number") or "")
+    sub = str(payload.get("sub_index") or "")
+    sub_key: tuple[Any, ...] = (0, int(sub)) if sub.isdigit() else (1, sub)
+    return (block_key, sub_key, payload.get("identity") or "")
