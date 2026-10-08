@@ -25,6 +25,7 @@ import { createAbandonSignal, encodePersonalSignMessage, guardedRequest, signEnc
 import { createWalletRegistry, sourceLabel } from "./wallets/registry.mjs";
 import { SOURCE_WALLETCONNECT, walletConnectConfig } from "./wallets/walletconnect-config.mjs";
 import { createWalletConnectConnection, reasonText as walletConnectReasonText } from "./wallets/walletconnect.mjs";
+import { enhanceText, installTypographyEnhancements, splitTrailingParenthetical } from "./typography.mjs";
 
 const TASK_VERSION = "guardian.task.v1";
 const PLAN_VERSION = "guardian.action_plan.v1";
@@ -677,9 +678,23 @@ function requestUserSend(plan: Plan): void {
 // A missing chip is a no-op so the review harness, which only knows the original ids, is unchanged.
 function paintStatus(rootId: string, valueId: string, value: string, state: string): void {
   const valueNode = document.querySelector<HTMLElement>(valueId);
-  if (valueNode) valueNode.textContent = value;
+  if (valueNode) {
+    valueNode.textContent = value;
+    enhanceText(valueNode);
+  }
   const root = document.querySelector<HTMLElement>(rootId);
   if (root?.dataset) root.dataset.state = state;
+}
+
+function setWalletDisplayName(nameEl: HTMLElement, displayName: string): void {
+  const { primary, detail } = splitTrailingParenthetical(displayName);
+  nameEl.textContent = primary;
+  if (detail) {
+    const detailEl = document.createElement("span");
+    detailEl.className = "wallet-name-detail";
+    detailEl.textContent = detail;
+    nameEl.append(detailEl);
+  }
 }
 
 // The 401 message from loadPrivateTask() is a "please log in" state, not a failure.
@@ -1493,7 +1508,7 @@ function renderWalletPicker(): void {
       }
       const name = document.createElement("span");
       name.className = "wallet-name";
-      name.textContent = candidate.name;
+      setWalletDisplayName(name, candidate.name);
       const meta = document.createElement("small");
       meta.className = "wallet-meta";
       meta.textContent = sourceLabel(candidate);
@@ -1513,7 +1528,7 @@ function renderWalletPicker(): void {
       if (typeof button.setAttribute === "function") button.setAttribute("aria-pressed", chosen ? "true" : "false");
       const name = document.createElement("span");
       name.className = "wallet-name";
-      name.textContent = wcCandidate.name;
+      setWalletDisplayName(name, wcCandidate.name);
       const meta = document.createElement("small");
       meta.className = "wallet-meta";
       meta.textContent = walletConnect?.hadSession()
@@ -1723,6 +1738,7 @@ document.querySelector("#clear")!.addEventListener("click", () => {
   banner.textContent = BANNER;
 });
 
+installTypographyEnhancements();
 registry.start();
 watchWallet();
 renderWalletPicker();
