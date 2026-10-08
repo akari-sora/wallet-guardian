@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic fixture. Not an OFAC publication and not a sanctions determination. -->
+<sdnList xmlns="https://example.invalid/sdn">
+  <publshInformation>
+    <Publish_Date>2026-10-09</Publish_Date>
+    <Record_Count>4</Record_Count>
+  </publshInformation>
+  <sdnEntry>
+    <uid>fixture-900001</uid>
+    <lastName>Synthetic Fixture Alpha</lastName>
+    <sdnType>Entity</sdnType>
+    <idList>
+      <id>
+        <uid>fixture-900105</uid>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x0000000000000000000000000000000000000ab1</idNumber>
+      </id>
+      <id>
+        <uid>fixture-900102</uid>
+        <idType>Digital Currency Address - SOL</idType>
+        <idNumber>8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR</idNumber>
+      </id>
+      <id>
+        <uid>fixture-900103</uid>
+        <idType>Digital Currency Address - XBT</idType>
+        <idNumber>bc1qqszqgpqyqszqgpqyqszqgpqyqszqgpqy5dl506</idNumber>
+      </id>
+      <id>
+        <uid>fixture-900104</uid>
+        <idType>Digital Currency Address - BTC</idType>
+        <idNumber>1TYPjCiGbKiwP6r12cdkmVjySbQryonEV</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+</sdnList>
