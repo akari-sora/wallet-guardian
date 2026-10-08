@@ -1,0 +1,413 @@
+{
+  "status": "design_targets_not_wallet_results",
+  "networks": [
+    {
+      "network": "ethereum-mainnet",
+      "family": "evm",
+      "tier": 0,
+      "evm_chain_id": 1,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "indexer_or_bounded_block_scan; internal requires separate trace capability",
+        "tokens": "ERC20_ERC721_ERC1155 within observed/discovered set",
+        "permissions": "standard allowance/operator observations and verified state",
+        "permit": "supported submitted ERC2612/DAI/Permit2 only",
+        "positions": "registered protocol plugins only",
+        "risk": "GoPlus per-function support plus local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "bsc-mainnet",
+      "family": "evm",
+      "tier": 0,
+      "evm_chain_id": 56,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "indexer_or_bounded_block_scan; internal requires separate trace capability",
+        "tokens": "ERC20_ERC721_ERC1155 within observed/discovered set",
+        "permissions": "standard allowance/operator observations and verified state",
+        "permit": "supported submitted ERC2612/DAI/Permit2 only",
+        "positions": "registered protocol plugins only",
+        "risk": "GoPlus per-function support plus local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "arbitrum-one",
+      "family": "evm",
+      "tier": 0,
+      "evm_chain_id": 42161,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "indexer_or_bounded_block_scan; internal requires separate trace capability",
+        "tokens": "ERC20_ERC721_ERC1155 within observed/discovered set",
+        "permissions": "standard allowance/operator observations and verified state",
+        "permit": "supported submitted ERC2612/DAI/Permit2 only",
+        "positions": "registered protocol plugins only",
+        "risk": "GoPlus per-function support plus local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "base-mainnet",
+      "family": "evm",
+      "tier": 0,
+      "evm_chain_id": 8453,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "indexer_or_bounded_block_scan; internal requires separate trace capability",
+        "tokens": "ERC20_ERC721_ERC1155 within observed/discovered set",
+        "permissions": "standard allowance/operator observations and verified state",
+        "permit": "supported submitted ERC2612/DAI/Permit2 only",
+        "positions": "registered protocol plugins only",
+        "risk": "GoPlus per-function support plus local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "optimism-mainnet",
+      "family": "evm",
+      "tier": 0,
+      "evm_chain_id": 10,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "indexer_or_bounded_block_scan; internal requires separate trace capability",
+        "tokens": "ERC20_ERC721_ERC1155 within observed/discovered set",
+        "permissions": "standard allowance/operator observations and verified state",
+        "permit": "supported submitted ERC2612/DAI/Permit2 only",
+        "positions": "registered protocol plugins only",
+        "risk": "GoPlus per-function support plus local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "polygon-pos",
+      "family": "evm",
+      "tier": 0,
+      "evm_chain_id": 137,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "indexer_or_bounded_block_scan; internal requires separate trace capability",
+        "tokens": "ERC20_ERC721_ERC1155 within observed/discovered set",
+        "permissions": "standard allowance/operator observations and verified state",
+        "permit": "supported submitted ERC2612/DAI/Permit2 only",
+        "positions": "registered protocol plugins only",
+        "risk": "GoPlus per-function support plus local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "avalanche-c",
+      "family": "evm",
+      "tier": 0,
+      "evm_chain_id": 43114,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "indexer_or_bounded_block_scan; internal requires separate trace capability",
+        "tokens": "ERC20_ERC721_ERC1155 within observed/discovered set",
+        "permissions": "standard allowance/operator observations and verified state",
+        "permit": "supported submitted ERC2612/DAI/Permit2 only",
+        "positions": "registered protocol plugins only",
+        "risk": "GoPlus per-function support plus local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "solana-mainnet",
+      "family": "solana",
+      "tier": 0,
+      "evm_chain_id": null,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "account set signatures+transaction effects",
+        "tokens": "SPL and known Token2022 extensions; closed historical accounts may be undiscovered",
+        "permissions": "delegate/owner/close/mint/freeze/known extensions",
+        "permit": "no universal EVM permit; unsubmitted signatures not observable",
+        "positions": "stake and registered plugins only",
+        "risk": "mint structural risk, optional token feed and local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "linea-mainnet",
+      "family": "evm",
+      "tier": 1,
+      "evm_chain_id": 59144,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "indexer_or_bounded_block_scan; internal requires separate trace capability",
+        "tokens": "ERC20_ERC721_ERC1155 within observed/discovered set",
+        "permissions": "standard allowance/operator observations and verified state",
+        "permit": "supported submitted ERC2612/DAI/Permit2 only",
+        "positions": "registered protocol plugins only",
+        "risk": "GoPlus per-function support plus local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "zksync-era",
+      "family": "evm",
+      "tier": 1,
+      "evm_chain_id": 324,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "indexer_or_bounded_block_scan; internal requires separate trace capability",
+        "tokens": "ERC20_ERC721_ERC1155 within observed/discovered set",
+        "permissions": "standard allowance/operator observations and verified state",
+        "permit": "supported submitted ERC2612/DAI/Permit2 only",
+        "positions": "registered protocol plugins only",
+        "risk": "GoPlus per-function support plus local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "scroll-mainnet",
+      "family": "evm",
+      "tier": 1,
+      "evm_chain_id": 534352,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "indexer_or_bounded_block_scan; internal requires separate trace capability",
+        "tokens": "ERC20_ERC721_ERC1155 within observed/discovered set",
+        "permissions": "standard allowance/operator observations and verified state",
+        "permit": "supported submitted ERC2612/DAI/Permit2 only",
+        "positions": "registered protocol plugins only",
+        "risk": "GoPlus per-function support plus local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "mantle-mainnet",
+      "family": "evm",
+      "tier": 1,
+      "evm_chain_id": 5000,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "indexer_or_bounded_block_scan; internal requires separate trace capability",
+        "tokens": "ERC20_ERC721_ERC1155 within observed/discovered set",
+        "permissions": "standard allowance/operator observations and verified state",
+        "permit": "supported submitted ERC2612/DAI/Permit2 only",
+        "positions": "registered protocol plugins only",
+        "risk": "GoPlus per-function support plus local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "sonic-mainnet",
+      "family": "evm",
+      "tier": 1,
+      "evm_chain_id": 146,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "indexer_or_bounded_block_scan; internal requires separate trace capability",
+        "tokens": "ERC20_ERC721_ERC1155 within observed/discovered set",
+        "permissions": "standard allowance/operator observations and verified state",
+        "permit": "supported submitted ERC2612/DAI/Permit2 only",
+        "positions": "registered protocol plugins only",
+        "risk": "GoPlus per-function support plus local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "unichain-mainnet",
+      "family": "evm",
+      "tier": 1,
+      "evm_chain_id": 130,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "indexer_or_bounded_block_scan; internal requires separate trace capability",
+        "tokens": "ERC20_ERC721_ERC1155 within observed/discovered set",
+        "permissions": "standard allowance/operator observations and verified state",
+        "permit": "supported submitted ERC2612/DAI/Permit2 only",
+        "positions": "registered protocol plugins only",
+        "risk": "GoPlus per-function support plus local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "hyperevm-mainnet",
+      "family": "evm",
+      "tier": 1,
+      "evm_chain_id": 999,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "indexer_or_bounded_block_scan; internal requires separate trace capability",
+        "tokens": "ERC20_ERC721_ERC1155 within observed/discovered set",
+        "permissions": "standard allowance/operator observations and verified state",
+        "permit": "supported submitted ERC2612/DAI/Permit2 only",
+        "positions": "registered protocol plugins only",
+        "risk": "GoPlus per-function support plus local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "bitcoin-mainnet",
+      "family": "bitcoin",
+      "tier": 1,
+      "evm_chain_id": null,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "address/script UTXO history; configured ownership set only",
+        "tokens": "out_of_scope",
+        "permissions": "not_applicable",
+        "permit": "not_applicable",
+        "positions": "not_applicable to native scope",
+        "risk": "local sanctions and optional reported-address feed"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "tron-mainnet",
+      "family": "tron",
+      "tier": 1,
+      "evm_chain_id": null,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "TRX account/internal history if supplied",
+        "tokens": "TRC20/TRC721 records+logs",
+        "permissions": "allowance and account owner/active permission changes",
+        "permit": "only registered variants; not generic coverage",
+        "positions": "registered plugins only",
+        "risk": "local sanctions and optional per-chain feed"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "blast-mainnet",
+      "family": "evm",
+      "tier": 2,
+      "evm_chain_id": 81457,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "indexer_or_bounded_block_scan; internal requires separate trace capability",
+        "tokens": "ERC20_ERC721_ERC1155 within observed/discovered set",
+        "permissions": "standard allowance/operator observations and verified state",
+        "permit": "supported submitted ERC2612/DAI/Permit2 only",
+        "positions": "registered protocol plugins only",
+        "risk": "GoPlus per-function support plus local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "opbnb-mainnet",
+      "family": "evm",
+      "tier": 2,
+      "evm_chain_id": 204,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "indexer_or_bounded_block_scan; internal requires separate trace capability",
+        "tokens": "ERC20_ERC721_ERC1155 within observed/discovered set",
+        "permissions": "standard allowance/operator observations and verified state",
+        "permit": "supported submitted ERC2612/DAI/Permit2 only",
+        "positions": "registered protocol plugins only",
+        "risk": "GoPlus per-function support plus local sanctions"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "ton-mainnet",
+      "family": "ton",
+      "tier": 2,
+      "evm_chain_id": null,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "account lt/hash and message traces",
+        "tokens": "Jetton/NFT identity-aware traces",
+        "permissions": "registered wallet plugins/extensions only",
+        "permit": "not_applicable as ERC standard",
+        "positions": "registered plugins only",
+        "risk": "local sanctions and curated asset/incident sources"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "sui-mainnet",
+      "family": "sui",
+      "tier": 2,
+      "evm_chain_id": null,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "checkpoint/effects/coin object changes",
+        "tokens": "coin types and known object assets",
+        "permissions": "known package/capability objects only",
+        "permit": "not_applicable as ERC standard",
+        "positions": "registered plugins only",
+        "risk": "local sanctions where identifiers exist; general address intelligence unknown"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "aptos-mainnet",
+      "family": "aptos",
+      "tier": 3,
+      "evm_chain_id": null,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "ledger/indexer+REST verification",
+        "tokens": "Coin and Fungible Asset stores",
+        "permissions": "authentication key and known authority resources",
+        "permit": "not_applicable as ERC standard",
+        "positions": "registered plugins only",
+        "risk": "local sanctions where identifiers exist; general address intelligence unknown"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "cosmos-hub",
+      "family": "cosmos",
+      "tier": 3,
+      "evm_chain_id": null,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "bank/multi-send and chain-specific indexed transactions",
+        "tokens": "native/IBC denom; contract tokens require plugins",
+        "permissions": "authz and feegrant where enabled",
+        "permit": "contract-specific only",
+        "positions": "staking/unbonding/IBC and registered plugins",
+        "risk": "local sanctions where identifiers exist; general address intelligence unknown"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    },
+    {
+      "network": "osmosis-mainnet",
+      "family": "cosmos",
+      "tier": 3,
+      "evm_chain_id": null,
+      "status": "planned_not_live_verified",
+      "target_profile": {
+        "native_history": "bank/multi-send and chain-specific indexed transactions",
+        "tokens": "native/IBC denom; contract tokens require plugins",
+        "permissions": "authz and feegrant where enabled",
+        "permit": "contract-specific only",
+        "positions": "staking/unbonding/IBC and registered plugins",
+        "risk": "local sanctions where identifiers exist; general address intelligence unknown"
+      },
+      "observed_coverage": null,
+      "live_verified": false
+    }
+  ]
+}

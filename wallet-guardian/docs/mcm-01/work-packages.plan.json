@@ -1,0 +1,643 @@
+{
+  "package_id": "MULTICHAIN-MONITOR-01",
+  "base_sha": "d6331f02b1a1fcdb75f7c265a29d484056a42515",
+  "status": "planning_only",
+  "packages": [
+    {
+      "id": "MCM-W0",
+      "title": "範圍盤點與遷移基線",
+      "branch": "mcm/scope-baseline",
+      "depends_on": [],
+      "files": [
+        "wallet-guardian/docs/mcm-01.md",
+        "wallet-guardian/docs/legacy-monitor-map.md",
+        "wallet-guardian/config/chains/*.json"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W0-01",
+          "name": "map-public-private",
+          "pass": "列出公開核心與私人運維腳本的實際入口、state欄位、資料源、目前能力；私人內容只留本機。"
+        },
+        {
+          "test_id": "MCM-W0-02",
+          "name": "readonly-boundary",
+          "pass": "證明新監控入口不引入Action Client signer/provider，既有send hard-off不變。"
+        },
+        {
+          "test_id": "MCM-W0-03",
+          "name": "network-registry",
+          "pass": "固定本包網路集合、native identity、鏈ID/genesis驗證方式與來源；新鏈不自動宣稱啟用。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W1",
+      "title": "公開config、私有帳戶與穩定身份",
+      "branch": "mcm/config-private-state",
+      "depends_on": [
+        "W0"
+      ],
+      "files": [
+        "wallet-guardian/schemas/monitor.schema.json",
+        "wallet-guardian/schemas/accounts.schema.json",
+        "wallet-guardian/src/guardian/configuration.py",
+        "wallet-guardian/src/guardian/identities.py",
+        "wallet-guardian/src/guardian/storage.py",
+        "wallet-guardian/migrations/monitor/"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W1-01",
+          "name": "secret-separation",
+          "pass": "公開範例無地址/key/state；未知欄位與明文秘密欄位拒絕；私有檔案在repo外。"
+        },
+        {
+          "test_id": "MCM-W1-02",
+          "name": "identity-normalization",
+          "pass": "EVM/Solana/UTXO/Tron/TON/Move/Cosmos地址族不誤判；同label不同wallet_id不覆寫；TON顯示別名不重複。"
+        },
+        {
+          "test_id": "MCM-W1-03",
+          "name": "state-migration",
+          "pass": "舊快照/outbox/cursor保留；遷移可重跑；顯示label修改不改身份；沒有舊歷史不偽造。"
+        },
+        {
+          "test_id": "MCM-W1-04",
+          "name": "profile-roundtrip",
+          "pass": "schema驗證、必要引用與family/network相容性通過；safe-export不輸出可反推私人錢包的記錄。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W2",
+      "title": "唯讀transport與共享預算",
+      "branch": "mcm/readonly-sources",
+      "depends_on": [
+        "W1"
+      ],
+      "files": [
+        "wallet-guardian/src/guardian/sources/",
+        "wallet-guardian/src/guardian/security/transport_policy.py",
+        "wallet-guardian/config/source-capabilities/",
+        "wallet-guardian/tests/contracts/sources/"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W2-01",
+          "name": "no-chain-writes",
+          "pass": "RPC/REST/GraphQL/gRPC的寫入、簽名、廣播及批次夾帶方法在transport前拒絕。"
+        },
+        {
+          "test_id": "MCM-W2-02",
+          "name": "budget-retry",
+          "pass": "共享帳戶配額、429/Retry-After、credits、逾時、回應大小/分頁上限與有限重試有測試。"
+        },
+        {
+          "test_id": "MCM-W2-03",
+          "name": "source-failover",
+          "pass": "主來源故障改用次來源時逐能力降級；不同網域同後端不當獨立quorum。"
+        },
+        {
+          "test_id": "MCM-W2-04",
+          "name": "untrusted-endpoints",
+          "pass": "任務/metadata不能新增RPC網址；redirect、私網與DNS變更按連線端政策處理；自架node僅explicit local profile開放。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W3",
+      "title": "事件、能力coverage與原子游標",
+      "branch": "mcm/events-coverage",
+      "depends_on": [
+        "W1",
+        "W2"
+      ],
+      "files": [
+        "wallet-guardian/src/guardian/events.py",
+        "wallet-guardian/src/guardian/coverage.py",
+        "wallet-guardian/src/guardian/monitoring.py",
+        "wallet-guardian/src/guardian/storage.py",
+        "wallet-guardian/schemas/coverage.schema.json"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W3-01",
+          "name": "capability-scoped-commit",
+          "pass": "native成功token失敗時，token舊值保留STALE；empty/error/partial分開。"
+        },
+        {
+          "test_id": "MCM-W3-02",
+          "name": "reorg-cursor",
+          "pass": "重組/rollback、亂序/重送、崩潰重啟不丟事件；cursor與event/outbox同交易提交。"
+        },
+        {
+          "test_id": "MCM-W3-03",
+          "name": "coverage-denominator",
+          "pass": "每啟用鏈每能力列狀態與範圍；未查gaps不算空缺口；native-only不等complete portfolio。"
+        },
+        {
+          "test_id": "MCM-W3-04",
+          "name": "effect-finality",
+          "pass": "失敗tx不生資產/授權成功事件；每鏈finality與跨鏈流程completion分離。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W4",
+      "title": "T0 EVM資產與歷史",
+      "branch": "mcm/evm-core",
+      "depends_on": [
+        "W2",
+        "W3"
+      ],
+      "files": [
+        "wallet-guardian/src/guardian/chains/evm/",
+        "wallet-guardian/src/guardian/sources/etherscan.py",
+        "wallet-guardian/src/guardian/sources/blockscout.py",
+        "wallet-guardian/src/guardian/sources/nodereal.py",
+        "wallet-guardian/config/chains/"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W4-01",
+          "name": "seven-chain-contract",
+          "pass": "七個T0 EVM逐鏈fixture非零正例、network identity、正常/失敗receipt均通過；live未跑不標PASS。"
+        },
+        {
+          "test_id": "MCM-W4-02",
+          "name": "native-vs-logs",
+          "pass": "原生direct/internal與token logs來源分開；RPC fallback沒有地址歷史時精確標缺口。"
+        },
+        {
+          "test_id": "MCM-W4-03",
+          "name": "pagination-and-limits",
+          "pass": "分頁最後一筆、單block超限、HTTP200部分失敗及免費方案不支持有測試。"
+        },
+        {
+          "test_id": "MCM-W4-04",
+          "name": "token-accounting",
+          "pass": "ERC20/721/1155、mint/burn、批量、自轉、fee/rebase與重複事件不誤計資產。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W5",
+      "title": "EVM權限與已上鏈permit",
+      "branch": "mcm/evm-permissions",
+      "depends_on": [
+        "W4"
+      ],
+      "files": [
+        "wallet-guardian/src/guardian/chains/evm/permissions.py",
+        "wallet-guardian/src/guardian/chains/evm/permits.py",
+        "wallet-guardian/config/deployments/permit2/",
+        "wallet-guardian/tests/fixtures/evm-permissions/"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W5-01",
+          "name": "approval-families",
+          "pass": "ERC20/721單NFT/721及1155 operator分開；新/提高/延長/撤銷與baseline unknown正確。"
+        },
+        {
+          "test_id": "MCM-W5-02",
+          "name": "relayed-permit",
+          "pass": "ERC2612/DAI及multicall/relayer已提交permit按owner解析，不只查tx.from。"
+        },
+        {
+          "test_id": "MCM-W5-03",
+          "name": "permit2-layers",
+          "pass": "ERC20→Permit2與Permit2→spender分離；額度/期限/nonce/已使用一次性權限不混為永久授權。"
+        },
+        {
+          "test_id": "MCM-W5-04",
+          "name": "offline-blindspot",
+          "pass": "未提交簽名永遠not_observable；缺歷史不顯示全部授權安全；零資產spender曝險仍記錄。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W6",
+      "title": "Solana資產與權限",
+      "branch": "mcm/solana-core",
+      "depends_on": [
+        "W2",
+        "W3"
+      ],
+      "files": [
+        "wallet-guardian/src/guardian/chains/solana/",
+        "wallet-guardian/src/guardian/sources/helius.py",
+        "wallet-guardian/tests/fixtures/solana/"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W6-01",
+          "name": "owner-token-account-set",
+          "pass": "owner不在accountKeys的SPL入帳仍由token-account監控捕獲；關閉/未知歷史帳戶標缺口。"
+        },
+        {
+          "test_id": "MCM-W6-02",
+          "name": "transaction-version",
+          "pass": "legacy/v0、ALT、innerInstructions、meta.err/null及commitment差异明確。"
+        },
+        {
+          "test_id": "MCM-W6-03",
+          "name": "authority-diff",
+          "pass": "Approve/Checked/Revoke、delegate更換、close/owner/mint/freeze authority、已知Token2022 extensions正確。"
+        },
+        {
+          "test_id": "MCM-W6-04",
+          "name": "lamports-effects",
+          "pass": "租金、wSOL wrap/unwrap、費用不重複計；未知extension不宣稱完整。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W7",
+      "title": "行情與風險標籤",
+      "branch": "mcm/risk-price",
+      "depends_on": [
+        "W3"
+      ],
+      "files": [
+        "wallet-guardian/src/guardian/risk/",
+        "wallet-guardian/src/guardian/pricing/",
+        "wallet-guardian/config/risk-sources.json",
+        "wallet-guardian/tests/fixtures/risk/"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W7-01",
+          "name": "price-identity",
+          "pass": "同symbol假幣不能借真幣价格；價格過期/未知不當0或穩定幣1USD。"
+        },
+        {
+          "test_id": "MCM-W7-02",
+          "name": "function-coverage",
+          "pass": "GoPlus各function支援與鏈族分開；不支援/429不變成安全。"
+        },
+        {
+          "test_id": "MCM-W7-03",
+          "name": "list-exact-match",
+          "pass": "OFAC數位地址identifier精確匹配、鏈/格式正規化、來源版本/日期及撤回有證據。"
+        },
+        {
+          "test_id": "MCM-W7-04",
+          "name": "risk-provenance",
+          "pass": "報告/官方精確命中/結構風險分開；投毒dust不把受害接收者標惡意。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W8",
+      "title": "協議部位與曝險新聞",
+      "branch": "mcm/protocol-news",
+      "depends_on": [
+        "W4",
+        "W5",
+        "W6",
+        "W7"
+      ],
+      "files": [
+        "wallet-guardian/src/guardian/protocols/",
+        "wallet-guardian/src/guardian/news/",
+        "wallet-guardian/config/protocols/",
+        "wallet-guardian/config/news-sources/"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W8-01",
+          "name": "plugin-readonly",
+          "pass": "manifest/只讀context與資料源要求落實；metadata/news不能載入任意執行插件。"
+        },
+        {
+          "test_id": "MCM-W8-02",
+          "name": "positions-not-double-counted",
+          "pass": "Lista/Aave v3/已登錄ERC4626與Sol stake的receipt/underlying/debt不重複計。"
+        },
+        {
+          "test_id": "MCM-W8-03",
+          "name": "claim-and-bridge-evidence",
+          "pass": "請求消失、來源tx成功不直接當領取/跨鏈完成；plugin無資料留unknown。"
+        },
+        {
+          "test_id": "MCM-W8-04",
+          "name": "exposure-news",
+          "pass": "有實際部位/有效授權才關聯；不相關Kinza/Lista/UXLINK不硬塞；重複轉貼與更正有測試。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W9",
+      "title": "第一個可分享版本與平滑接手",
+      "branch": "mcm/core-release",
+      "depends_on": [
+        "W0",
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "W5",
+        "W6",
+        "W7",
+        "W8"
+      ],
+      "files": [
+        "wallet-guardian/src/guardian/cli.py",
+        "wallet-guardian/src/guardian/scheduler.py",
+        "wallet-guardian/src/guardian/delivery.py",
+        "wallet-guardian/examples/monitor.json",
+        "wallet-guardian/docs/quickstart-monitor.md",
+        "wallet-guardian/tests/acceptance/"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W9-01",
+          "name": "first-run-no-code-edit",
+          "pass": "新使用者只填私人地址/source引用，validate→probe→run-once→coverage可用，不需改程式碼。"
+        },
+        {
+          "test_id": "MCM-W9-02",
+          "name": "rules-boundary",
+          "pass": "0.499/0.5ETH、999.99/1000USD、權限變更不看金額、無事不發、baseline不洗歷史。"
+        },
+        {
+          "test_id": "MCM-W9-03",
+          "name": "handover-dedup",
+          "pass": "至少兩輪shadow與一次重啟；舊監控繼續，新的outbox先no-send；明確交接後單一sender避免雙通知。"
+        },
+        {
+          "test_id": "MCM-W9-04",
+          "name": "health-and-privacy",
+          "pass": "獨立watchdog/失明/恢復去重；不自停排程；公開export與測試證據不含private地址或key。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W10",
+      "title": "Bitcoin唯讀地址集監控",
+      "branch": "mcm/bitcoin",
+      "depends_on": [
+        "W2",
+        "W3",
+        "W7",
+        "W9"
+      ],
+      "files": [
+        "wallet-guardian/src/guardian/chains/bitcoin/",
+        "wallet-guardian/src/guardian/sources/esplora.py",
+        "wallet-guardian/tests/fixtures/bitcoin/"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W10-01",
+          "name": "utxo-ledger",
+          "pass": "vin/prevout/vout/fee以satoshi精確計算；僅已知own-group認自轉，不推測change屬己。"
+        },
+        {
+          "test_id": "MCM-W10-02",
+          "name": "pages-and-rbf",
+          "pass": "25筆分頁、mempool上限、RBF/reorg不重複當支出；confirmed≠不可逆保證。"
+        },
+        {
+          "test_id": "MCM-W10-03",
+          "name": "wallet-scope",
+          "pass": "單address不宣稱整個HD wallet；approval顯示not_applicable而非掃描通過。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W11",
+      "title": "Tron資產與帳戶權限",
+      "branch": "mcm/tron",
+      "depends_on": [
+        "W2",
+        "W3",
+        "W7",
+        "W9"
+      ],
+      "files": [
+        "wallet-guardian/src/guardian/chains/tron/",
+        "wallet-guardian/src/guardian/sources/trongrid.py",
+        "wallet-guardian/tests/fixtures/tron/"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W11-01",
+          "name": "address-and-transfers",
+          "pass": "Base58Check/41hex、TRX/TRC20/721、receipt與only_confirmed分開驗證。"
+        },
+        {
+          "test_id": "MCM-W11-02",
+          "name": "permissions",
+          "pass": "TRC20授權、帳戶owner/active權限/threshold異動低金額仍有告警。"
+        },
+        {
+          "test_id": "MCM-W11-03",
+          "name": "limits-effects",
+          "pass": "fingerprint分頁、429/403、energy/bandwidth/gas fee与交易失敗不誤報。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W12",
+      "title": "T1 EVM擴充",
+      "branch": "mcm/evm-tier1",
+      "depends_on": [
+        "W4",
+        "W5",
+        "W9"
+      ],
+      "files": [
+        "wallet-guardian/config/chains/",
+        "wallet-guardian/config/source-capabilities/",
+        "wallet-guardian/tests/contracts/evm-networks/",
+        "wallet-guardian/src/guardian/protocols/hypercore/"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W12-01",
+          "name": "each-network-probe",
+          "pass": "Linea/zkSync/Scroll/Mantle/Sonic/Unichain/HyperEVM各自文件與fixture、live能力紀錄，不複製支援標籤。"
+        },
+        {
+          "test_id": "MCM-W12-02",
+          "name": "endpoint-no-assumption",
+          "pass": "不假設zkSync/Scroll有Etherscan地址端點；按實際API/indexer/RPC提供能力或缺口。"
+        },
+        {
+          "test_id": "MCM-W12-03",
+          "name": "hyperevm-hypercore",
+          "pass": "同0x地址不把HyperEVM等同HyperCore；額外應用部位須獨立適配和會計去重。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W13",
+      "title": "TON訊息與Jetton監控",
+      "branch": "mcm/ton",
+      "depends_on": [
+        "W2",
+        "W3",
+        "W7",
+        "W9"
+      ],
+      "files": [
+        "wallet-guardian/src/guardian/chains/ton/",
+        "wallet-guardian/src/guardian/sources/toncenter.py",
+        "wallet-guardian/tests/fixtures/ton/"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W13-01",
+          "name": "address-lt-trace",
+          "pass": "raw/friendly address同一身份、account+lt+hash游標與分頁正確。"
+        },
+        {
+          "test_id": "MCM-W13-02",
+          "name": "destination-completion",
+          "pass": "external message入鏈但目的訊息失敗/bounce不能確認Jetton收到。"
+        },
+        {
+          "test_id": "MCM-W13-03",
+          "name": "jetton-identity",
+          "pass": "master/holder wallet身份分開；wallet extensions未解析顯示partial，非ERC20 approval。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W14",
+      "title": "Sui GraphQL/gRPC監控",
+      "branch": "mcm/sui",
+      "depends_on": [
+        "W2",
+        "W3",
+        "W7",
+        "W9"
+      ],
+      "files": [
+        "wallet-guardian/src/guardian/chains/sui/",
+        "wallet-guardian/src/guardian/sources/sui_graphql.py",
+        "wallet-guardian/src/guardian/sources/sui_grpc.py",
+        "wallet-guardian/tests/fixtures/sui/"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W14-01",
+          "name": "modern-api",
+          "pass": "不依賴已退役JSON-RPC；GraphQL只讀/gRPC查詢allowlist與cursor可重跑。"
+        },
+        {
+          "test_id": "MCM-W14-02",
+          "name": "checkpoint-effects",
+          "pass": "coin/object balance與owner更換按checkpoint/effects核對，不誤當EVM地址。"
+        },
+        {
+          "test_id": "MCM-W14-03",
+          "name": "capability-object",
+          "pass": "已知capability/package插件可解析，未知共享/封裝物件不宣稱完整權限。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W15",
+      "title": "Aptos Coin與FA監控",
+      "branch": "mcm/aptos",
+      "depends_on": [
+        "W2",
+        "W3",
+        "W7",
+        "W9"
+      ],
+      "files": [
+        "wallet-guardian/src/guardian/chains/aptos/",
+        "wallet-guardian/src/guardian/sources/aptos_indexer.py",
+        "wallet-guardian/tests/fixtures/aptos/"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W15-01",
+          "name": "incoming-and-stores",
+          "pass": "FA/Coin store的入帳不是只讀sender交易；404資源不代表帳戶全空。"
+        },
+        {
+          "test_id": "MCM-W15-02",
+          "name": "ledger-pagination",
+          "pass": "ledger version/sequence/分頁與失敗tx效果核對。"
+        },
+        {
+          "test_id": "MCM-W15-03",
+          "name": "auth-events",
+          "pass": "authentication-key/已知權限資源改變有證據；不冒稱通用ERC allowance。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W16",
+      "title": "Cosmos Hub／Osmosis監控",
+      "branch": "mcm/cosmos",
+      "depends_on": [
+        "W2",
+        "W3",
+        "W7",
+        "W9"
+      ],
+      "files": [
+        "wallet-guardian/src/guardian/chains/cosmos/",
+        "wallet-guardian/src/guardian/protocols/ibc/",
+        "wallet-guardian/config/chains/cosmos/",
+        "wallet-guardian/tests/fixtures/cosmos/"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W16-01",
+          "name": "chain-denom",
+          "pass": "HRP/chain-id/genesis/denom trace分開；不跨鏈自動推導同一使用者。"
+        },
+        {
+          "test_id": "MCM-W16-02",
+          "name": "staking-authz",
+          "pass": "bank/multi-send/staking/unbonding/authz/feegrant變動正確。"
+        },
+        {
+          "test_id": "MCM-W16-03",
+          "name": "ibc-end-to-end",
+          "pass": "packet來源成功但ack/timeout未確認不宣稱完成；索引關閉/歷史prune不当零。"
+        }
+      ]
+    },
+    {
+      "id": "MCM-W17",
+      "title": "低優先EVM與擴充版清單結案",
+      "branch": "mcm/evm-tier2-release",
+      "depends_on": [
+        "W9",
+        "W12"
+      ],
+      "files": [
+        "wallet-guardian/config/chains/blast.json",
+        "wallet-guardian/config/chains/opbnb.json",
+        "wallet-guardian/docs/monitor-support-matrix.md",
+        "wallet-guardian/tests/contracts/evm-tier2/"
+      ],
+      "acceptance": [
+        {
+          "test_id": "MCM-W17-01",
+          "name": "opbnb-deprecation",
+          "pass": "不再依賴退役Etherscan opBNB API；只把實測來源能力設為可用。"
+        },
+        {
+          "test_id": "MCM-W17-02",
+          "name": "chain-specific-accounting",
+          "pass": "Blast等非標準native/rebase收益，不能只用余额diff猜成轉帳。"
+        },
+        {
+          "test_id": "MCM-W17-03",
+          "name": "finite-release",
+          "pass": "每鏈列implemented/live/partial/blocked；未啟用鏈不虛報；未交付T3不阻止已完成版本發布。"
+        }
+      ]
+    }
+  ]
+}

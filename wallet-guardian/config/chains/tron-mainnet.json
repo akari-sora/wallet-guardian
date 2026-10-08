@@ -1,0 +1,29 @@
+{
+  "network": "tron-mainnet",
+  "display_name": "Tron",
+  "family": "tron",
+  "tier": 1,
+  "evm_chain_id": null,
+  "native_asset": {
+    "symbol": "TRX",
+    "decimals": 6,
+    "identity": "tron-native:TRX"
+  },
+  "identity": {
+    "method": "genesis block hash",
+    "evm_chain_id": null,
+    "expected_value": null,
+    "status": "to_verify_by_probe"
+  },
+  "finality_policy": "Tron 的 solidified 區塊和 latest 分開。latest 不是 solidified，也不套用 Ethereum 的 12 確認。",
+  "sources": [
+    {
+      "url": "https://developers.tron.network/reference/rate-limits",
+      "kind": "api_docs",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "原生符號 TRX，6 位小數。genesis 識別值本包不確定，expected_value 是 null，identity.status 是 to_verify_by_probe。不能把缺值寫成已驗證或零。非 EVM 地址要由使用者提供。enabled 維持 false。"
+}
