@@ -1,0 +1,462 @@
+{
+  "schema_version": "guardian.monitor.v1",
+  "mode": "read_only",
+  "enabled_networks": [
+    "ethereum-mainnet",
+    "bsc-mainnet",
+    "arbitrum-one",
+    "base-mainnet",
+    "optimism-mainnet",
+    "polygon-pos",
+    "avalanche-c",
+    "solana-mainnet"
+  ],
+  "private_inputs": {
+    "accounts_file_env": "MONITOR_ACCOUNTS_FILE",
+    "state_dir_env": "MONITOR_STATE_DIR",
+    "secret_profile_file_env": "MONITOR_SECRET_PROFILE"
+  },
+  "polling": {
+    "interval_seconds": 10800,
+    "around_the_clock": true,
+    "discovery_interval_seconds": 86400,
+    "bootstrap_lookback_days": 30,
+    "bootstrap_request_cap": 2000,
+    "webhooks_enabled": false
+  },
+  "alerts": {
+    "native_eth_threshold": "0.5",
+    "asset_usd_threshold": "1000",
+    "threshold_operator": "any",
+    "permission_changes": true,
+    "exposure_risk_changes": true,
+    "exposure_news_only": true,
+    "generic_news": false,
+    "unknown_price_policy": "show_unknown_not_zero",
+    "baseline_policy": "initial_summary_and_existing_risk_not_new_history",
+    "quiet_if_no_change": true,
+    "monitor_health_changes": true
+  },
+  "sources": {
+    "etherscan": {
+      "adapter": "etherscan_v2",
+      "endpoint_env": "ETHERSCAN_API_BASE",
+      "credential_env": "ETHERSCAN_API_KEY",
+      "budget_group": "etherscan-account",
+      "enabled": true
+    },
+    "rpc-ethereum-mainnet": {
+      "adapter": "evm_rpc",
+      "endpoint_env": "RPC_ETHEREUM_MAINNET_URL",
+      "budget_group": "rpc-ethereum-mainnet",
+      "enabled": true
+    },
+    "rpc-bsc-mainnet": {
+      "adapter": "evm_rpc",
+      "endpoint_env": "RPC_BSC_MAINNET_URL",
+      "budget_group": "rpc-bsc-mainnet",
+      "enabled": true
+    },
+    "rpc-arbitrum-one": {
+      "adapter": "evm_rpc",
+      "endpoint_env": "RPC_ARBITRUM_ONE_URL",
+      "budget_group": "rpc-arbitrum-one",
+      "enabled": true
+    },
+    "rpc-base-mainnet": {
+      "adapter": "evm_rpc",
+      "endpoint_env": "RPC_BASE_MAINNET_URL",
+      "budget_group": "rpc-base-mainnet",
+      "enabled": true
+    },
+    "rpc-optimism-mainnet": {
+      "adapter": "evm_rpc",
+      "endpoint_env": "RPC_OPTIMISM_MAINNET_URL",
+      "budget_group": "rpc-optimism-mainnet",
+      "enabled": true
+    },
+    "rpc-polygon-pos": {
+      "adapter": "evm_rpc",
+      "endpoint_env": "RPC_POLYGON_POS_URL",
+      "budget_group": "rpc-polygon-pos",
+      "enabled": true
+    },
+    "rpc-avalanche-c": {
+      "adapter": "evm_rpc",
+      "endpoint_env": "RPC_AVALANCHE_C_URL",
+      "budget_group": "rpc-avalanche-c",
+      "enabled": true
+    },
+    "rpc-solana-mainnet": {
+      "adapter": "solana_rpc",
+      "endpoint_env": "RPC_SOLANA_MAINNET_URL",
+      "budget_group": "rpc-solana-mainnet",
+      "enabled": true
+    },
+    "helius-parser": {
+      "adapter": "helius_parsed_events",
+      "endpoint_env": "HELIUS_PARSED_EVENTS_URL",
+      "credential_env": "HELIUS_API_KEY",
+      "budget_group": "helius-account",
+      "enabled": false
+    },
+    "goplus": {
+      "adapter": "goplus",
+      "endpoint_env": "GOPLUS_API_BASE",
+      "credential_env": "GOPLUS_API_KEY",
+      "budget_group": "goplus-account",
+      "enabled": true
+    },
+    "ofac": {
+      "adapter": "ofac_sls",
+      "endpoint_env": "OFAC_SLS_FEED",
+      "budget_group": "public-feeds",
+      "enabled": true
+    },
+    "prices": {
+      "adapter": "coingecko",
+      "endpoint_env": "COINGECKO_API_BASE",
+      "credential_env": "COINGECKO_API_KEY",
+      "budget_group": "price-account",
+      "enabled": false
+    }
+  },
+  "routing": [
+    {
+      "network": "ethereum-mainnet",
+      "capability": "balances.native",
+      "source_ids": [
+        "rpc-ethereum-mainnet"
+      ]
+    },
+    {
+      "network": "ethereum-mainnet",
+      "capability": "history.token",
+      "source_ids": [
+        "rpc-ethereum-mainnet"
+      ]
+    },
+    {
+      "network": "ethereum-mainnet",
+      "capability": "permissions.standard",
+      "source_ids": [
+        "rpc-ethereum-mainnet"
+      ]
+    },
+    {
+      "network": "ethereum-mainnet",
+      "capability": "history.native_external",
+      "source_ids": [
+        "etherscan",
+        "rpc-ethereum-mainnet"
+      ]
+    },
+    {
+      "network": "bsc-mainnet",
+      "capability": "balances.native",
+      "source_ids": [
+        "rpc-bsc-mainnet"
+      ]
+    },
+    {
+      "network": "bsc-mainnet",
+      "capability": "history.token",
+      "source_ids": [
+        "rpc-bsc-mainnet"
+      ]
+    },
+    {
+      "network": "bsc-mainnet",
+      "capability": "permissions.standard",
+      "source_ids": [
+        "rpc-bsc-mainnet"
+      ]
+    },
+    {
+      "network": "bsc-mainnet",
+      "capability": "history.native_external",
+      "source_ids": [
+        "etherscan",
+        "rpc-bsc-mainnet"
+      ]
+    },
+    {
+      "network": "arbitrum-one",
+      "capability": "balances.native",
+      "source_ids": [
+        "rpc-arbitrum-one"
+      ]
+    },
+    {
+      "network": "arbitrum-one",
+      "capability": "history.token",
+      "source_ids": [
+        "rpc-arbitrum-one"
+      ]
+    },
+    {
+      "network": "arbitrum-one",
+      "capability": "permissions.standard",
+      "source_ids": [
+        "rpc-arbitrum-one"
+      ]
+    },
+    {
+      "network": "arbitrum-one",
+      "capability": "history.native_external",
+      "source_ids": [
+        "etherscan",
+        "rpc-arbitrum-one"
+      ]
+    },
+    {
+      "network": "base-mainnet",
+      "capability": "balances.native",
+      "source_ids": [
+        "rpc-base-mainnet"
+      ]
+    },
+    {
+      "network": "base-mainnet",
+      "capability": "history.token",
+      "source_ids": [
+        "rpc-base-mainnet"
+      ]
+    },
+    {
+      "network": "base-mainnet",
+      "capability": "permissions.standard",
+      "source_ids": [
+        "rpc-base-mainnet"
+      ]
+    },
+    {
+      "network": "base-mainnet",
+      "capability": "history.native_external",
+      "source_ids": [
+        "etherscan",
+        "rpc-base-mainnet"
+      ]
+    },
+    {
+      "network": "optimism-mainnet",
+      "capability": "balances.native",
+      "source_ids": [
+        "rpc-optimism-mainnet"
+      ]
+    },
+    {
+      "network": "optimism-mainnet",
+      "capability": "history.token",
+      "source_ids": [
+        "rpc-optimism-mainnet"
+      ]
+    },
+    {
+      "network": "optimism-mainnet",
+      "capability": "permissions.standard",
+      "source_ids": [
+        "rpc-optimism-mainnet"
+      ]
+    },
+    {
+      "network": "optimism-mainnet",
+      "capability": "history.native_external",
+      "source_ids": [
+        "etherscan",
+        "rpc-optimism-mainnet"
+      ]
+    },
+    {
+      "network": "polygon-pos",
+      "capability": "balances.native",
+      "source_ids": [
+        "rpc-polygon-pos"
+      ]
+    },
+    {
+      "network": "polygon-pos",
+      "capability": "history.token",
+      "source_ids": [
+        "rpc-polygon-pos"
+      ]
+    },
+    {
+      "network": "polygon-pos",
+      "capability": "permissions.standard",
+      "source_ids": [
+        "rpc-polygon-pos"
+      ]
+    },
+    {
+      "network": "polygon-pos",
+      "capability": "history.native_external",
+      "source_ids": [
+        "etherscan",
+        "rpc-polygon-pos"
+      ]
+    },
+    {
+      "network": "avalanche-c",
+      "capability": "balances.native",
+      "source_ids": [
+        "rpc-avalanche-c"
+      ]
+    },
+    {
+      "network": "avalanche-c",
+      "capability": "history.token",
+      "source_ids": [
+        "rpc-avalanche-c"
+      ]
+    },
+    {
+      "network": "avalanche-c",
+      "capability": "permissions.standard",
+      "source_ids": [
+        "rpc-avalanche-c"
+      ]
+    },
+    {
+      "network": "avalanche-c",
+      "capability": "history.native_external",
+      "source_ids": [
+        "etherscan",
+        "rpc-avalanche-c"
+      ]
+    },
+    {
+      "network": "solana-mainnet",
+      "capability": "balances.native",
+      "source_ids": [
+        "rpc-solana-mainnet"
+      ]
+    },
+    {
+      "network": "solana-mainnet",
+      "capability": "balances.token_accounts",
+      "source_ids": [
+        "rpc-solana-mainnet"
+      ]
+    },
+    {
+      "network": "solana-mainnet",
+      "capability": "history.account_set",
+      "source_ids": [
+        "rpc-solana-mainnet"
+      ]
+    },
+    {
+      "network": "solana-mainnet",
+      "capability": "permissions.spl",
+      "source_ids": [
+        "rpc-solana-mainnet"
+      ]
+    }
+  ],
+  "budgets": {
+    "etherscan-account": {
+      "max_rps": 2,
+      "max_concurrency": 1,
+      "max_requests_per_day": 20000,
+      "retry_attempts": 3
+    },
+    "rpc-ethereum-mainnet": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 10000,
+      "retry_attempts": 3
+    },
+    "rpc-bsc-mainnet": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 10000,
+      "retry_attempts": 3
+    },
+    "rpc-arbitrum-one": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 10000,
+      "retry_attempts": 3
+    },
+    "rpc-base-mainnet": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 10000,
+      "retry_attempts": 3
+    },
+    "rpc-optimism-mainnet": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 10000,
+      "retry_attempts": 3
+    },
+    "rpc-polygon-pos": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 10000,
+      "retry_attempts": 3
+    },
+    "rpc-avalanche-c": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 10000,
+      "retry_attempts": 3
+    },
+    "rpc-solana-mainnet": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 10000,
+      "retry_attempts": 3
+    },
+    "helius-account": {
+      "max_rps": 2,
+      "max_concurrency": 1,
+      "max_requests_per_day": 20000,
+      "max_credits_per_month": 700000,
+      "retry_attempts": 3
+    },
+    "goplus-account": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 1000,
+      "retry_attempts": 2
+    },
+    "public-feeds": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 200,
+      "retry_attempts": 2
+    },
+    "price-account": {
+      "max_rps": 0.2,
+      "max_concurrency": 1,
+      "max_requests_per_day": 1000,
+      "retry_attempts": 2
+    }
+  },
+  "plugins": [
+    "lista-slisbnb",
+    "aave-v3",
+    "erc4626-registered"
+  ],
+  "sanctions_lists": [
+    "us-ofac-sdn",
+    "us-ofac-consolidated"
+  ],
+  "privacy": {
+    "upload_state": false,
+    "third_party_wallet_queries": "deny_until_local_consent",
+    "public_report_mode": "aggregate_no_wallet_identifiers"
+  },
+  "delivery": {
+    "mode": "outbox_only",
+    "profile_env": null
+  },
+  "execution": {
+    "sign": false,
+    "broadcast": false,
+    "auto_purchase": false,
+    "auto_disable_schedule": false
+  }
+}

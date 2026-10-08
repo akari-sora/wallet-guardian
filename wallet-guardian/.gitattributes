@@ -1,0 +1,7 @@
+# MCM-01: keep contracts and migrations byte-identical across Windows/Linux checkouts.
+*.sql text eol=lf
+migrations/** text eol=lf
+schemas/*.json text eol=lf
+examples/*.json text eol=lf
+config/chains/*.json text eol=lf
+docs/mcm-01/*.json text eol=lf

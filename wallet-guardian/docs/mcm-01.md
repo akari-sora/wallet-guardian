@@ -150,6 +150,36 @@ live smoke 只在使用者本機、自備 key、以及允許的公開測試地�
 - 第一版不強制 webhook、全節點或全 archive、付費聚合器、GraphQL 或 gRPC 訂閱，或專有威脅情報。
 - 不靠 LLM 估算餘額，不自動信任新的 RPC、合約或協議公告，不把來源標籤當成法律結論。
 
+## W1 實作狀態
+
+W1 在這個分支落地公開設定、私人帳戶與穩定身份。上面「公開與私人分離」裡「W0 不把 schema 抄進執行路徑」是 W0 的範圍。從這一節起，schema 與載入器在這個分支。
+
+現在有的東西：
+
+- `schemas/monitor.schema.json`、`schemas/accounts.schema.json`、`schemas/coverage.schema.json` 是規劃契約的原文。`coverage.schema.json` 只是契約，執行覆蓋從 W3 才接。
+- `examples/monitor.json` 與 `examples/accounts.empty.template.json` 沒有地址、key 或狀態。
+- `guardian.jsonschema_lite` 只檢查這些 schema 用到的 Draft 2020-12 子集。不認得的關鍵字會失敗，不會略過。沒有加 `jsonschema` 套件。
+- `guardian.identities` 只依宣告的鏈族解析地址。鏈族不會互相推導。`wallet_id` 是身份，標籤只是顯示。
+- `guardian.configuration` 載入公開設定與私人帳戶，並檢查來源、預算與鏈族是否對得上。同一個 `credential_env` 必須共用一個 `budget_group`。缺憑證的來源是 BLOCKED（`credential_missing`），其他來源繼續。`safe_export` 只輸出 schema 版本、啟用的網路、每個鏈族與網路的錢包數量、來源名稱、是否啟用、憑證是否存在，以及預算。
+- `guardian.storage` 保持 `PRAGMA user_version=1`。MCM 遷移在 `migrations/monitor/`，記錄在 `mcm_schema_migrations`。重開是 no-op。
+- `guardian.legacy_state` 讀舊的私人 JSON，寫入去重、抑制與游標。不寫 `alerts` 或 `outbox`，也不從 `runs` 製造快照。同一個內容再匯入是 no-op。
+
+還沒接上的東西：
+
+- `run-once` 仍走既有設定與 BNB Chain 路徑，直到 W9。這包沒有改 `service.run_once`、`SnapshotCycle` 的行為或 CLI 指令。
+- 鏈登錄的 `enabled` 仍是 false，`status` 仍是 `planned_not_live_verified`。公開設定裡的 `enabled_networks` 只是操作者要監控的清單，不是 live 驗證。沒有任何鏈被標成 live_pass。
+- 沒有 live 來源驗證。缺 key 是 BLOCKED，不是已驗證，也不是沒有資產。
+
+### 私人設定放哪裡
+
+帳戶檔、秘密 profile、狀態目錄都放在這個 git 工作樹外面。公開設定只用環境變數的名稱指向它們，名稱寫在 `examples/monitor.json`：
+
+- `MONITOR_ACCOUNTS_FILE`：帳戶 JSON 的路徑
+- `MONITOR_SECRET_PROFILE`：秘密 profile JSON 的路徑。內容是環境變數名稱對應到值，不進這個 repo。
+- `MONITOR_STATE_DIR`：狀態目錄。裡面會放 `monitor.sqlite`、游標與 outbox。
+
+POSIX 上帳戶檔與秘密檔要是擁有者才可讀寫（0600 這一類，群組與其他人不可讀）。狀態目錄建立為 0700。Windows 不檢查這組權限位元。日誌不印秘密值。這裡不寫真實路徑、地址或 key。
+
 ## 本包明確沒做的事
 
 - 沒有修改 `action-client/`、`.gitlab-ci.yml` 或部署設定。
