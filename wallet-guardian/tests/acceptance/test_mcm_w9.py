@@ -119,8 +119,11 @@ def test_mcm_w9_01_first_run_no_code_edit(tmp_path: Path, monkeypatch: pytest.Mo
     report = _cli(capsys, ["run-once", "--mcm-config", str(desk.config), "--no-send"], desk.backend)
     assert report["status"] == "ok"
     assert report["sent"] == 0
-    assert report["positions"] == "unknown"
+    assert isinstance(report["positions"], list) and report["positions"]
+    assert {item["status"] for item in report["positions"]} == {"unknown"}
+    assert all(item.get("reason") for item in report["positions"])
     assert report["live_verified"] is False
+    assert report.get("live_pass") is not True
     assert report["outbox_written"] >= 1
     assert report["valuation_unknown"]
     assert all(int(item["raw_amount"]) > 0 for item in report["native_reads"])
@@ -266,7 +269,8 @@ def test_mcm_w9_03_handover_dedup(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     public = load_public_config(desk.config)
     private = resolve_private_inputs(public, os.environ)
     compared = _compare_path(legacy_path, database)
-    assert compared["counts"]["matched"] >= 1
+    assert compared["counts"]["matched"] == 0
+    assert compared["counts"]["uncomparable"] >= 1
     assert compared["counts"]["unmapped_legacy"] >= 1
     assert "solana-mainnet" in compared["coverage_differences"]["networks_legacy_never_checked"]
     imported = import_legacy_state(database, TENANT, json.loads(before.decode("utf-8")), tag_map={"desk": EVM_ID}, accounts=private.accounts)
