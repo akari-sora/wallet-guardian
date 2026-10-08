@@ -11,7 +11,9 @@
     "test:gate": "node src/gate.test.mjs",
     "test:api": "node --test src/private-task.test.mjs src/client-flow.test.mjs src/siwe-gate.test.mjs src/server/api.test.mjs src/lista-reread.test.mjs tests/*.test.mjs",
     "test:review": "node --test tests/*.test.mjs",
-    "test:runtime": "node --test integration/d1-private-runtime.test.mjs"
+    "test:runtime": "node --test integration/d1-private-runtime.test.mjs",
+    "test:wallets": "node --test tests/wallet-discovery.test.mjs tests/wallet-selection.test.mjs",
+    "test:wallets:artifact": "node --test integration/wallets-artifact.test.mjs"
   },
   "devDependencies": {
     "playwright-core": "1.59.1",

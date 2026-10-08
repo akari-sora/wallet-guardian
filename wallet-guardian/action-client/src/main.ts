@@ -21,6 +21,8 @@ import { assertInertPayload, assertTaskRef, boundedJson, units, validatePlan } f
 import { parsePrivateTaskRef, privateTaskSendAllowed, readBoundedJson } from "./private-task.mjs";
 import { acceptLoginChallenge } from "./siwe-gate.mjs";
 import { fetchTrustedRpc, TRUSTED_LISTA } from "./trusted-lista.mjs";
+import { createAbandonSignal, encodePersonalSignMessage, guardedRequest, signEncodingFor } from "./wallets/injected.mjs";
+import { createWalletRegistry, sourceLabel } from "./wallets/registry.mjs";
 
 const TASK_VERSION = "guardian.task.v1";
 const PLAN_VERSION = "guardian.action_plan.v1";
@@ -228,8 +230,70 @@ type EthereumProvider = {
   removeListener?: (event: string, handler: (value: unknown) => void) => void;
 };
 
+// WALLET-CONNECT-01 W-A. name/rdns/uuid/icon are wallet self-description for display only.
+// Login identity is the SIWE-verified address plus the D1 session; nothing here feeds the ACL.
+type WalletCandidate = {
+  readonly id: string;
+  readonly source: string;
+  readonly provider: EthereumProvider;
+  readonly name: string;
+  readonly rdns: string | null;
+  readonly uuid: string | null;
+  readonly icon: string | null;
+};
+
+type WalletContext = {
+  userAction?: boolean;
+  selected?: boolean;
+  approvedMessage?: string;
+  address?: string;
+};
+
+type Abandon = ReturnType<typeof createAbandonSignal>;
+
+const registry = createWalletRegistry({ win: window, onChange: () => onWalletsChanged() });
+let selectedCandidate: WalletCandidate | null = null;
+// Local connection generation. Bumped when the provider actually in use changes.
+let connectionEpoch = 0;
+let connectionAbandon: Abandon = createAbandonSignal();
+// A provider switch with a live session must revoke it on the server before a new login.
+let revokePending = false;
+let revokeAfterAuth = false;
+let loginActive = false;
+let lastRevocation: { reason: string; confirmed: boolean; status: number | null } | null = null;
+
+function walletCandidates(): WalletCandidate[] {
+  return registry.list() as unknown as WalletCandidate[];
+}
+
+// W-A2: one connection for every wallet operation. An explicit selection wins. Otherwise the
+// provider already in use stays (another wallet's announcement is not a switch). Otherwise a
+// sole candidate is used. Several candidates and no selection means no wallet calls at all.
+function activeConnection(): WalletCandidate | null {
+  if (selectedCandidate) return selectedCandidate;
+  registry.refresh();
+  const candidates = walletCandidates();
+  if (watchedProvider) {
+    const kept = candidates.find((item) => item.provider === watchedProvider);
+    if (kept) return kept;
+  }
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
 function ethereumProvider(): EthereumProvider | null {
-  return (window as unknown as { ethereum?: EthereumProvider }).ethereum ?? null;
+  return activeConnection()?.provider ?? null;
+}
+
+function walletCall(connection: WalletCandidate, method: string, params?: unknown[], context: WalletContext = {}): Promise<unknown> {
+  return guardedRequest(connection, method, params, context, connectionAbandon) as Promise<unknown>;
+}
+
+function bumpConnection(): void {
+  connectionEpoch += 1;
+  connectionAbandon.abandon();
+  connectionAbandon = createAbandonSignal();
+  walletAccount = null;
+  walletChainId = null;
 }
 
 function currentVerification(): RereadView {
@@ -314,19 +378,28 @@ function watchWallet(): void {
   if (watchedProvider) {
     unlisten(watchedProvider);
     walletEpoch += 1;
+    bumpConnection();
     dropReread("provider_replaced");
     paintVerification(currentVerification());
   }
   watchedProvider = provider;
+  renderWalletPicker();
   if (!provider?.on) return;
+  // Events from a provider that is no longer the connection are ignored even if it kept the listener.
+  const live = () => provider === watchedProvider;
   listen(provider, "accountsChanged", (value: unknown) => {
+    if (!live()) return;
     const first = Array.isArray(value) ? String(value[0] ?? "") : "";
     walletAccount = /^0x[a-fA-F0-9]{40}$/.test(first) ? first.toLowerCase() : null;
     walletEpoch += 1;
     dropReread();
     paintVerification(currentVerification());
+    if (csrfToken && sessionAddress && walletAccount && walletAccount !== sessionAddress.toLowerCase()) {
+      banner.textContent = "錢包帳戶已變更，和目前的讀取身分不同。要改用新帳戶，請重新登入；登入前會先撤銷舊的登入。不會送出交易。";
+    }
   });
   listen(provider, "chainChanged", (value: unknown) => {
+    if (!live()) return;
     const hex = typeof value === "string" ? value : "";
     const parsed = /^0x[0-9a-fA-F]+$/.test(hex) ? Number.parseInt(hex, 16) : Number.NaN;
     walletChainId = Number.isSafeInteger(parsed) ? parsed : null;
@@ -335,6 +408,7 @@ function watchWallet(): void {
     paintVerification(currentVerification());
   });
   listen(provider, "disconnect", () => {
+    if (!live()) return;
     walletEpoch += 1;
     walletAccount = null;
     dropReread("provider_disconnected");
@@ -344,6 +418,7 @@ function watchWallet(): void {
 
 function bindResumeListeners(): void {
   const resume = () => {
+    if (registry.refresh()) renderWalletPicker();
     watchWallet();
     paintVerification(currentVerification());
   };
@@ -371,17 +446,17 @@ async function reverifyCurrent(testApprovals?: unknown[]): Promise<void> {
   let connectedAccount: string | null = null;
   let roundChain: number | null = null;
   let walletIdentityVerified = false;
-  const ethereum = ethereumProvider();
-  if (!ethereum) {
+  const connection = activeConnection();
+  if (!connection) {
     walletAccount = null;
     walletChainId = null;
   } else {
     try {
-      const accounts = await ethereum.request({ method: "eth_accounts" });
+      const accounts = await walletCall(connection, "eth_accounts");
       if (!still()) return;
       const first = Array.isArray(accounts) ? String(accounts[0] ?? "") : "";
       if (!/^0x[a-fA-F0-9]{40}$/.test(first)) throw new Error("wallet account");
-      const chain = await ethereum.request({ method: "eth_chainId" });
+      const chain = await walletCall(connection, "eth_chainId");
       if (!still()) return;
       if (typeof chain !== "string" || !/^0x[0-9a-fA-F]+$/.test(chain)) throw new Error("wallet chain");
       const parsed = Number.parseInt(chain, 16);
@@ -752,13 +827,15 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
 async function queryCapability(chainId: number, generation: number): Promise<void> {
   if (generation !== loadGeneration) return;
   const stamp = viewStamp(generation, authGeneration, privateRef, privateRevision);
-  const ethereum = ethereumProvider();
-  if (!ethereum) {
-    banner.textContent = "找不到瀏覽器錢包，無法查詢 EIP-5792。維持模式 A，不會送出交易。";
+  const connection = activeConnection();
+  if (!connection) {
+    banner.textContent = walletCandidates().length > 1
+      ? "請先選擇錢包，再查詢 EIP-5792。維持模式 A，不會送出交易。"
+      : "找不到瀏覽器錢包，無法查詢 EIP-5792。維持模式 A，不會送出交易。";
     return;
   }
   try {
-    const capabilities = await ethereum.request({ method: "wallet_getCapabilities" });
+    const capabilities = await walletCall(connection, "wallet_getCapabilities", undefined, { userAction: true });
     syncFlow();
     if (!canRedrawCapability(flow, stamp) || generation !== loadGeneration) return;
     observedCapability = eip5792Status(capabilities, chainId);
@@ -914,36 +991,118 @@ async function openPrivateTask(ref: string): Promise<void> {
   await loadPrivateTask(ref, generation);
 }
 
+// W-A2: the user picks the wallet before any account request. One candidate is used directly.
+function connectionForLogin(): WalletCandidate | null {
+  if (selectedCandidate) return selectedCandidate;
+  registry.refresh();
+  const candidates = walletCandidates();
+  if (candidates.length !== 1) return null;
+  selectedCandidate = candidates[0];
+  watchWallet();
+  renderWalletPicker();
+  return selectedCandidate;
+}
+
+// Server-side revocation for a wallet/account switch. Local state is cleared first; the result
+// is only reported as revoked when the server answers revoked=true (or no session remains).
+async function revokeServerSession(reason: string): Promise<boolean> {
+  syncFlow();
+  beginLogout(flow);
+  applyFlowView();
+  dropReread();
+  hideCancel();
+  renderEmpty();
+  syncAccountControls();
+  try {
+    const response = await api("/api/auth/logout", {
+      method: "POST", body: JSON.stringify({}), signal: AbortSignal.timeout(10000),
+    });
+    const result = await readBoundedJson(response) as { authenticated?: boolean; revoked?: boolean };
+    if (response.status !== 401 && (!response.ok || result.authenticated !== false || result.revoked !== true)) {
+      throw new Error("revocation unconfirmed");
+    }
+    finishLogout(flow);
+    applyFlowView();
+    applySession(null);
+    revokePending = false;
+    lastRevocation = { reason, confirmed: true, status: response.status };
+    return true;
+  } catch {
+    revokePending = true;
+    lastRevocation = { reason, confirmed: false, status: null };
+    return false;
+  }
+}
+
+// A verify answer that arrives after a switch is never applied. If it created a session, that
+// session is revoked with its own CSRF so it cannot come back on reload.
+async function revokeOrphanSession(body: unknown): Promise<void> {
+  const record = body && typeof body === "object" ? body as SessionBody : {};
+  if (typeof record.csrf_token !== "string" || !/^[a-f0-9]{64}$/.test(record.csrf_token)) return;
+  try {
+    const response = await api("/api/auth/logout", {
+      method: "POST", headers: { "x-csrf-token": record.csrf_token },
+      body: JSON.stringify({}), signal: AbortSignal.timeout(10000),
+    });
+    const result = await readBoundedJson(response) as { authenticated?: boolean; revoked?: boolean };
+    const confirmed = response.status === 401 || (response.ok && result.authenticated === false && result.revoked === true);
+    lastRevocation = { reason: "late_verify", confirmed, status: response.status };
+  } catch {
+    lastRevocation = { reason: "late_verify", confirmed: false, status: null };
+  }
+}
+
 async function login(): Promise<void> {
   if (authBusy) return;
-  const ethereum = ethereumProvider();
-  if (!ethereum) {
-    banner.textContent = "找不到瀏覽器錢包，無法登入。不會送出交易。";
+  const connection = connectionForLogin();
+  if (!connection) {
+    banner.textContent = walletCandidates().length > 1
+      ? "偵測到多個錢包。請先選擇要登入的錢包；選擇前不會向任何錢包索取帳戶。不會送出交易。"
+      : "目前找不到瀏覽器錢包，無法登入。頁面仍會接收晚到的錢包公告。不會送出交易。";
+    renderWalletPicker();
     return;
   }
   authBusy = true;
+  loginActive = true;
+  revokeAfterAuth = false;
   const authEpoch = ++authGeneration;
+  const connEpoch = connectionEpoch;
   invalidatePrivateView();
   syncAccountControls();
   if (beginLogin(flow) == null) {
     authBusy = false;
+    loginActive = false;
     syncAccountControls();
     return;
   }
+  // Same auth generation, same connection generation, same selected provider.
+  const current = () => authEpoch === authGeneration && connEpoch === connectionEpoch &&
+    selectedCandidate != null && selectedCandidate.provider === connection.provider;
   try {
-    const accounts = await ethereum.request({ method: "eth_requestAccounts" });
+    // W-A3: a switched provider revokes the previous site session before a new identity logs in.
+    if (csrfToken && revokePending) {
+      if (!(await revokeServerSession("provider_switch"))) throw new Error("舊登入撤銷未確認。");
+      if (!current() || beginLogin(flow) == null) return;
+    }
+    const accounts = await walletCall(connection, "eth_requestAccounts", undefined, { userAction: true, selected: true });
+    if (!current()) return;
     const address = Array.isArray(accounts) ? String(accounts[0] ?? "") : "";
-    const chain = await ethereum.request({ method: "eth_chainId" });
+    const chain = await walletCall(connection, "eth_chainId");
     if (!/^0x[a-fA-F0-9]{40}$/.test(address) || typeof chain !== "string" || !/^0x[0-9a-f]+$/i.test(chain)) {
       throw new Error("錢包沒有提供可用帳戶與鏈。");
     }
     const chainId = Number(BigInt(chain));
-    if (!Number.isSafeInteger(chainId) || chainId <= 0 || authEpoch !== authGeneration) return;
+    if (!Number.isSafeInteger(chainId) || chainId <= 0 || !current()) return;
+    // W-A3: a different account than the live session is a switch too. Revoke first.
+    if (csrfToken && sessionAddress && sessionAddress.toLowerCase() !== address.toLowerCase()) {
+      if (!(await revokeServerSession("account_switch"))) throw new Error("舊登入撤銷未確認。");
+      if (!current() || beginLogin(flow) == null) return;
+    }
     const challengeResponse = await api("/api/auth/challenge", {
       method: "POST", body: JSON.stringify({ address, chainId }), signal: AbortSignal.timeout(10000),
     });
     const issued = await readBoundedJson(challengeResponse);
-    if (authEpoch !== authGeneration) return;
+    if (!current()) return;
     if (!challengeResponse.ok) throw new Error("無法取得這條鏈的唯讀登入挑戰。");
     const rebuilt = acceptLoginChallenge(issued, address, Date.now());
     const challenge = validateLoginChallenge(issued, { origin: window.location.origin, address, chainId });
@@ -951,16 +1110,21 @@ async function login(): Promise<void> {
       throw new Error("登入訊息不是固定的讀取聲明。不會簽名。");
     }
     // Also pin the wallet identity immediately before offering the message.
-    const currentAccounts = await ethereum.request({ method: "eth_accounts" });
-    const currentChain = await ethereum.request({ method: "eth_chainId" });
-    if (authEpoch !== authGeneration || !Array.isArray(currentAccounts) ||
+    const currentAccounts = await walletCall(connection, "eth_accounts");
+    const currentChain = await walletCall(connection, "eth_chainId");
+    if (!current() || !Array.isArray(currentAccounts) ||
         String(currentAccounts[0]).toLowerCase() !== address.toLowerCase() || currentChain !== chain) {
       throw new Error("錢包帳戶或鏈已變更，請重新登入。");
     }
     // Keep the challenge CSRF local. A rejected login must not corrupt the
     // existing session's CSRF token used by logout and task cancellation.
-    const signature = await ethereum.request({ method: "personal_sign", params: [rebuilt, address] });
-    if (authEpoch !== authGeneration) return;
+    // W-A4: only the fixed SIWE message, only to the selected provider. The transport encoding
+    // may differ per adapter; the signed bytes may not. A refusal is final (no eth_sign fallback).
+    const payload = encodePersonalSignMessage(rebuilt, signEncodingFor(connection));
+    const signature = await walletCall(connection, "personal_sign", [payload, address], {
+      userAction: true, approvedMessage: rebuilt, address,
+    });
+    if (!current()) return;
     if (typeof signature !== "string") throw new Error("未取得登入簽名。");
     const verifyCsrf = mutationCsrf(flow, "verify");
     const verifyResponse = await api("/api/auth/verify", {
@@ -968,20 +1132,142 @@ async function login(): Promise<void> {
       body: JSON.stringify({ message: rebuilt, signature }), signal: AbortSignal.timeout(10000),
     });
     const verified = await readBoundedJson(verifyResponse);
-    if (authEpoch !== authGeneration) return;
+    if (!current()) {
+      if (verifyResponse.ok) await revokeOrphanSession(verified);
+      return;
+    }
     if (!verifyResponse.ok) throw new Error("登入沒有完成。");
     if (!applySession(verified)) throw new Error("登入回應不完整。");
-    banner.textContent = "已登入。這只是讀取身分，不是交易授權。主網送出保持關閉。";
+    revokePending = false;
+    banner.textContent = `已用「${connection.name}」登入。這只是讀取身分，不是交易授權。主網送出保持關閉。`;
     if (privateRef) {
       const generation = ++loadGeneration;
       await loadPrivateTask(privateRef, generation);
     }
-  } catch {
-    if (authEpoch === authGeneration) banner.textContent = "登入未完成；既有登入不會因此獲得新權限。可重試或登出，不會送出交易。";
+  } catch (error) {
+    if (current()) {
+      banner.textContent = error instanceof Error && error.message === "舊登入撤銷未確認。"
+        ? "已切換錢包，但舊登入的伺服器撤銷未確認，所以沒有用新錢包登入。請重試登入或登出；不會送出交易。"
+        : "登入未完成；既有登入不會因此獲得新權限。可重試或登出，不會送出交易。";
+    }
   } finally {
     endLogin(flow);
+    loginActive = false;
+    if (revokeAfterAuth) {
+      // Set only by a switch during this login, which also made this login unable to install a session.
+      revokeAfterAuth = false;
+      if (csrfToken) await finishSwitchRevocation();
+    }
     authBusy = false;
     syncAccountControls();
+  }
+}
+
+async function finishSwitchRevocation(): Promise<void> {
+  const confirmed = await revokeServerSession("provider_switch");
+  banner.textContent = confirmed
+    ? "已切換錢包。舊登入已在伺服器撤銷（登出回應 revoked=true）。請用新選的錢包登入；不會送出交易。"
+    : "已切換錢包，畫面已清除，但舊登入的伺服器撤銷未確認。請按登出重試，或登入時會先再試撤銷；不會送出交易。";
+}
+
+// W-A3: picking a different provider is a switch. A new announcement alone never calls this.
+async function selectWallet(candidate: WalletCandidate): Promise<void> {
+  const previous = activeConnection();
+  if (previous && previous.provider === candidate.provider) {
+    if (!selectedCandidate) selectedCandidate = candidate;
+    renderWalletPicker();
+    return;
+  }
+  selectedCandidate = candidate;
+  if (!previous && !authBusy) {
+    // First choice: nothing was connected yet. No account request happens here.
+    watchWallet();
+    renderWalletPicker();
+    banner.textContent = `已選擇「${candidate.name}」。登入只會送到這個錢包；尚未向它索取帳戶。不會送出交易。`;
+    return;
+  }
+  ++authGeneration;
+  walletEpoch += 1;
+  bumpConnection();
+  invalidatePrivateView();
+  watchWallet();
+  renderWalletPicker();
+  banner.textContent = `已切換到「${candidate.name}」。舊連線的重查結果與私人畫面已清除。不會送出交易。`;
+  if (!csrfToken) return;
+  revokePending = true;
+  if (authBusy) {
+    // A login in flight is abandoned now; revocation runs as soon as it unwinds so an in-flight
+    // verify cannot re-install a cookie after the revocation. A logout in flight revokes anyway;
+    // if it cannot confirm, revokePending makes the next login revoke first.
+    if (loginActive) revokeAfterAuth = true;
+    return;
+  }
+  authBusy = true;
+  syncAccountControls();
+  try {
+    await finishSwitchRevocation();
+  } finally {
+    authBusy = false;
+    syncAccountControls();
+  }
+}
+
+function onWalletsChanged(): void {
+  // Discovery only updates the menu (and the sticky implicit connection). It is not a switch.
+  renderWalletPicker();
+  watchWallet();
+}
+
+function renderWalletPicker(): void {
+  const list = document.querySelector<HTMLElement>("#wallet-list");
+  const status = document.querySelector<HTMLElement>("#wallet-status");
+  const loginButton = document.querySelector<HTMLButtonElement>("#login");
+  const candidates = walletCandidates();
+  if (list) {
+    list.replaceChildren();
+    for (const candidate of candidates) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "wallet-option";
+      const chosen = selectedCandidate != null && selectedCandidate.provider === candidate.provider;
+      if (button.dataset) button.dataset.selected = chosen ? "true" : "false";
+      if (typeof button.setAttribute === "function") button.setAttribute("aria-pressed", chosen ? "true" : "false");
+      if (candidate.icon) {
+        const icon = document.createElement("img");
+        icon.src = candidate.icon;
+        icon.alt = "";
+        icon.width = 24;
+        icon.height = 24;
+        icon.referrerPolicy = "no-referrer";
+        icon.className = "wallet-icon";
+        button.append(icon);
+      }
+      const name = document.createElement("span");
+      name.className = "wallet-name";
+      name.textContent = candidate.name;
+      const meta = document.createElement("small");
+      meta.className = "wallet-meta";
+      meta.textContent = sourceLabel(candidate);
+      button.append(name, meta);
+      button.addEventListener("click", () => {
+        void selectWallet(candidate);
+      });
+      list.append(button);
+    }
+  }
+  if (status) {
+    status.textContent = candidates.length === 0
+      ? "尚未偵測到瀏覽器錢包。頁面會持續接收錢包公告；這不代表你沒有錢包。"
+      : selectedCandidate
+        ? `已選擇：${selectedCandidate.name}。連線與登入只送到這個錢包。錢包名稱與 rdns 是錢包自述，不是身分驗證。`
+        : candidates.length === 1
+          ? "偵測到 1 個錢包。按登入會直接使用它。"
+          : "偵測到多個錢包。請先選擇要登入的錢包；選擇前不會向任何錢包索取帳戶。";
+  }
+  if (loginButton) {
+    loginButton.textContent = candidates.length === 1 && !selectedCandidate
+      ? "使用此錢包登入（只簽讀取訊息）"
+      : "登入（只簽讀取訊息）";
   }
 }
 
@@ -1009,6 +1295,7 @@ async function logout(): Promise<void> {
     finishLogout(flow);
     applyFlowView();
     applySession(null);
+    revokePending = false;
     banner.textContent = "已登出。此工作階段已失效。不會送出交易。";
   } catch {
     banner.textContent = "畫面已清除，但伺服器登出結果未確認。請重試登出；不會送出交易。";
@@ -1160,6 +1447,21 @@ document.querySelector("#clear")!.addEventListener("click", () => {
   banner.textContent = BANNER;
 });
 
+registry.start();
 watchWallet();
+renderWalletPicker();
 bindResumeListeners();
+// Some wallets inject window.ethereum / binancew3w after load without an EIP-6963 announcement.
+// Re-read once shortly after load and on the legacy initialized event. Not a switch by itself.
+function refreshInjectedWallets(): void {
+  if (registry.refresh()) {
+    renderWalletPicker();
+    watchWallet();
+  }
+}
+if (typeof window.addEventListener === "function") window.addEventListener("ethereum#initialized", refreshInjectedWallets);
+{
+  const timer = setTimeout(refreshInjectedWallets, 1500) as unknown as { unref?: () => void };
+  if (typeof timer.unref === "function") timer.unref();
+}
 void restoreSession().then((current) => { if (current) inspectLocation(); });

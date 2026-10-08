@@ -181,3 +181,45 @@ pre {
   dl { grid-template-columns: 1fr; }
   main { width: min(100% - 24px, 880px); }
 }
+
+.wallet-picker {
+  margin: 0 0 12px;
+}
+
+.wallet-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.wallet-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  text-align: left;
+}
+
+.wallet-option[data-selected="true"] {
+  outline: 2px solid var(--ok);
+  outline-offset: 1px;
+}
+
+.wallet-icon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  flex: none;
+}
+
+.wallet-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.wallet-meta {
+  color: var(--muted);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
