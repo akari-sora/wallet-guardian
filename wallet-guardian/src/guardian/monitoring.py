@@ -157,3 +157,191 @@ class SnapshotCycle:
             "notification_decision": emitted,
             "source_health": health,
         }
+
+
+def item_capability(item: dict[str, Any]) -> str:
+    """Legacy rows without a capability are native balances. Lista rows are positions."""
+    raw = item.get("capability")
+    if isinstance(raw, str) and raw.strip():
+        return raw
+    if ":lista:" in str(item.get("position_id") or ""):
+        return "positions"
+    return "balances.native"
+
+
+def reconcile_capabilities(
+    previous_items: list[dict[str, Any]],
+    incoming_items: list[dict[str, Any]],
+    results: dict[tuple[Any, Any, str], str],
+) -> list[dict[str, Any]]:
+    """Replace one capability at a time. A failed token read keeps the previous raw amount."""
+    incoming_by: dict[str, dict[str, Any]] = {}
+    for item in incoming_items:
+        key = _capability_key(item)
+        if key in incoming_by:
+            raise ValueError("duplicate incoming position")
+        incoming_by[key] = item
+    rows: dict[str, dict[str, Any]] = {}
+    for key, item in incoming_by.items():
+        if _category(item, results) in {"ok", "partial"}:
+            rows[key] = deepcopy(item)
+    seen: set[str] = set()
+    for old in previous_items:
+        key = _capability_key(old)
+        if key in seen:
+            raise ValueError("duplicate previous position")
+        seen.add(key)
+        category = _category(old, results)
+        if category in {"ok", "empty"}:
+            continue
+        if category == "partial":
+            if key in rows:
+                continue
+            retained = deepcopy(old)
+            _mark_stale(retained, "partial_result")
+            rows[key] = retained
+            continue
+        retained = deepcopy(old)
+        _mark_stale(retained, "capability_not_observed")
+        rows[key] = retained
+    return [rows[key] for key in sorted(rows)]
+
+
+class CapabilityCycle:
+    """Capability-scoped commit. SnapshotCycle is unchanged."""
+
+    def __init__(self, database: Database, tenant: str) -> None:
+        self.database = database
+        self.tenant = tenant
+        self.previous_items = database.capability_items(tenant)
+
+    def finish(
+        self,
+        *,
+        incoming: list[dict[str, Any]],
+        results: dict[tuple[Any, Any, str], str],
+        events: list[Any] | None = None,
+        capability_rows: list[dict[str, Any]] | None = None,
+        cursors: list[dict[str, Any]] | None = None,
+        alerts: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        current = reconcile_capabilities(self.previous_items, incoming, results)
+        rows = (
+            _storage_rows(self.previous_items, current, results)
+            if capability_rows is None
+            else _attach_items(capability_rows, current)
+        )
+        emitted = self.database.commit_capability_cycle(
+            self.tenant,
+            events=list(events or []),
+            capability_rows=rows,
+            cursors=list(cursors or []),
+            alerts=list(alerts or []),
+        )
+        self.previous_items = current
+        return {"items": current, "notification_decision": emitted}
+
+
+def _capability_key(item: dict[str, Any]) -> str:
+    return f"{item['chain_id']}|{item_capability(item)}|{item['position_id']}"
+
+
+def _identities(item: dict[str, Any]) -> list[Any]:
+    found: list[Any] = []
+    for field in ("wallet_id", "wallet_label"):
+        value = item.get(field)
+        if value and value not in found:
+            found.append(value)
+    if "position_id" in item:
+        label = wallet_label(item)
+        if label not in found:
+            found.append(label)
+    return found
+
+
+def _category(item: dict[str, Any], results: dict[tuple[Any, Any, str], str]) -> str | None:
+    capability = item_capability(item)
+    chain_id = item["chain_id"]
+    for identity in _identities(item):
+        key = (identity, chain_id, capability)
+        if key not in results:
+            continue
+        value = results[key]
+        if not isinstance(value, str):
+            return "error"
+        token = value.lower()
+        if token in {"ok", "empty", "partial", "error"}:
+            return token
+        return "error"
+    return None
+
+
+def _mark_stale(item: dict[str, Any], reason: str) -> None:
+    item["quality"] = "STALE"
+    item["fresh"] = False
+    item["retained_last_known_good"] = True
+    item["stale_reason"] = reason
+
+
+def _storage_key(item: dict[str, Any]) -> tuple[str, str, str]:
+    wallet = item.get("wallet_id") or item.get("wallet_label") or wallet_label(item)
+    network = str(item.get("network") or item["chain_id"])
+    return (str(wallet), network, item_capability(item))
+
+
+def _storage_rows(
+    previous: list[dict[str, Any]],
+    current: list[dict[str, Any]],
+    results: dict[tuple[Any, Any, str], str],
+) -> list[dict[str, Any]]:
+    keys: list[tuple[str, str, str]] = []
+    for item in [*previous, *current]:
+        key = _storage_key(item)
+        if key not in keys:
+            keys.append(key)
+    rows = []
+    for key in keys:
+        items = [item for item in current if _storage_key(item) == key]
+        sample = items[0] if items else next(item for item in previous if _storage_key(item) == key)
+        category = _category(sample, results)
+        rows.append({
+            "wallet_id": key[0],
+            "network": key[1],
+            "capability": key[2],
+            "quality": _stored_quality(category, items),
+            "last_success_at": None,
+            "valid_until": None,
+            "cursor": None,
+            "payload": {"category": category, "items": items},
+        })
+    return rows
+
+
+def _stored_quality(category: str | None, items: list[dict[str, Any]]) -> str:
+    if category == "error":
+        return "error"
+    if category == "partial":
+        return "partial"
+    if category in {"ok", "empty"}:
+        return "partial"
+    if items and all(item.get("quality") == "STALE" for item in items):
+        return "stale"
+    return "unknown"
+
+
+def _attach_items(
+    explicit: list[dict[str, Any]],
+    current: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows = []
+    for row in explicit:
+        if "schema_version" in row and "payload" not in row:
+            rows.append(dict(row))
+            continue
+        copied = dict(row)
+        payload = dict(copied.get("payload") or {})
+        key = (str(copied["wallet_id"]), str(copied["network"]), str(copied["capability"]))
+        payload["items"] = [item for item in current if _storage_key(item) == key]
+        copied["payload"] = payload
+        rows.append(copied)
+    return rows
