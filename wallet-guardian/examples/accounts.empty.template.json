@@ -1,0 +1,5 @@
+{
+  "schema_version": "guardian.accounts.v1",
+  "tenant_id": "local",
+  "accounts": []
+}

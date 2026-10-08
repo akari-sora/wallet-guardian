@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "MCM-01 planning contract only. Not an installed runtime validator. Semantic cross-field validation is also required.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "guardian.coverage.v1"
+    },
+    "wallet_id": {
+      "type": "string"
+    },
+    "network": {
+      "type": "string",
+      "enum": [
+        "ethereum-mainnet",
+        "bsc-mainnet",
+        "arbitrum-one",
+        "base-mainnet",
+        "optimism-mainnet",
+        "polygon-pos",
+        "avalanche-c",
+        "solana-mainnet",
+        "linea-mainnet",
+        "zksync-era",
+        "scroll-mainnet",
+        "mantle-mainnet",
+        "sonic-mainnet",
+        "unichain-mainnet",
+        "hyperevm-mainnet",
+        "bitcoin-mainnet",
+        "tron-mainnet",
+        "blast-mainnet",
+        "opbnb-mainnet",
+        "ton-mainnet",
+        "sui-mainnet",
+        "aptos-mainnet",
+        "cosmos-hub",
+        "osmosis-mainnet"
+      ]
+    },
+    "chain_uid": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capability": {
+      "type": "string",
+      "minLength": 1
+    },
+    "adapter_version": {
+      "type": "string"
+    },
+    "support": {
+      "enum": [
+        "implemented",
+        "partial",
+        "unsupported",
+        "not_applicable",
+        "not_observable"
+      ]
+    },
+    "probe": {
+      "enum": [
+        "documented",
+        "live_pass",
+        "live_fail",
+        "blocked",
+        "untested"
+      ]
+    },
+    "quality": {
+      "enum": [
+        "complete_in_declared_scope",
+        "partial",
+        "stale",
+        "error",
+        "unknown"
+      ]
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "declared": {
+          "type": "string"
+        },
+        "from": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pagination_complete": {
+          "type": "boolean"
+        },
+        "gap_detection_complete": {
+          "type": "boolean"
+        },
+        "gaps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "declared",
+        "from",
+        "to",
+        "pagination_complete",
+        "gap_detection_complete",
+        "gaps",
+        "cursor"
+      ]
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "block",
+            "slot",
+            "checkpoint",
+            "ledger_version",
+            "lt",
+            "height"
+          ]
+        },
+        "number": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "unknown",
+            "observed",
+            "confirmed",
+            "finalized",
+            "orphaned"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "number",
+        "hash",
+        "status"
+      ]
+    },
+    "last_success_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "valid_until": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_-]{0,95}$"
+      }
+    },
+    "trust": {
+      "enum": [
+        "single_provider",
+        "cross_checked_independent",
+        "verified_proof",
+        "unverified"
+      ]
+    },
+    "price_quality": {
+      "enum": [
+        "not_applicable",
+        "available",
+        "stale",
+        "unknown"
+      ]
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "wallet_id",
+    "network",
+    "chain_uid",
+    "capability",
+    "adapter_version",
+    "support",
+    "probe",
+    "quality",
+    "scope",
+    "checkpoint",
+    "last_success_at",
+    "valid_until",
+    "sources",
+    "trust",
+    "price_quality",
+    "reason_codes",
+    "evidence_refs"
+  ]
+}
