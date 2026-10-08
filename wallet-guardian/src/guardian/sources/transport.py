@@ -8,6 +8,7 @@ the endpoint. Secrets are not copied into exception text.
 
 from __future__ import annotations
 
+import base64
 import ipaddress
 import socket
 from collections.abc import Mapping
@@ -15,6 +16,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 
+from guardian.configuration import MaskedSecret
 from guardian.errors import ConfigError, GuardianError, SecurityError
 from guardian.security.ssrf import validate_url
 from guardian.security.transport_policy import Operation, assert_operation_allowed
@@ -52,6 +54,7 @@ class RegisteredSource:
     endpoint: str
     budget_group: str
     allow_private_network: bool
+    credential: MaskedSecret | None = None
 
 
 @dataclass
@@ -137,6 +140,12 @@ def pinned_request(call: PreparedCall) -> tuple[str, dict[str, str], dict[str, s
     if call.body:
         # JSON-RPC, GraphQL and REST POST bodies are JSON. Solana RPC answers 415 without this.
         headers["content-type"] = "application/json"
+    for name, value in getattr(call, "credential_headers", ()) or ():
+        if not isinstance(name, str) or name.lower() in {"accept", "content-type", "cookie", "host"}:
+            continue
+        revealed = value.reveal() if isinstance(value, MaskedSecret) else ""
+        if revealed:
+            headers[name] = revealed
     extensions: dict[str, str] = {}
     if not call.connect_ip:
         return call.url, headers, extensions
@@ -197,6 +206,8 @@ class ReadOnlyTransport:
             raise SecurityError("adapter_mismatch", reason="adapter_mismatch")
         if not source.endpoint:
             raise SecurityError("endpoint_missing", reason="endpoint_missing")
+        if operation.headers and not _credential_present(source):
+            return _credential_missing(source_id)
         current = _request_target(source.endpoint, operation)
         registered = _host_key(source.endpoint)
         if _host_key(current) != registered:
@@ -207,6 +218,7 @@ class ReadOnlyTransport:
             if _host_key(current) != registered:
                 raise SecurityError("redirect_host", reason="redirect_host")
             call = replace(_encode(source_id, operation, current), connect_ip=pinned)
+            _bind_credential(call, source, operation)
             raw = self._send(source, call, priority=priority, credits=credits)
             if len(raw.body) > self.max_response_bytes:
                 raise TransportError("response_too_large")
@@ -282,6 +294,7 @@ def build_endpoint_registry(
             endpoint=_lookup_endpoint(env_name, secrets, environ),
             budget_group=str(source.get("budget_group", "")),
             allow_private_network=_private_flag(local_profiles.get(source_id)),
+            credential=_lookup_credential(source.get("credential_env"), secrets, environ),
         )
     return EndpointRegistry(registered)
 
@@ -297,6 +310,52 @@ def _lookup_endpoint(env_name: str, secrets: Mapping[str, str], environ: Mapping
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _lookup_credential(env_name: Any, secrets: Mapping[str, str], environ: Mapping[str, str]) -> MaskedSecret | None:
+    if not isinstance(env_name, str) or not env_name:
+        return None
+    for pool in (secrets, environ):
+        value = pool.get(env_name)
+        if isinstance(value, str) and value.strip():
+            return MaskedSecret(value.strip())
+    return MaskedSecret("")
+
+
+def _credential_present(source: RegisteredSource) -> bool:
+    return source.credential is not None and source.credential.present
+
+
+def _credential_missing(source_id: str) -> TransportResult:
+    return TransportResult(
+        source_id=source_id,
+        status=0,
+        body=None,
+        category="error",
+        quality="unknown",
+        retryable=False,
+        blocked=True,
+        reason="credential_missing",
+        headers={},
+    )
+
+
+def _bind_credential(call: PreparedCall, source: RegisteredSource, operation: Operation) -> None:
+    names = operation.headers
+    if not names or source.credential is None or not source.credential.present:
+        return
+    formatted = _format_credential(source.adapter, source.credential)
+    object.__setattr__(call, "credential_headers", tuple((name, formatted) for name in names))
+
+
+def _format_credential(adapter: str, secret: MaskedSecret) -> MaskedSecret:
+    raw = secret.reveal()
+    if adapter == "goplus":
+        return MaskedSecret(f"Bearer {raw}")
+    if adapter == "chainabuse":
+        token = base64.b64encode(f"{raw}:".encode("utf-8")).decode("ascii")
+        return MaskedSecret(f"Basic {token}")
+    raise SecurityError("header_not_allowed", reason="header_not_allowed")
 
 
 def _private_flag(profile: Any) -> bool:

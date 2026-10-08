@@ -327,7 +327,7 @@ W7 審查補充：
 
 W7 審查補充：
 - GoPlus `token_security` 有幾個欄位是反向語意：`is_open_source`、`is_in_dex`、`is_true_token` 是 "1" 代表正常、"0" 才是風險；`trust_list` 只表示信任，不算風險旗標。原本一律把 "1" 當旗標，會把幾乎所有正常代幣標成 flagged，閉源合約反而不會被標。已修正並加測試。
-- GoPlus token 與 Chainabuse 的認證要用 header，W2 的 `Operation` 沒有 header 欄位，這包誠實回 `credential_transport_unsupported`。後續（W9）要加的是：Operation 選用 `headers`，每個 adapter 只允許白名單內的憑證 header 名稱，值只能來自憑證、在 repr／log／錯誤裡遮罩，不能來自任務或回應資料，並要有測試。
+- GoPlus token 與 Chainabuse 的認證要用 header，W2 的 `Operation` 沒有 header 欄位，這包誠實回 `credential_transport_unsupported`。後續（W9）要加的是：Operation 選用 `headers`，每個 adapter 只允許白名單內的憑證 header 名稱，值只能來自憑證、在 repr／log／錯誤裡遮罩，不能來自任務或回應資料，並要有測試。W9 已加上這個欄位；當時的 `credential_transport_unsupported` 不再是有 key 時的狀態。細節見 W9 實作狀態。
 - 2026-10-09 審查者在 box 上的無 key smoke（只查公開的 USDT 合約，結果未寫入設定）：CoinGecko 公開端點回 429，價格是 `valuation_unknown`，不是 0 或 1；同 symbol 的未知合約沒有借到價格；GoPlus `token_security` 能回真實結果並解析旗標；EVM 函式用在 Solana 是 unsupported，而且沒有發出請求。這不是 live_pass。
 
 ## W8 實作狀態
@@ -373,6 +373,6 @@ W9 把第一次可交給別人跑的唯讀路徑接上。只靠合成 fixture �
 還沒做的：
 
 - 沒有 live 來源，也沒有把監控切到這條路徑。舊例行要等私人 profile 的交接旗標與 sender 都接上之後，才停止送出。
-- GoPlus 與 Chainabuse 的憑證 header 仍是後續。這一節寫成時，有 key 仍是 `credential_transport_unsupported`。
+- GoPlus 的 `GOPLUS_API_KEY` 是事先鑄好的 access token。簽名的 `/token` 交換不在這包，也沒有 live 驗證。來源註冊了 token 時，讀取帶 `Authorization: Bearer`；沒有 token 仍是 keyless。Chainabuse 有 key 時帶 `Authorization: Basic`，格式是 `base64(secret + ":")`，同樣沒有 live 驗證。沒有 key 不發請求。401／403 是 `credential_rejected`，不是 safe。
 - 新聞 RSS 沒有在這包下載。Kinza 與 UXLINK 仍沒有插件與釘死合約，新聞不會因此掛到錢包。
 - 沒有具體 sender。`configured_sender` 但沒有注入 sender 是 `sender_not_configured`，列留在 pending。
