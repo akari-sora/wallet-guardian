@@ -82,6 +82,13 @@
 - `tasks`
 - `alert_dedup`
 - `monitor_health`
+- `mcm_schema_migrations`
+- `wallet_identities`
+- `wallet_label_aliases`
+- `legacy_imports`
+- `legacy_alert_suppressions`
+
+W1 另外建立上面五張表。`PRAGMA user_version` 仍是 1，所以舊程式還能開這個庫。遷移檔在 `migrations/monitor/`，套用記錄在 `mcm_schema_migrations`（含 sha256）。重開不會再套用，已套用的檔案若 sha256 變了就拒絕。`run-once` 不寫這些表。`wallet_identities` 以 `wallet_id` 為身份；標籤改名會把舊標籤留在 `wallet_label_aliases`，不改 `wallet_id`。
 
 目前 `run-once` 路徑實際會寫入的表：
 
@@ -96,7 +103,7 @@
 - `tasks`：`task_id`、`tenant_id`、`revision`、`state`、`payload`。未簽名 Lista 計畫寫在這裡。
 - `runs`：`run_id`、`tenant_id`、`payload`。`save_run`。
 
-schema 有建立、但目前 `src/guardian` 沒有 INSERT 的表：`chain_capabilities`、`adapter_versions`、`observations`、`position_legs`、`exposure_edges`、`events`、`cursors`、`pending_actions`、`allowances`、`incidents`、`rules`、`expected_actions`、`deliveries`，以及 SQLite 裡的 `source_registry`。`cursors` 的欄位是 `scope`、`tenant_id`、`value`。現在的游標行為是 `SnapshotCycle` 用快照世代，不是這張表。表仍要留著，不能因為目前沒寫入就丟掉。
+schema 有建立、但 `run-once` 沒有 INSERT 的表：`chain_capabilities`、`adapter_versions`、`observations`、`position_legs`、`exposure_edges`、`events`、`pending_actions`、`allowances`、`incidents`、`rules`、`expected_actions`、`deliveries`，以及 SQLite 裡的 `source_registry`。`cursors` 的欄位是 `scope`、`tenant_id`、`value`。`SnapshotCycle` 仍用快照世代，不寫這張表。表仍要留著，不能因為目前沒寫入就丟掉。W1 的 `guardian.legacy_state:import_legacy_state` 才會把舊游標寫進 `cursors`。缺的欄位不補 0，也不從 `runs` 製造快照。
 
 `guardian.service:_run_once` 寫進 `snapshot_items.payload` 的鍵：`position_id`、`chain_id`、`raw_amount`、`status`、`symbol`、`price`、`wallet_label`、`wallet_address`、`quality`、`fresh`、`observed_at`、`block_number`、`block_hash`、`block_timestamp`、`finality`、`paused`。Lista 請求另外有 `severity`。`price` 是 null，不是 0。
 
@@ -1766,7 +1773,7 @@ schema 有建立、但目前 `src/guardian` 沒有 INSERT 的表：`chain_capabi
 
 - `alerts` 與 `alert_dedup`
 - `outbox`（含已是 `pending` 但還沒送出的列）
-- `cursors`（即使目前沒有寫入，也不能丟表或丟列）
+- `cursors`（`run-once` 仍不寫這張表；已有的列不能丟。W1 匯入器才寫舊游標）
 - `snapshots` 與對應的 `snapshot_items`
 
 私人 JSON 要留住的游標與去重：
@@ -1776,4 +1783,4 @@ schema 有建立、但目前 `src/guardian` 沒有 INSERT 的表：`chain_capabi
 - `nonces`
 - `bsc_last_block`
 
-這些值繼續只放在操作者機器。遷移不能把它們抄進這個 repo，也不能因為新監控啟動就把舊的 `alerted` 再送一次。W9 之前舊例行照常跑；新的 outbox 先不送出。
+這些值繼續只放在操作者機器。遷移不能把它們抄進這個 repo，也不能因為新監控啟動就把舊的 `alerted` 再送一次。W1 的匯入器把 `alerted` 寫進 `alert_dedup` 與 `legacy_alert_suppressions`，不寫 `alerts` 或 `outbox`。`latest_seen`、`nonces`、`bsc_last_block` 寫進 `cursors`，並標上 `legacy_import`。對不上的鏈或錢包標籤留在報告的 `unmapped`，不猜。同一個內容再匯入是 no-op。W9 之前舊例行照常跑；新的 outbox 先不送出。

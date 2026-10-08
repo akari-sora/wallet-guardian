@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from guardian.errors import ConfigError, StaleSnapshot
+from guardian.identities import IdentityError
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tenants (
@@ -171,6 +175,8 @@ class Database:
                 raise ConfigError("database schema is newer than this build")
             self.conn.executescript(SCHEMA)
             self._migrate(version)
+            # MCM tables are additive. user_version stays 1 so older builds can open the file.
+            self._apply_mcm_migrations()
         except Exception:
             self.conn.close()
             raise
@@ -369,3 +375,129 @@ class Database:
     def table_names(self) -> list[str]:
         rows = self.conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
         return [row["name"] for row in rows]
+
+    def _apply_mcm_migrations(self) -> None:
+        files = sorted(path for path in mcm_migration_directory().glob("*.sql") if path.is_file())
+        if not files:
+            raise ConfigError("mcm migration directory is missing")
+        present = {
+            row["name"]
+            for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        applied: dict[str, str] = {}
+        if "mcm_schema_migrations" in present:
+            for row in self.conn.execute("SELECT migration_id, sha256 FROM mcm_schema_migrations"):
+                applied[row["migration_id"]] = row["sha256"]
+        for path in files:
+            migration_id = path.stem
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            previous = applied.get(migration_id)
+            if previous is not None:
+                if previous != digest:
+                    raise ConfigError(f"mcm migration sha256 changed: {migration_id}")
+                continue
+            self.conn.executescript(path.read_text(encoding="utf-8"))
+            with self.conn:
+                self.conn.execute(
+                    "INSERT INTO mcm_schema_migrations(migration_id, applied_at, sha256) VALUES (?, ?, ?)",
+                    (migration_id, datetime.now(timezone.utc).isoformat(), digest),
+                )
+
+    def upsert_wallet_identity(self, tenant: str, wallet_id: str, family: str, identity_key: str, label: str) -> None:
+        """Bind a stable wallet_id. Renaming the label keeps the id and records the old label."""
+        if not all(isinstance(item, str) and item for item in (tenant, wallet_id, family, identity_key, label)):
+            raise IdentityError("bad_wallet_identity")
+        if _WALLET_ID.fullmatch(wallet_id) is None:
+            raise IdentityError("bad_wallet_id")
+        now = datetime.now(timezone.utc).isoformat()
+        with self.conn:
+            existing = self.conn.execute(
+                "SELECT family, identity_key, label FROM wallet_identities WHERE tenant_id=? AND wallet_id=?",
+                (tenant, wallet_id),
+            ).fetchone()
+            owner = self.conn.execute(
+                "SELECT wallet_id FROM wallet_identities WHERE tenant_id=? AND family=? AND identity_key=?",
+                (tenant, family, identity_key),
+            ).fetchone()
+            if existing is None:
+                if owner is not None:
+                    raise IdentityError("duplicate_identity")
+                self._reject_foreign_alias(tenant, wallet_id, label)
+                self.conn.execute(
+                    """INSERT INTO wallet_identities(
+                           tenant_id, wallet_id, family, identity_key, label, created_at, updated_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (tenant, wallet_id, family, identity_key, label, now, now),
+                )
+                return
+            if existing["family"] != family or existing["identity_key"] != identity_key:
+                raise IdentityError("identity_rebind")
+            if owner is not None and owner["wallet_id"] != wallet_id:
+                raise IdentityError("duplicate_identity")
+            if existing["label"] != label:
+                self._reject_foreign_alias(tenant, wallet_id, label)
+                self._remember_alias(tenant, wallet_id, existing["label"], now)
+            self.conn.execute(
+                "UPDATE wallet_identities SET label=?, updated_at=? WHERE tenant_id=? AND wallet_id=?",
+                (label, now, tenant, wallet_id),
+            )
+
+    def resolve_label(self, tenant: str, label: str) -> str | None:
+        """Return the wallet_id for a current label or a previous alias."""
+        alias = self.conn.execute(
+            "SELECT wallet_id FROM wallet_label_aliases WHERE tenant_id=? AND label=?",
+            (tenant, label),
+        ).fetchone()
+        currents = self.conn.execute(
+            "SELECT wallet_id FROM wallet_identities WHERE tenant_id=? AND label=?",
+            (tenant, label),
+        ).fetchall()
+        found = set()
+        if alias is not None:
+            found.add(alias["wallet_id"])
+        found.update(row["wallet_id"] for row in currents)
+        if not found:
+            return None
+        if len(found) > 1:
+            raise IdentityError("ambiguous_label")
+        return next(iter(found))
+
+    def _reject_foreign_alias(self, tenant: str, wallet_id: str, label: str) -> None:
+        row = self.conn.execute(
+            "SELECT wallet_id FROM wallet_label_aliases WHERE tenant_id=? AND label=?",
+            (tenant, label),
+        ).fetchone()
+        if row is not None and row["wallet_id"] != wallet_id:
+            raise IdentityError("label_alias_taken")
+
+    def _remember_alias(self, tenant: str, wallet_id: str, label: str, now: str) -> None:
+        row = self.conn.execute(
+            "SELECT wallet_id FROM wallet_label_aliases WHERE tenant_id=? AND label=?",
+            (tenant, label),
+        ).fetchone()
+        if row is None:
+            self.conn.execute(
+                """INSERT INTO wallet_label_aliases(tenant_id, wallet_id, label, first_seen, last_seen)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (tenant, wallet_id, label, now, now),
+            )
+            return
+        if row["wallet_id"] != wallet_id:
+            raise IdentityError("label_alias_taken")
+        self.conn.execute(
+            "UPDATE wallet_label_aliases SET last_seen=? WHERE tenant_id=? AND label=?",
+            (now, tenant, label),
+        )
+
+
+def mcm_migration_directory() -> Path:
+    """SQL files shipped beside the repo, found the same way service.ROOT is."""
+    candidate = Path(__file__).resolve().parents[2] / "migrations" / "monitor"
+    if candidate.is_dir() and any(candidate.glob("*.sql")):
+        return candidate
+    raise ConfigError("mcm migration directory is missing")
+
+
+_WALLET_ID = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
