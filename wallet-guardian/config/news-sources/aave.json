@@ -1,0 +1,21 @@
+{
+  "id": "aave",
+  "official": true,
+  "retrieved": "2026-10-09",
+  "protocols": [
+    "aave"
+  ],
+  "feeds": [
+    {
+      "url": "https://governance.aave.com/latest.rss?order=created",
+      "kind": "rss",
+      "fetch": "not_fetched_by_monitor"
+    },
+    {
+      "url": "https://x.com/aave",
+      "kind": "x_account",
+      "fetch": "manual_not_fetched_by_monitor"
+    }
+  ],
+  "notes": "Public source list only. The monitor does not fetch these URLs. No API key. Not verified live."
+}

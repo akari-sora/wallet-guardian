@@ -1,0 +1,4 @@
+{
+  "created": "2026-10-09",
+  "note": "Synthetic MCM-W8 protocol fixtures. Wallet, vault, reserve, and stake accounts are invented (0x000...00NN or base58 of a repeated byte). No real user address or position. Public protocol contracts are not copied into these fixtures."
+}

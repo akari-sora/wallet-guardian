@@ -329,3 +329,30 @@ W7 審查補充：
 - GoPlus `token_security` 有幾個欄位是反向語意：`is_open_source`、`is_in_dex`、`is_true_token` 是 "1" 代表正常、"0" 才是風險；`trust_list` 只表示信任，不算風險旗標。原本一律把 "1" 當旗標，會把幾乎所有正常代幣標成 flagged，閉源合約反而不會被標。已修正並加測試。
 - GoPlus token 與 Chainabuse 的認證要用 header，W2 的 `Operation` 沒有 header 欄位，這包誠實回 `credential_transport_unsupported`。後續（W9）要加的是：Operation 選用 `headers`，每個 adapter 只允許白名單內的憑證 header 名稱，值只能來自憑證、在 repr／log／錯誤裡遮罩，不能來自任務或回應資料，並要有測試。
 - 2026-10-09 審查者在 box 上的無 key smoke（只查公開的 USDT 合約，結果未寫入設定）：CoinGecko 公開端點回 429，價格是 `valuation_unknown`，不是 0 或 1；同 symbol 的未知合約沒有借到價格；GoPlus `token_security` 能回真實結果並解析旗標；EVM 函式用在 Solana 是 unsupported，而且沒有發出請求。這不是 live_pass。
+
+## W8 實作狀態
+
+W8 在這個分支加上協議部位與曝險新聞的程式庫。只靠合成 fixture。沒有任何協議合約、Stake 帳戶或新聞來源被 live 驗證。`run-once`、`SnapshotCycle`、Lista 與 CLI 的行為沒有改。既有的 `guardian.providers.read_lista_state` 與 `config/protocols/lista-bsc.json` 沒有改。鏈登錄的 `enabled` 仍是 false，`status` 仍是 `planned_not_live_verified`。`config/source-capabilities/` 沒有改，沒有 `live_pass`。沒有新增 Python 依賴。沒有改 transport、policy、action-client 或 CI。W2 沒有新聞或 RSS adapter，這一包也不加。
+
+現在有的東西：
+
+- `guardian.protocols` 的插件是程式裡的靜態登錄（`aave_v3`、`erc4626`、`lista_slisbnb`、`solana_stake`）。manifest 只能選這些 id。未知 id、模組路徑，或文件裡的 `entrypoint`／`import`／`exec`／`module`／`class`，都會拒絕。view 方法必須和該插件程式裡的 allowlist 完全一致。`claimWithdraw`、`withdraw`、`deposit`、`repay`、`redeem` 這類寫入名稱在編碼前就拒絕，不會送出 calldata。`PluginContext` 只有 allowlisted `eth_call`、Solana 帳戶讀取、時鐘，以及呼叫端給的 prior。context 上沒有 transport，也沒有簽名或寫入路徑。
+- 讀取結果是 `observed`、`none_observed` 或 `unknown`。`none_observed` 只代表每一次必要讀取都成功而且是空的或零。失敗、被擋、格式壞掉、缺來源、鏈 id 或 genesis 對不上，都是 `unknown`，cursor 留在 prior，不會變成沒有曝險，也不會把部位寫成 0。未知插件會寫進 coverage，reason 是 `unknown_plugin:<id>`，quality 是 error，不是 complete。
+- Lista slisBNB 只讀 `paused`、`getUserWithdrawalRequests`、`getUserRequestStatus`、`balanceOf`、`convertSnBnbToBnb`。`isClaimable` 只來自 `getUserRequestStatus` 的 bool，不用 7 天時鐘推。請求從清單消失，沒有成功的 claim 證據，是 `disappeared_unverified`，不是 claimed。失敗的 claim 交易也不算領取。流動的 slisBNB 是 receipt；`convertSnBnbToBnb` 是這張 receipt 的 underlying quote，組合只算一次。未完成提款的 BNB 用 `lista-slisbnb:withdrawal:<request id>`，和錢包原生 BNB 分開。暫停仍回報部位，並加上 `protocol_paused`。超過 32 筆是 `result_exceeds_bound`，不把部分清單當完整。
+- Aave v3 讀 Pool.`getUserAccountData`。健康因子留 1e18 整數，不做浮點。呼叫端有給 reserve 清單時，抵押是 aToken receipt、債務是 variable debt，base currency 總額只放在 metrics，不疊在代幣腿上。清單沒給而且總額不是零，才用 8 位小數的 `aave-v3:collateral-base` 與 `aave-v3:debt-base`，reason 是 `reserves_not_supplied`。清單給了但代幣餘額全是 0、base 總額卻不是 0，是 `reserves_incomplete`，不是零部位。債務是單獨的負項，不先淨額再減一次。
+- ERC-4626 的公開登錄是空的。沒有呼叫端提供的 vault 是 `vaults_not_configured`，不是 `none_observed`。shares 是 receipt，`convertToAssets` 是 quote，`asset()` 給 underlying 身份。小數沒在私人設定裡給就是 None，不假設。
+- Solana stake 用呼叫端給的帳戶，或對 Stake program 做 `getProgramAccounts`。memcmp 只允許文件上的 staker offset 12 與 withdrawer offset 44（4-byte Borsh tag，接著 Meta.rent_exempt_reserve u64，再來 Authorized.staker 與 withdrawer）。這兩個偏移是 StakeState 文件布局，沒有在這包 live 核對。其他 program 或其他 offset 在 RPC 前拒絕。commitment 是 `confirmed`，不是 finalized。lamports 是整數；浮點 lamports 或浮點 delegation 是 malformed，不是 0。`warmupCooldownRate` 忽略。delegation stake 只放在 detail，不另算一筆 SOL。委託大於 lamports 是 `unknown`。receipt 是 stake account，lamports quote 重複那把 pubkey，所以不和錢包原生 SOL 混在一起。沒給帳戶也沒給 authority 是 `stake_accounts_not_provided`。
+- 組合把 receipt 和它的 underlying quote 只算一次。W4 裡同一張 aToken、slisBNB、vault shares 或 debt token 的餘額不再加一次。錢包原生 BNB／SOL 是另一個身份，照算。任一計入的腿沒有新鮮、可用、非 display_only 的價格，或任一插件是 unknown，美元合計是 None／`valuation_unknown`，不把缺的價格當 0。
+- 跨鏈用既有的 `FlowStatus`。來源交易成功只到 `source_confirmed` 或 `source_finalized`，沒有目的地證據不是 completed。逾時是 `timed_out`，不是 failed，也不是 lost。插件沒有資料是 `unknown`，reason `plugin_without_data`，即使來源已經 finalized。
+- `guardian.news` 只解析呼叫端已經拿到的 RSS 2.0、Atom 或結構化項目。不下載。X 帳號的 fetch 是 `manual_not_fetched_by_monitor`。其他 feed 是 `not_fetched_by_monitor`。沒有 API key，沒有付費新聞源。`<!DOCTYPE` 或 `<!ENTITY` 在解析前拒絕。URL 會把 host 小寫、去掉 fragment 和 `utm_*`／`ref`。同一 canonical URL、48 小時內同一協議的正規化標題，或標成 correction／update 的連結，合成一則 incident，不另開一筆 alert。更正不會把時間窗往後滑。無關主題（例如標題或聲明裡的 79thVault）不繼承來源協議，內文提到 Lista、UXLINK 或 BNB 也不關聯。新聞只在該協議有 `observed` 部位，或有對到已登錄合約的 `active` 授權時才連到錢包。`revoked` 與 `expired` 不連。部位是 `unknown` 而且沒有有效授權時，每個錢包只出一筆 `exposure_unknown`，`loss_alert` 是 false，不是損失警報。沒有部位也沒有有效授權，就不通知。Kinza 與 UXLINK 沒有插件、沒有釘死的合約，所以光有新聞不會掛到錢包上。
+- 公開合約地址寫在 `config/protocols/`，程式裡的 pin 必須和 manifest 一致，否則是 `contract_mismatch`，不會去呼叫 manifest 裡換過的地址。Aave Pool 來自 https://github.com/bgd-labs/aave-address-book 。Lista proxy 與 slisBNB 來自既有的 lista 文件。Stake program 是公開的 `Stake11111111111111111111111111111111111111`。retrieved 是 2026-10-09，status 是 `documented`，這包沒有上鏈核對。使用者的 vault、reserve token 與 stake account 只來自私人設定，公開檔沒有真實監控地址。
+
+還沒接上的東西：
+
+- 沒有 live 來源驗證。fixture 通過不是節點通過，也不是新聞訂閱通過。沒有 `live_pass`。鏈登錄的 `enabled` 仍是 false。
+- 新聞的即時抓取要等以後的 W2 news adapter。這一包只解析呼叫端給的 bytes。X 帳號維持人工，監控不會自己去抓。
+- 這包沒有接到 `run-once`、`SnapshotCycle` 或 CLI。未知不是沒有曝險。地址是 documented，不是 on-chain verified。Stake memcmp 的 12 與 44 也沒有 live 核對。
+
+W8 review fixes:
+- Aave v3: when `getUserAccountData` reports collateral or debt that the supplied reserve list does not explain, the plugin returns `unknown` (`reserves_incomplete`), never a partial `observed`.
+- Known gap (W9): Kinza and UXLINK are listed news sources but have no plugin and no pinned contract or token yet, so their incidents link to no wallet. Exposure stays unobserved until W9 adds pins from private config. This is a coverage gap, not "no exposure".

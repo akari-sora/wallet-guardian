@@ -1,0 +1,40 @@
+{
+  "id": "lista_slisbnb",
+  "version": "1",
+  "networks": [
+    "bsc-mainnet"
+  ],
+  "contracts": {
+    "bsc-mainnet": {
+      "proxy": {
+        "address": "0x1adB950d8bB3dA4bE104211D5AB038628e477fE6",
+        "source_url": "https://docs.bsc.lista.org/for-developer/liquid-staking-slisbnb/smart-contract",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "not verified on-chain by this package"
+      },
+      "slisbnb": {
+        "address": "0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B",
+        "source_url": "https://docs.bsc.lista.org/for-developer/liquid-staking-slisbnb/smart-contract",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "not verified on-chain by this package"
+      }
+    }
+  },
+  "required_sources": [
+    "evm_rpc"
+  ],
+  "view_methods": [
+    "balanceOf(address)",
+    "convertSnBnbToBnb(uint256)",
+    "getUserRequestStatus(address,uint256)",
+    "getUserWithdrawalRequests(address)",
+    "paused()"
+  ],
+  "capabilities": [
+    "positions",
+    "withdrawals"
+  ],
+  "notes": "Public Lista proxy and slisBNB token. isClaimable comes from getUserRequestStatus, not from a 7-day clock. Not verified on-chain by this package. No user accounts. config/protocols/lista-bsc.json is unchanged."
+}

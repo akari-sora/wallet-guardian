@@ -1,0 +1,26 @@
+{
+  "id": "kinza",
+  "official": true,
+  "retrieved": "2026-10-09",
+  "protocols": [
+    "kinza"
+  ],
+  "feeds": [
+    {
+      "url": "https://x.com/kinzafinance",
+      "kind": "x_account",
+      "fetch": "manual_not_fetched_by_monitor"
+    },
+    {
+      "url": "https://kinzafinance.medium.com/",
+      "kind": "blog",
+      "fetch": "not_fetched_by_monitor"
+    },
+    {
+      "url": "https://medium.com/feed/@kinzafinance",
+      "kind": "rss",
+      "fetch": "not_fetched_by_monitor"
+    }
+  ],
+  "notes": "Public source list only. The monitor does not fetch these URLs. No API key. Not verified live."
+}
