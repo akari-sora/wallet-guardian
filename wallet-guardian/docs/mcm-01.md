@@ -324,3 +324,8 @@ W7 審查補充：
 - 本包只新增 `pricing/`、`risk/`、`config/risk-sources.json`、`tests/fixtures/risk/`、`tests/unit/test_mcm_w7.py`，並在這份文件加這一節。沒有改 transport、policy、action-client、CI 或鏈登錄。
 - 測試全程離線：socket 與 `httpx.Client` 被擋下，來源是 `*.example.invalid`，SDN XML 是合成的（假 uid、`0x000…0abc` 這類地址、假名字）。沒有真實的制裁地址，也沒有真實的代幣合約。
 - Polygon 的 `polygon-ecosystem-token` 與 Avalanche 的 `avalanche-2` 來自公開文件對照，retrieved 是 2026-10-09，沒有對 live API 核對。GoPlus 的鏈 id 表同樣是文件對照，不是 live 核對。
+
+W7 審查補充：
+- GoPlus `token_security` 有幾個欄位是反向語意：`is_open_source`、`is_in_dex`、`is_true_token` 是 "1" 代表正常、"0" 才是風險；`trust_list` 只表示信任，不算風險旗標。原本一律把 "1" 當旗標，會把幾乎所有正常代幣標成 flagged，閉源合約反而不會被標。已修正並加測試。
+- GoPlus token 與 Chainabuse 的認證要用 header，W2 的 `Operation` 沒有 header 欄位，這包誠實回 `credential_transport_unsupported`。後續（W9）要加的是：Operation 選用 `headers`，每個 adapter 只允許白名單內的憑證 header 名稱，值只能來自憑證、在 repr／log／錯誤裡遮罩，不能來自任務或回應資料，並要有測試。
+- 2026-10-09 審查者在 box 上的無 key smoke（只查公開的 USDT 合約，結果未寫入設定）：CoinGecko 公開端點回 429，價格是 `valuation_unknown`，不是 0 或 1；同 symbol 的未知合約沒有借到價格；GoPlus `token_security` 能回真實結果並解析旗標；EVM 函式用在 Solana 是 unsupported，而且沒有發出請求。這不是 live_pass。

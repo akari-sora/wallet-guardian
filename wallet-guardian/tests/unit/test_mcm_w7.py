@@ -477,14 +477,14 @@ def test_mcm_w7_02_function_coverage_flagged_result_and_unsupported_chain():
     assert sol_address.path != sol.path
     assert sol_address.query["chain_id"] == "solana"
 
-    install(transport, "goplus", eth, {"code": 1, "message": "OK", "result": {ETH: {"is_honeypot": "1", "is_open_source": "0"}}})
+    install(transport, "goplus", eth, {"code": 1, "message": "OK", "result": {ETH: {"is_honeypot": "1", "is_mintable": "0"}}})
     flagged = client.read(function="token_security", network_id="ethereum-mainnet", target=parse_address("evm", ETH).display)
     assert flagged.status == "flagged"
     assert flagged.safe is False
     assert flagged.requested is True
     assert flagged.credential_status == "keyless"
     assert dict(flagged.flags)["is_honeypot"] == "flagged"
-    assert dict(flagged.flags)["is_open_source"] == "not_flagged"
+    assert dict(flagged.flags)["is_mintable"] == "not_flagged"
     labels = labels_from_goplus(flagged, retrieved_at=RETRIEVED)
     assert len(labels) == 1
     assert labels[0].kind == "structural"
@@ -544,7 +544,7 @@ def test_mcm_w7_02_function_coverage_errors_are_unknown_not_safe():
     install(transport, "goplus", operation, {"code": "1", "message": "OK", "result": {ETH: {"is_honeypot": "1"}}})
     assert client.read(function="token_security", network_id="ethereum-mainnet", target=ETH).reason == "code"
 
-    install(transport, "goplus", operation, {"code": 1, "message": "OK", "result": {ETH: {"is_honeypot": "0", "is_open_source": "0"}}})
+    install(transport, "goplus", operation, {"code": 1, "message": "OK", "result": {ETH: {"is_honeypot": "0", "is_mintable": "0"}}})
     zeros = client.read(function="token_security", network_id="ethereum-mainnet", target=ETH)
     assert zeros.status == "not_flagged"
     assert zeros.reason == "not_flagged_by_this_function"
@@ -796,7 +796,7 @@ def test_mcm_w7_04_risk_provenance_keeps_kinds_and_precedence():
     transport = world()
     client = goplus(transport)
     operation = client.operation(function="token_security", network_id="ethereum-mainnet", target=ETH)
-    install(transport, "goplus", operation, {"code": 1, "message": "OK", "result": {ETH: {"is_honeypot": "1", "is_open_source": "0"}}})
+    install(transport, "goplus", operation, {"code": 1, "message": "OK", "result": {ETH: {"is_honeypot": "1", "is_mintable": "0"}}})
     structural = labels_from_goplus(
         client.read(function="token_security", network_id="ethereum-mainnet", target=ETH),
         retrieved_at=RETRIEVED,
@@ -816,7 +816,7 @@ def test_mcm_w7_04_risk_provenance_keeps_kinds_and_precedence():
         "structural",
     ]
     assert summary.labels[2].evidence_ref == "chainabuse:fixture-report-1"
-    assert "is_open_source" not in {label.detail for label in summary.labels}
+    assert "is_mintable" not in {label.detail for label in summary.labels}
 
     abuse = ChainabuseClient(transport, "chainabuse", {"CHAINABUSE_API_KEY": CA_KEY})
     calls = len(transport.backend.calls)
@@ -977,3 +977,19 @@ def test_mcm_w7_04_risk_provenance_source_failure_keeps_stale_label():
     assert "ofac" in failed.sources_stale
     assert "ofac" not in failed.sources_checked
     assert failed.status != "no_hit_in_checked_sources"
+
+
+def test_mcm_w7_02_inverted_goplus_fields_flag_the_risky_value():
+    transport = world()
+    client = goplus(transport)
+    operation = client.operation(function="token_security", network_id="ethereum-mainnet", target=ETH)
+    install(transport, "goplus", operation, {"code": 1, "message": "OK", "result": {ETH: {
+        "is_open_source": "0", "is_in_dex": "1", "trust_list": "1", "is_honeypot": "0",
+    }}})
+    read = client.read(function="token_security", network_id="ethereum-mainnet", target=ETH)
+    flags = dict(read.flags)
+    assert read.status == "flagged"
+    assert flags["is_open_source"] == "flagged"
+    assert flags["is_in_dex"] == "not_flagged"
+    assert flags["trust_list"] == "not_flagged"
+    assert flags["is_honeypot"] == "not_flagged"

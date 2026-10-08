@@ -199,13 +199,24 @@ def _keyed(result: Mapping[str, Any], target: str, family: str) -> dict[str, Any
     return None
 
 
+# GoPlus token_security fields where "1" is a positive signal and "0" is the risk
+# (https://docs.gopluslabs.io/reference/response-details). trust_list only ever marks
+# trust, so neither value is a risk flag by itself.
+_INVERTED = frozenset({"is_open_source", "is_in_dex", "is_true_token"})
+_POSITIVE_ONLY = frozenset({"trust_list"})
+
+
 def _flags(entry: Mapping[str, Any]) -> tuple[dict[str, str], bool]:
     flags: dict[str, str] = {}
     non_string = False
     for key, value in entry.items():
         if not isinstance(key, str):
             continue
-        if value == "1":
+        if value in {"0", "1"} and key in _POSITIVE_ONLY:
+            flags[key] = "not_flagged"
+        elif value in {"0", "1"} and key in _INVERTED:
+            flags[key] = "flagged" if value == "0" else "not_flagged"
+        elif value == "1":
             flags[key] = "flagged"
         elif value == "0":
             flags[key] = "not_flagged"
