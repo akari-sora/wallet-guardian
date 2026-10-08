@@ -40,7 +40,7 @@
 - `guardian.storage:Database`
 - `guardian.domain:normalize_hyperliquid`
 
-`guardian.cli:build_parser` 註冊的指令：`doctor`、`run-once`、`snapshot`、`reconcile`、`claims`、`providers`、`wallets`、`approvals`、`explain`、`coverage`、`replay`、`alerts`、`self-check`、`diagnose`、`actions`、`action`、`rescue`、`operation-coverage`、`workbench`。
+`guardian.cli:build_parser` 註冊的指令：`doctor`、`run-once`、`snapshot`、`reconcile`、`claims`、`providers`、`wallets`、`approvals`、`explain`、`coverage`、`replay`、`alerts`、`self-check`、`diagnose`、`actions`、`action`、`rescue`、`operation-coverage`、`workbench`、`config`、`sources`、`export`、`compare-legacy`、`watchdog`、`monitor`。
 
 和監控直接相關的行為：
 
@@ -91,6 +91,8 @@
 W1 另外建立上面五張表。`PRAGMA user_version` 仍是 1，所以舊程式還能開這個庫。遷移檔在 `migrations/monitor/`，套用記錄在 `mcm_schema_migrations`（含 sha256）。重開不會再套用，已套用的檔案若 sha256 變了就拒絕。`run-once` 不寫這些表。`wallet_identities` 以 `wallet_id` 為身份；標籤改名會把舊標籤留在 `wallet_label_aliases`，不改 `wallet_id`。
 
 W3 建立 `chain_events`、`capability_state` 與 `capability_cursors`。`PRAGMA user_version` 仍是 1。`run-once` 不寫這三張表。事件、能力狀態、游標與 outbox 在同一個交易裡提交。失敗的讀取不會把舊數量改成 0。
+
+W9 建立 `delivery_leases` 與 `delivery_attempts`。`PRAGMA user_version` 仍是 1。舊的 `run-once` 不寫這兩張表。
 
 目前 `run-once` 路徑實際會寫入的表：
 

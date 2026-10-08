@@ -356,3 +356,23 @@ W8 在這個分支加上協議部位與曝險新聞的程式庫。只靠合成 f
 W8 review fixes:
 - Aave v3: when `getUserAccountData` reports collateral or debt that the supplied reserve list does not explain, the plugin returns `unknown` (`reserves_incomplete`), never a partial `observed`.
 - Known gap (W9): Kinza and UXLINK are listed news sources but have no plugin and no pinned contract or token yet, so their incidents link to no wallet. Exposure stays unobserved until W9 adds pins from private config. This is a coverage gap, not "no exposure".
+
+## W9 實作狀態
+
+W9 把第一次可交給別人跑的唯讀路徑接上。只靠合成 fixture 與離線測試。沒有 live 驗證，沒有自動切換，沒有把任何鏈登錄的 `enabled` 改成 true，也沒有 `live_pass`。`sources probe` 的身份可以是 `matched`，`probe` 仍是 `untested`。舊的 `run-once --config`、`SnapshotCycle` 與 Lista 路徑沒有改。沒有新增 Python 依賴。沒有具體的通知用戶端。
+
+現在有的東西：
+
+- `guardian.rules:AlertPolicy.from_public` 用公開門檻。原生 ETH 只對 `ethereum-mainnet`、`arbitrum-one`、`base-mainnet`、`optimism-mainnet` 的原生資產，用 wei 比較 0.5 ETH。`0.499` ETH 不警報，`0.5` ETH 警報。BNB、POL、AVAX、SOL 與任何代幣（含 symbol 為 ETH 的 wrapped）走 1000 美元，而且只要已計價的報價。缺價格是 `valuation_unknown`，不是 0 或 1。授權變更不論金額都警報；前態未知是 `first_observed`，不是 `newly_added`。撤銷是資訊。同一租戶自己錢包之間的轉帳合成一筆，淨額為 0 時不當成兩筆損失。第一次看到的範圍只出一筆計數摘要，不把回補歷史逐筆警報。之後沒有新事件就不出聲。`dedup_key` 穩定，重跑不會再插一列 outbox。
+- `guardian.pipeline:run_capability_pipeline` 用注入的 backend。CLI 預設是 HTTP backend，測試用 fixture。EVM 先對 chain id，再讀原生餘額、有界的 token log 與授權。Solana 先對 genesis，再讀原生餘額與 token。缺來源或憑證是 blocked，不是零。第三方地址查詢在 `privacy.third_party_wallet_queries` 不是 `operator_approved_sources_only` 時不送出，覆蓋是 `third_party_denied`。部位沒有跑就是 `unknown`。價格沒有接上就是 `valuation_unknown`。失敗的讀取不推進 cursor。
+- `guardian.delivery:deliver` 的影子模式不送、不改 sent。公開模式要是 `configured_sender`，私人 profile 要有 `single_sender_handoff: true`，而且呼叫端要注入 sender，才可能送。預設 `outbox_only` 是關的。租約在 `delivery_leases`，失敗次數在 `delivery_attempts`。舊例行已經通知的交易標成 `suppressed_legacy`。沒有 Telegram、Slack、email 或 webhook。
+- `guardian.scheduler:Watchdog` 在失明時一筆、恢復時一筆。重複失明不另開。它不斷言可以關掉排程，也不刪狀態。`monitor plan` 的 `started` 是 false。
+- `guardian.comparison:compare_with_legacy` 只讀舊狀態檔。輸出沒有原始地址。
+- CLI 新增 `config validate`、`sources probe`、`run-once --mcm-config`、`coverage --mcm-config`、`export --public`、`compare-legacy`、`watchdog`、`monitor plan`。沒有新旗標時，舊指令的行為不變。操作步驟見 `docs/quickstart-monitor.md`。
+
+還沒做的：
+
+- 沒有 live 來源，也沒有把監控切到這條路徑。舊例行要等私人 profile 的交接旗標與 sender 都接上之後，才停止送出。
+- GoPlus 與 Chainabuse 的憑證 header 仍是後續。這一節寫成時，有 key 仍是 `credential_transport_unsupported`。
+- 新聞 RSS 沒有在這包下載。Kinza 與 UXLINK 仍沒有插件與釘死合約，新聞不會因此掛到錢包。
+- 沒有具體 sender。`configured_sender` 但沒有注入 sender 是 `sender_not_configured`，列留在 pending。
