@@ -1232,3 +1232,14 @@ def test_mcm_w6_04_send_and_simulate_are_denied_before_the_backend():
     allowed = transaction_operation(SIG, "confirmed")
     assert_operation_allowed(allowed)
     assert allowed.method == "getTransaction"
+
+
+def test_mcm_w6_04_json_bodies_carry_a_json_content_type():
+    from guardian.sources.fixtures import PreparedCall
+    from guardian.sources.transport import pinned_request
+
+    post = PreparedCall("solana-rpc", "POST", "https://rpc.example.invalid/", b"{}", "jsonrpc", connect_ip="93.184.216.34")
+    _url, headers, _extensions = pinned_request(post)
+    assert headers["content-type"] == "application/json"
+    get = PreparedCall("rpc", "GET", "https://h.example.invalid/x", b"", "rest")
+    assert "content-type" not in pinned_request(get)[1]
