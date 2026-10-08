@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE sdnList SYSTEM "https://example.invalid/sdn.dtd">
+<sdnList>
+  <publshInformation>
+    <Publish_Date>2026-10-09</Publish_Date>
+    <Record_Count>1</Record_Count>
+  </publshInformation>
+  <sdnEntry>
+    <uid>fixture-900001</uid>
+    <lastName>Synthetic Fixture Alpha</lastName>
+    <idList>
+      <id>
+        <uid>fixture-900101</uid>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x0000000000000000000000000000000000000abc</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+</sdnList>

@@ -1,0 +1,6 @@
+{
+  "synthetic": true,
+  "not_evidence": true,
+  "note": "Synthetic SDN-shaped XML for offline tests. Names and addresses are fake (fixture uids, 0x000…0abc-style EVM addresses, a base58 key from 32 identical bytes, and a generated bech32 program). These files are not an OFAC publication, not a sanctions determination, and not verifiable chain evidence. Editing an address does not preserve a signature or hash because none was recorded.",
+  "license": "Written for this repository's tests."
+}

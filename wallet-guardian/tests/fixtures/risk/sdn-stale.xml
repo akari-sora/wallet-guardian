@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic fixture. Not an OFAC publication and not a sanctions determination. -->
+<sdnList xmlns="https://example.invalid/sdn">
+  <publshInformation>
+    <Publish_Date>01/01/2020</Publish_Date>
+    <Record_Count>1</Record_Count>
+  </publshInformation>
+  <sdnEntry>
+    <uid>fixture-900001</uid>
+    <lastName>Synthetic Fixture Alpha</lastName>
+    <sdnType>Entity</sdnType>
+    <idList>
+      <id>
+        <uid>fixture-900101</uid>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x0000000000000000000000000000000000000abc</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+</sdnList>
