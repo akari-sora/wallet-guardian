@@ -61,7 +61,13 @@ class Watchdog:
             emitted.append(self._alert("monitor_recovered", episode, now))
         else:
             health["blind"] = False
-        if run_report_or_none is not None and getattr(run_report_or_none, "status", None) == "ok" and not blind:
+        required_now = getattr(run_report_or_none, "required", None)
+        if (
+            run_report_or_none is not None
+            and getattr(run_report_or_none, "status", None) == "ok"
+            and not blind
+            and _required_healthy(required_now)
+        ):
             health["last_success_at"] = now
         required = getattr(run_report_or_none, "required", None)
         if isinstance(required, dict):
@@ -142,15 +148,18 @@ def _profile_exists(env_name: Any) -> bool:
 
 
 def _blind(report: Any, health: dict[str, Any], now: datetime, interval: int) -> bool:
-    if report is not None and getattr(report, "status", None) == "failed":
+    if report is not None and _finished_stale(report, now, interval):
+        return True
+    status = getattr(report, "status", None) if report is not None else None
+    if status in {"failed", "degraded"}:
         return True
     if report is not None and _shrunk(health.get("required"), getattr(report, "required", None)):
         return True
-    if report is not None and getattr(report, "status", None) == "ok":
-        return False
+    if status == "ok":
+        return not _required_healthy(getattr(report, "required", None))
     last = health.get("last_success_at")
     if not isinstance(last, str) or not last:
-        return report is None or getattr(report, "status", None) != "ok"
+        return report is None or status != "ok"
     try:
         previous = _parse(last)
     except ValueError:
@@ -159,9 +168,31 @@ def _blind(report: Any, health: dict[str, Any], now: datetime, interval: int) ->
     return age > 2 * interval
 
 
-def _shrunk(previous: Any, current: Any) -> bool:
-    if not isinstance(previous, dict) or not isinstance(current, dict):
+def _required_healthy(required: Any) -> bool:
+    if not isinstance(required, dict) or not required:
         return False
+    return all(value in _BETTER for value in required.values())
+
+
+def _finished_stale(report: Any, now: datetime, interval: int) -> bool:
+    finished = getattr(report, "finished", None)
+    if not isinstance(finished, str) or not finished:
+        return False
+    try:
+        previous = _parse(finished)
+    except ValueError:
+        return True
+    # Same grace as last_success_at: a scheduled run plus its own duration is not blind.
+    return (now - previous).total_seconds() > 2 * interval
+
+
+def _shrunk(previous: Any, current: Any) -> bool:
+    """A required key that disappears is a failure, not a smaller scope."""
+    if not isinstance(previous, dict) or not isinstance(current, dict) or not previous:
+        return False
+    for key in previous:
+        if key not in current:
+            return True
     for key, value in current.items():
         old = previous.get(key)
         if old in _BETTER and value in _WORSE:

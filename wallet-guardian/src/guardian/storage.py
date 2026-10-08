@@ -373,6 +373,20 @@ class Database:
                 (run_id, tenant_id, _json(payload)),
             )
 
+    def latest_run(self, tenant_id: str) -> dict[str, Any] | None:
+        """Newest persisted run record by its finished timestamp. Missing is None."""
+        best: dict[str, Any] | None = None
+        best_key = ""
+        for row in self.conn.execute("SELECT payload FROM runs WHERE tenant_id=?", (tenant_id,)):
+            payload = json.loads(row["payload"])
+            if not isinstance(payload, dict):
+                continue
+            key = str(payload.get("finished") or "")
+            if best is None or key >= best_key:
+                best = payload
+                best_key = key
+        return best
+
     def table_names(self) -> list[str]:
         rows = self.conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
         return [row["name"] for row in rows]
