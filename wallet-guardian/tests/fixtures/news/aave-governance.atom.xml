@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Synthetic fixture</title>
+  <entry>
+    <title>Aave governance note</title>
+    <link href="https://news.example.invalid/aave/gov"/>
+    <updated>2026-10-02T00:00:00Z</updated>
+    <summary>Synthetic fixture. Not a real proposal.</summary>
+  </entry>
+</feed>
