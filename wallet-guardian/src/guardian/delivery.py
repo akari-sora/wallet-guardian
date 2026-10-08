@@ -134,6 +134,7 @@ def deliver(
         return DeliveryReport("lease_held", 0, len(pending), 0, (), False, _attempts(database, tenant))
     sent = 0
     skipped = 0
+    lost = False
     try:
         for row in database.outbox_for(tenant):
             if row["status"] != "pending":
@@ -143,6 +144,10 @@ def deliver(
                 _set_status(database, tenant, int(row["id"]), "suppressed_legacy")
                 skipped += 1
                 continue
+            # Renew before every send; if another holder took the lease, stop instead of double-sending.
+            if not _acquire(database, tenant, owner, int(clock()), lease_seconds):
+                lost = True
+                break
             message = _message(payload)
             try:
                 sender.send(message)
@@ -154,7 +159,8 @@ def deliver(
     finally:
         _release(database, tenant, owner)
     left = sum(1 for row in database.outbox_for(tenant) if row["status"] == "pending")
-    return DeliveryReport("sent" if sent else "pending", sent, left, skipped, (), False, _attempts(database, tenant))
+    status = "lease_lost" if lost else "sent" if sent else "pending"
+    return DeliveryReport(status, sent, left, skipped, (), False, _attempts(database, tenant))
 
 
 def _classify(database: Database, tenant: str, pending: list[dict[str, Any]]) -> tuple[list[str], int]:

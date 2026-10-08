@@ -574,3 +574,39 @@ def _rpc_result(method: str, host: str) -> object:
     if method == "getSignaturesForAddress":
         return []
     return []
+
+
+def test_mcm_w9_03_handover_lease_is_renewed_and_lost_lease_stops_sending(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    desk = _desk(tmp_path, monkeypatch)
+    database = Database(desk.state / "monitor.sqlite")
+    try:
+        for key in ("lease-a", "lease-b"):
+            database.add_alert(TENANT, key, {"dedup_key": key, "identity": key, "kind": "asset_usd", "network": "ethereum-mainnet", "wallet_id": EVM_ID})
+        public = load_public_config(desk.config)
+        public.document["delivery"] = {"mode": "configured_sender", "profile_env": "MONITOR_DELIVERY_PROFILE"}
+        ready = _ready_profile(tmp_path, monkeypatch, public)
+        ticks = iter(range(1_700_000_000, 1_700_100_000, 400))
+
+        class TakeoverSender:
+            def __init__(self) -> None:
+                self.messages: list[dict] = []
+
+            def send(self, message: dict) -> None:
+                self.messages.append(dict(message))
+                # Our lease expired during a slow send and another monitor took it over.
+                database.conn.execute(
+                    "UPDATE delivery_leases SET owner_id='other-monitor', expires_at='9999999999' WHERE tenant_id=?",
+                    (TENANT,),
+                )
+                database.conn.commit()
+
+        sender = TakeoverSender()
+        report = deliver(database, TENANT, mode="send", sender=sender, handoff=ready, clock=lambda: next(ticks), owner_id="this-monitor")
+        assert report.status == "lease_lost"
+        assert report.sent == 1
+        assert len(sender.messages) == 1
+        assert [row["status"] for row in database.outbox_for(TENANT)].count("pending") == 1
+        holder = database.conn.execute("SELECT owner_id FROM delivery_leases WHERE tenant_id=?", (TENANT,)).fetchone()
+        assert holder["owner_id"] == "other-monitor"
+    finally:
+        database.close()
