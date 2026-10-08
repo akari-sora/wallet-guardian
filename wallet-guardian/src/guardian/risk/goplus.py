@@ -1,7 +1,8 @@
 """GoPlus reads. Support is per function and chain. A miss is unknown, never safe.
 
-The API key would have to travel in an Authorization header. This transport
-cannot carry headers, so a configured key is reported and not sent.
+A configured access token is sent as Authorization: Bearer. GoPlus mints that
+token with a signed /token call; this package does not perform that exchange
+and has not live-verified the header. Without a token the read stays keyless.
 """
 
 from __future__ import annotations
@@ -71,7 +72,13 @@ class GoPlusClient:
             if str(exc) != "credential_missing":
                 raise
             self._credential = None
-        self.credential_status = "credential_transport_unsupported" if self._credential else "keyless"
+        # Only claim header auth when the registered transport source will actually carry it.
+        if _source_has_credential(transport, source_id):
+            self.credential_status = "credential_header"
+        elif self._credential:
+            self.credential_status = "credential_not_registered"
+        else:
+            self.credential_status = "keyless"
         self.clock = clock or (lambda: 0.0)
         self.sleep = sleep or (lambda _seconds: None)
         self.random = random or (lambda: 0.0)
@@ -113,6 +120,7 @@ class GoPlusClient:
             http_method="GET",
             path=path,
             query=query,
+            headers=("authorization",) if _source_has_credential(self.transport, self.source_id) else None,
         )
 
     def read(self, *, function: str, network_id: str, target: str) -> FunctionRead:
@@ -146,7 +154,10 @@ class GoPlusClient:
                 raise
             return _read(function, network_id, normalized, "unknown", exc.reason or "read_error", (), self.credential_status, True)
         if getattr(result, "blocked", False) or getattr(result, "status", 0) in {401, 403}:
-            return _read(function, network_id, normalized, "unknown", str(result.reason or "blocked"), (), self.credential_status, True)
+            reason = str(result.reason or "blocked")
+            if operation.headers and getattr(result, "status", 0) in {401, 403}:
+                reason = "credential_rejected"
+            return _read(function, network_id, normalized, "unknown", reason, (), self.credential_status, True)
         if result.category == "rate_limited" or getattr(result, "status", 0) == 429:
             return _read(function, network_id, normalized, "unknown", "rate_limited", (), self.credential_status, True)
         if result.category != "ok" or not isinstance(result.body, dict):
@@ -247,6 +258,15 @@ def _family(catalog: RiskSources, network_id: str, chain_id: str) -> str:
     if chain_id == "tron":
         return "tron"
     return "evm"
+
+
+def _source_has_credential(transport: Any, source_id: str) -> bool:
+    endpoints = getattr(transport, "endpoints", None)
+    sources = getattr(endpoints, "sources", None)
+    if not isinstance(sources, dict):
+        return False
+    credential = getattr(sources.get(source_id), "credential", None)
+    return credential is not None and bool(getattr(credential, "present", False))
 
 
 def _read(

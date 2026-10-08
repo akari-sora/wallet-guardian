@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import time
 from pathlib import Path
+from typing import Any
 
 from guardian.actions.policy import agent_wallet_request, parse_intent
 from guardian.actions.workbench import workbench_status
+from guardian.comparison import compare_with_legacy
+from guardian.configuration import load_public_config, resolve_private_inputs, safe_export
 from guardian.domain import format_alert
 from guardian.errors import GuardianError
+from guardian.pipeline import default_backend, probe_sources, run_capability_pipeline, stored_coverage
+from guardian.scheduler import Watchdog, monitor_plan
 from guardian.security.redact import redact
 from guardian.service import ROOT, doctor, load_config, load_local_env, operation_coverage, rescue_doctor, run_once, self_check
 from guardian.storage import Database
@@ -38,7 +45,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("doctor", parents=[common])
     run = sub.add_parser("run-once", parents=[common])
-    run.add_argument("--config", required=True)
+    selected = run.add_mutually_exclusive_group(required=True)
+    selected.add_argument("--config")
+    selected.add_argument("--mcm-config")
+    run.add_argument("--no-send", action="store_true")
 
     sub.add_parser("snapshot", parents=[common])
     sub.add_parser("reconcile", parents=[common])
@@ -55,7 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("approvals", parents=[common])
     explain = sub.add_parser("explain", parents=[common])
     explain.add_argument("--event-id", required=True)
-    sub.add_parser("coverage", parents=[common])
+    coverage = sub.add_parser("coverage", parents=[common])
+    coverage.add_argument("--mcm-config", default=None)
     replay = sub.add_parser("replay", parents=[common])
     replay.add_argument("--fixture", required=True)
     replay.add_argument("--no-send", action="store_true")
@@ -89,13 +100,41 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("rescue", parents=[common])
     sub.add_parser("operation-coverage", parents=[common])
     sub.add_parser("workbench", parents=[common])
+
+    config = sub.add_parser("config")
+    config_sub = config.add_subparsers(dest="config_command", required=True)
+    validate = config_sub.add_parser("validate", parents=[common])
+    validate.add_argument("--mcm-config", required=True)
+
+    sources = sub.add_parser("sources")
+    sources_sub = sources.add_subparsers(dest="sources_command", required=True)
+    probe = sources_sub.add_parser("probe", parents=[common])
+    probe.add_argument("--mcm-config", required=True)
+
+    exported = sub.add_parser("export", parents=[common])
+    exported.add_argument("--public", action="store_true")
+    exported.add_argument("--mcm-config", required=True)
+
+    compared = sub.add_parser("compare-legacy", parents=[common])
+    compared.add_argument("--mcm-config", required=True)
+    compared.add_argument("--legacy-state", required=True)
+
+    watchdog = sub.add_parser("watchdog", parents=[common])
+    watchdog.add_argument("--mcm-config", required=True)
+
+    monitor = sub.add_parser("monitor")
+    monitor_sub = monitor.add_subparsers(dest="monitor_command", required=True)
+    plan = monitor_sub.add_parser("plan", parents=[common])
+    plan.add_argument("--mcm-config", required=True)
     return parser
 
 
-def dispatch(args: argparse.Namespace) -> tuple[dict, int]:
+def dispatch(args: argparse.Namespace, *, backend: Any = None, sender: Any = None) -> tuple[dict, int]:
     if args.command == "doctor":
         return doctor(), 0
     if args.command == "run-once":
+        if getattr(args, "mcm_config", None):
+            return _mcm_run(args, backend, sender)
         result = run_once(Path(args.config), Path(args.db) if args.db else None)
         return result, 0 if result["status"] != "degraded" else 3
     if args.command == "self-check":
@@ -108,6 +147,8 @@ def dispatch(args: argparse.Namespace) -> tuple[dict, int]:
     if args.command == "rescue":
         return rescue_doctor(), 0
     if args.command == "coverage":
+        if getattr(args, "mcm_config", None):
+            return _mcm_coverage(args)
         return {
             "monitoring": "PARTIAL",
             "chains_enabled": [56],
@@ -157,6 +198,18 @@ def dispatch(args: argparse.Namespace) -> tuple[dict, int]:
         return {"status": "replayed", "sent": False, "quality": fixture.get("quality", "UNKNOWN")}, 0
     if args.command == "action":
         return _action(args)
+    if args.command == "config":
+        return _mcm_validate(args)
+    if args.command == "sources":
+        return _mcm_probe(args, backend)
+    if args.command == "export":
+        return _mcm_export(args)
+    if args.command == "compare-legacy":
+        return _mcm_compare(args)
+    if args.command == "watchdog":
+        return _mcm_watchdog(args)
+    if args.command == "monitor":
+        return _mcm_plan(args)
     raise GuardianError("unknown command")
 
 
@@ -252,7 +305,114 @@ def _action(args: argparse.Namespace) -> tuple[dict, int]:
     raise GuardianError("unknown action command")
 
 
-def main(argv: list[str] | None = None) -> int:
+def _open_mcm(path: str):
+    public = load_public_config(path)
+    private = resolve_private_inputs(public, os.environ)
+    database = Database(private.state_dir / "monitor.sqlite")
+    return public, private, database
+
+
+def _mcm_validate(args: argparse.Namespace) -> tuple[dict, int]:
+    public, private, database = _open_mcm(args.mcm_config)
+    database.close()
+    sources = []
+    for name in sorted(private.source_status):
+        status = private.source_status[name]
+        sources.append({
+            "availability": status.availability,
+            "blocked_reason": status.blocked_reason,
+            "credential_present": status.credential_present,
+            "enabled": status.enabled,
+            "id": name,
+        })
+    return {
+        "live_verified": False,
+        "notes": list(private.notes),
+        "sources": sources,
+        "status": "ok",
+        "wallets": len(private.accounts.accounts),
+    }, 0
+
+
+def _mcm_probe(args: argparse.Namespace, backend: Any) -> tuple[dict, int]:
+    public, private, database = _open_mcm(args.mcm_config)
+    try:
+        return probe_sources(public, private, backend=_chosen_backend(backend), clock=time.time), 0
+    finally:
+        database.close()
+
+
+def _mcm_run(args: argparse.Namespace, backend: Any, sender: Any) -> tuple[dict, int]:
+    public, private, database = _open_mcm(args.mcm_config)
+    try:
+        report = run_capability_pipeline(
+            public,
+            private.accounts,
+            private,
+            database,
+            backend=_chosen_backend(backend),
+            clock=time.time,
+            no_send=bool(args.no_send),
+            sender=sender,
+        )
+    finally:
+        database.close()
+    code = 2 if report.misconfigured else 1 if report.status == "failed" else 0
+    return report.as_dict(), code
+
+
+def _mcm_coverage(args: argparse.Namespace) -> tuple[dict, int]:
+    public, private, database = _open_mcm(args.mcm_config)
+    try:
+        rows = stored_coverage(database, private.accounts.tenant_id)
+    finally:
+        database.close()
+    return {"live_verified": False, "rows": rows, "status": "ok"}, 0
+
+
+def _mcm_export(args: argparse.Namespace) -> tuple[dict, int]:
+    if not args.public:
+        raise GuardianError("export requires --public")
+    public, private, database = _open_mcm(args.mcm_config)
+    database.close()
+    return safe_export(public, private.accounts), 0
+
+
+def _mcm_compare(args: argparse.Namespace) -> tuple[dict, int]:
+    _public, private, database = _open_mcm(args.mcm_config)
+    try:
+        return compare_with_legacy(args.legacy_state, database, private.accounts.tenant_id), 0
+    finally:
+        database.close()
+
+
+def _mcm_watchdog(args: argparse.Namespace) -> tuple[dict, int]:
+    public, private, database = _open_mcm(args.mcm_config)
+    try:
+        report = Watchdog(database, private.accounts.tenant_id, public).evaluate(None, _now())
+    finally:
+        database.close()
+    report["live_verified"] = False
+    return report, 0
+
+
+def _mcm_plan(args: argparse.Namespace) -> tuple[dict, int]:
+    public, private, database = _open_mcm(args.mcm_config)
+    database.close()
+    plan = monitor_plan(public, private)
+    plan["live_verified"] = False
+    return plan, 0
+
+
+def _chosen_backend(backend: Any) -> Any:
+    return default_backend() if backend is None else backend
+
+
+def _now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def main(argv: list[str] | None = None, *, backend: Any = None, sender: Any = None) -> int:
     load_local_env()
     parser = build_parser()
     try:
@@ -260,7 +420,7 @@ def main(argv: list[str] | None = None) -> int:
         # Touch config validation early for discover/run so a bad address fails closed.
         if args.command in {"run-once", "wallets"} and getattr(args, "config", None):
             load_config(Path(args.config))
-        payload, code = dispatch(args)
+        payload, code = dispatch(args, backend=backend, sender=sender)
     except GuardianError as exc:
         payload = {"status": "error", "error_type": type(exc).__name__, "error": redact(str(exc))}
         code = exc.exit_code

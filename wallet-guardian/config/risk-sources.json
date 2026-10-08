@@ -2,13 +2,13 @@
   "chainabuse": {
     "credential_env": "CHAINABUSE_API_KEY",
     "endpoint_env": "CHAINABUSE_API_URL",
-    "notes": "Auth is an HTTP header. This transport has no header field, so a configured key is credential_transport_unsupported and a missing key is credential_missing. Neither result is an empty report list or a safe address. Not live verified.",
+    "notes": "Auth is Authorization: Basic base64(secret + ':'), a documented format that this package has not live-verified. The value comes from CHAINABUSE_API_KEY on the registered source. A missing key does not send a request and is credential_missing. An empty body is not an empty report list and is not a safe address.",
     "source": {
       "retrieved": "2026-10-09",
       "status": "documented, not live verified",
       "url": "https://docs.chainabuse.com/api"
     },
-    "transport": "credential_transport_unsupported"
+    "transport": "credential_header"
   },
   "goplus": {
     "credential_env": "GOPLUS_API_KEY",
@@ -184,7 +184,7 @@
         }
       }
     },
-    "notes": "Keyless only. GoPlus Authorization is a header, which this transport cannot carry. A configured GOPLUS_API_KEY is reported as credential_transport_unsupported, not sent, and not a live result. String flag 0 means not flagged by that function, not safe. Not live verified.",
+    "notes": "GOPLUS_API_KEY is a pre-minted access token. GoPlus mints tokens with a signed /token call; that exchange is out of scope and not live-verified. When the registered source has the token, reads send Authorization: Bearer. Without it, the read stays keyless. 401 or 403 on a credentialed read is credential_rejected, never safe. String flag 0 means not flagged by that function, not safe.",
     "source": {
       "retrieved": "2026-10-09",
       "status": "documented, not live verified",

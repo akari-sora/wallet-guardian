@@ -137,6 +137,10 @@ _GET_PREFIXES: dict[str, tuple[str, ...]] = {
     "ofac_sls": ("/api/download/", "/api/PublicationPreview/", "/exports/"),
 }
 
+CREDENTIAL_HEADERS = {
+    "chainabuse": frozenset({"authorization"}),
+    "goplus": frozenset({"authorization"}),
+}
 _GET_ONLY = frozenset({
     "aptos_rest",
     "blockscout",
@@ -209,12 +213,26 @@ class Operation:
     documents: Sequence[Any] | None = None
     operation_name: str | None = None
     url: str | None = None
+    headers: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        headers = self.headers
+        if headers is None:
+            return
+        if isinstance(headers, (Mapping, str, bytes)) or not isinstance(headers, tuple):
+            _deny("header_value_not_allowed")
+        if any(not isinstance(item, str) for item in headers):
+            _deny("header_value_not_allowed")
+        for name in headers:
+            if not name or name != name.strip() or any(mark in name for mark in " :;=\t\r\n"):
+                _deny("header_value_not_allowed")
 
 
 def assert_operation_allowed(operation: Operation) -> None:
     """Raise SecurityError before a backend, socket, or redirect is used."""
     if not isinstance(operation, Operation):
         _deny("protocol_denied")
+    _assert_headers(operation)
     expected = ADAPTER_PROTOCOL.get(operation.adapter)
     if expected is None or operation.protocol != expected:
         _deny("protocol_denied")
@@ -281,6 +299,18 @@ def operation_records(adapter: str) -> list[dict[str, Any]]:
             records.append({"method": method, "protocol": "grpc"})
     records.sort(key=lambda item: (item["protocol"], item.get("http_method", ""), item.get("path", ""), item.get("method", ""), item.get("operation", "")))
     return records
+
+
+def _assert_headers(operation: Operation) -> None:
+    headers = operation.headers
+    if not headers:
+        return
+    allowed = CREDENTIAL_HEADERS.get(operation.adapter)
+    if allowed is None:
+        _deny("header_not_allowed")
+    for name in headers:
+        if name not in allowed:
+            _deny("header_not_allowed")
 
 
 def _assert_jsonrpc(operation: Operation) -> None:
