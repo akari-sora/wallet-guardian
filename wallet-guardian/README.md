@@ -98,6 +98,8 @@ npm run dev
 
 模式 C 保持關閉。程式裡沒有權限合約。任務資料自己宣稱已驗證，不算鏈上強制。
 
+介面規則（狀態列、錢包卡片、CSP 限制、`src/typography.mjs`、版面檢查工具）見 `docs/action-client-ui.md`。
+
 Python 的狀態重讀可以讓 `preflight_ok` 為 true，但 `continue_to_wallet` 仍是 false。客戶端的獨立重讀不會寫回這個旗標。交易雜湊不算完成。拒絕、送出不明、替代與完成核對有離線狀態機測試。
 
 固定 HTTPS 來源見 `docs/deploy.md`。套件常數 `fixed_https_origin` 仍是 false，所以不會發行任務連結，這也不是主網執行授權。
