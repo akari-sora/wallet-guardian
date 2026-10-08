@@ -1,0 +1,10 @@
+{
+  "synthetic": true,
+  "not_a_live_capture": true,
+  "not_verifiable_chain_evidence": true,
+  "generation": "Addresses are base58(bytes([n]) * 32). Signatures are base58(bytes([n]) * 64). n starts at 1 so none of them is the 32-zero system id.",
+  "example_address_1": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+  "example_signature_1": "2AXDGYSE4f2sz7tvMMzyHvUfcoJmxudvdhBcmiUSo6ijwfYmfZYsKRxboQMPh3R4kUhXRVdtSXFXMheka4Rc4P2",
+  "source": "Hand-written for MCM-W6. No upstream transaction was redacted.",
+  "license": "Test fixture."
+}

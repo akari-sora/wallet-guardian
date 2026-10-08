@@ -134,6 +134,9 @@ def pinned_request(call: PreparedCall) -> tuple[str, dict[str, str], dict[str, s
     pinning does not weaken certificate validation.
     """
     headers = {"accept": "application/json"}
+    if call.body:
+        # JSON-RPC, GraphQL and REST POST bodies are JSON. Solana RPC answers 415 without this.
+        headers["content-type"] = "application/json"
     extensions: dict[str, str] = {}
     if not call.connect_ip:
         return call.url, headers, extensions

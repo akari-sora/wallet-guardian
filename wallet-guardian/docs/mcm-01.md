@@ -273,3 +273,28 @@ W5 在這個分支加上 EVM 權限與已經上鏈的 permit。只靠合成 fixt
 
 W5 審查補充：
 - 2026-10-08 審查者在 box 上的唯讀 smoke（公開 RPC、不用 key，只查公開的代幣合約與 Permit2，結果未寫入設定）：Ethereum 上 Permit2 地址有 bytecode；`allowance`、Permit2 `allowance`、`nonceBitmap` 這幾個 view 經 W2 transport 正常回 ok 並能解碼；`permits.offchain_unused` 仍是 not_observable；試圖編碼 `approve` 被拒。這不是 live_pass，Permit2 設定的 status 仍是 `documented`，probe 仍是 untested。
+
+## W6 實作狀態
+
+W6 在這個分支加上 Solana 資產與權限讀取。只靠合成 fixture。沒有任何來源被 live 驗證。`run-once`、`SnapshotCycle`、Lista 與 CLI 的行為沒有改。`config/chains/solana-mainnet.json` 的 `enabled` 仍是 false，`status` 仍是 `planned_not_live_verified`。`config/source-capabilities/` 沒有改，沒有 `live_pass`。
+
+現在有的東西：
+
+- `guardian.chains.solana` 經既有的唯讀 transport 呼叫 Solana JSON-RPC。方法只走 W2 的 allowlist：`getBalance`、`getTokenAccountsByOwner`（SPL Token 與 Token-2022 各一次，encoding `jsonParsed`）、`getSignaturesForAddress`、`getTransaction`（`jsonParsed`、`maxSupportedTransactionVersion` 0、明確的 commitment）、`getAccountInfo`、`getMultipleAccounts`、`getGenesisHash`、`getSlot`。commitment 是參數：預設 `confirmed`，`finalized` 允許，`processed` 只當成 observed。不會假設 finalized。記任何餘額之前用 `getGenesisHash` 對登錄的 expected value。對不上是 `genesis_mismatch`，什麼都不記。`sendTransaction`、`simulateTransaction`、`requestAirdrop` 在到達 backend 之前被拒。這包不編碼 approve、revoke、closeAccount、setAuthority，也不簽名、不廣播。
+- owner 的 token account 集合同時枚舉兩個 token program。歷史是錢包自己的簽名，加上每一個持有中的 token account 的簽名。owner 不在 `accountKeys` 的 SPL 入帳仍由 token account 的簽名抓到。先前看過、現在不見的帳戶是 `token_account_closed_history_gap`。讀不到歷史是 `token_account_history_unknown`。分頁或預算碰到上限是 partial，cursor 不超過已經完整讀完的範圍。失敗或被擋的讀取保留上一次的 cursor，餘額不寫成 0。只有原生餘額成功時，`portfolio_summary` 不會把資產組合標成 complete，reason 是 `native_only_not_portfolio`。
+- legacy 與 version 0 都解。v0 的 account keys 是靜態 key 加上 `meta.loadedAddresses`（writable 再 readonly），所以 ALT 載入的 key 算進去。`innerInstructions` 算進去。`meta.err` 不是 null 的交易是失敗：只有手續費，沒有代幣或授權效果。`meta` 或 transaction 是 null 是 unknown，不是成功，也不是失敗。不支援的版本是 unknown，reason 是 `unsupported_transaction_version`，不默默解析。同一筆簽名在 confirmed 與 finalized 的 finality 不同。後來找不到的交易不算 final。
+- 權限是 `permissions.spl_delegate` 與 `permissions.spl_authority`。目前 `jsonParsed` 帳戶記 delegate、delegatedAmount、closeAuthority、owner、state；mint 記 mintAuthority、freezeAuthority。指令只解已經回來的 `jsonParsed`：approve、approveChecked、revoke、setAuthority（authorityType 是 accountOwner、closeAccount、mintTokens、freezeAccount）、closeAccount。前態未知是 `first_observed`，不會說成剛新增。delegate 從舊換成新，即使額度相同也是 replaced。目前狀態和指令歷史不一致時以目前狀態為準，reason 是 `event_state_mismatch`。目前讀取失敗是 unknown，不會說成已撤銷、零或安全，cursor 留在上一次。已知的 Token-2022 extension 至少包含 permanentDelegate、transferHook、mintCloseAuthority、defaultAccountState、nonTransferable、transferFeeConfig、transferFeeAmount、immutableOwner、cpiGuard、memoTransfer、metadataPointer、tokenMetadata、interestBearingConfig，以及 `confidentialTransfer` 開頭的名字。任何未知 extension 是 `token2022_unknown_extension`，coverage 不 complete，不會略過。結構旗標（外部 delegate、外部 close authority、permanent delegate、有 freeze authority、未標籤的 delegate）和呼叫端給的惡意標籤分開。沒有標籤是 unlabeled，不是 safe。帳戶關閉是 closed，可能是租金回收，不是失竊。
+- lamports 用 pre/postBalances 與 pre/postTokenBalances 的整數金額，不用 `uiAmount` 浮點。小數 9、6、0 都留著。大於 2^53 維持精確整數。手續費只向 fee payer 算一次，不另外算成一筆轉帳。建立帳戶存進去的租金，和 closeAccount 退回的租金，標成 rent，不是收入或損失。wSOL wrap（SOL 轉進 wSOL 帳戶再加上 syncNative）和 unwrap（關掉 wSOL 帳戶）不會同時算成 SOL 移動和代幣移動。Token-2022 的 transfer fee 是 received = sent - fee，分開記錄。
+- `guardian.sources.helius` 是可選的補充。key 由呼叫端從環境變數名稱 `HELIUS_API_KEY` 解出來，放在 query 的 `api-key`，不寫進 repr；錯誤文字會遮罩。缺 key 或空 key 不建立 client，結果是 BLOCKED，reason 是 `credential_missing`，probe 是 blocked，不是 empty、不是 safe、不是沒有資產，也不 complete。POST 只走 `/v1/parsed-events/transaction-history` 與 `/v1/parsed-events/transactions`。`processed` commitment 拒絕。401 與 403 是 blocked。429 依既有 retry 重試，之後仍是 partial。壞掉的回應是 error。Helius 的結果不會自己把 RPC coverage 標成 complete，也不覆蓋鏈上解析出來的整數金額。沒有 Helius 時，RPC 路徑仍可用：無 key 的公開 RPC，或使用者自己的 `SOLANA_RPC_URL`。缺 `SOLANA_RPC_URL` 是 blocked，不是沒有資產。公開 RPC 是低流量的後備，不是完整歷史。Helius 免費 key 由使用者自己在 Dashboard 申請。本包不自動註冊、不替使用者付款、不升級套餐。
+- `permits.offchain_unused` 維持 not_observable。還沒提交的 Solana 離線簽名不可觀察，不能標成 complete。
+
+還沒接上的東西：
+
+- 沒有 live 來源驗證。fixture 通過不是節點通過。沒有 `live_pass`。鏈登錄的 `enabled` 仍是 false。
+- 真的要打來源時，操作者自己提供 `SOLANA_RPC_URL`，以及選用的 `HELIUS_API_KEY`。公開設定只放環境變數名稱，不放 key，也不放帶 key 的 URL。
+- 未知的 Token-2022 extension 不會被當成完整。離線 Solana 簽名看不到。缺歷史不是「沒有授權」，也不是安全。
+
+W6 審查補充：
+- 增量掃描原本永遠不帶 `until`（條件同時要求 cursor 是 32 bytes 地址和 64 bytes 簽名，永遠不成立），每輪重走全部歷史；已修正為只要 cursor 是簽名就當 `until`。不會漏事件，但活躍錢包原本會一直撞頁數上限而標 partial。
+- W2 transport 的 POST 原本沒有送 `content-type: application/json`。EVM 公開節點接受，但 Solana RPC 回 415，所以 live 讀取全部會失敗（誠實地標 error，不是空）。已補上；GET 不受影響。
+- 2026-10-09 審查者在 box 上的唯讀 smoke（公開 Solana RPC、不用 key、只查公開的 wSOL 與 USDC mint，結果未寫入設定）：getGenesisHash 與設定相符；mint 讀取能解析 decimals 與 mint/freeze authority；公開節點對部分方法回 429/403 時結果是 partial，cursor 不前進；沒有 HELIUS_API_KEY 時是 blocked／credential_missing；sendTransaction、simulateTransaction、requestAirdrop 在 transport 前被拒。這不是 live_pass，probe 仍是 untested。
