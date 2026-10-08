@@ -442,3 +442,46 @@ Reviewer 在 2026-10-09 用唯讀 `eth_call` 看過：BSC 與 Ethereum 上 `getP
 - 例子設定 `examples/monitor.json` 的插件清單維持 L0 的三個，避免既有測試把 Kinza 當成預設啟用。
 - Kinza 讀取成本沒有快取：每錢包每輪約為準備金數 × 9 個 `eth_call`（BSC 25、Ethereum 15 個準備金）。L2／L3 量預算時要算進去；之後可以把準備金 metadata 做成每輪跨錢包共用。
 
+## L2 實作狀態
+
+L1 那段「沒有抓新聞。抓取留給 L2。」說的是當時的狀態。W8 那段「其他 feed 是 `not_fetched_by_monitor`」也是當時的目錄。這一節是 L2 補上的範圍，取代那兩句對「現在抓哪些」的描述。仍沒有 live 驗證。報告維持 `live_verified: false`，`live_pass` 不會是 true。這包的測試只用 fixture，沒有對下面的 URL 發真實請求。
+
+目錄仍是 `config/news-sources/`。沒有另做一份 `config/news/sources.json`。
+
+只有三條官方 RSS 是 `allowlisted_get`。公開 GET，沒有憑證，沒有 env var，URL 來自已提交的目錄。`verified` 是 2026-10-09。審查者當天對這三個公開 URL 做過唯讀檢查（不是這包的 live pass）：
+
+| 來源 | URL | 上限 | 當天看到的回應 |
+|---|---|---|---|
+| Aave governance RSS | https://governance.aave.com/latest.rss?order=created | 524288（512 KiB） | HTTP 200，`application/rss+xml`，約 296 KB，沒有 ETag，`cache-control: no-store` |
+| Kinza Medium RSS | https://medium.com/feed/@kinzafinance | 262144（256 KiB） | 約 61 KB，`text/xml`，沒有 ETag，`max-age=900` |
+| Solana status RSS | https://status.solana.com/history.rss | 131072（128 KiB） | 約 26 KB，`application/rss+xml`，weak ETag |
+
+上限都小於等於 1 MiB。Aave 的下限是 512 KiB。沒有替其他來源發明 `/feed` 或 `/rss`。
+
+不抓的維持不抓：
+
+- 所有 X 帳號仍是 `manual_not_fetched_by_monitor`。監控不抓 X，不抓 HTML，也不渲染 JavaScript。
+- UXLINK 的 notice 與 blog、Lista 的 blog、Kinza 的 blog 頁仍是 `not_fetched_by_monitor`。UXLINK 與 Lista 沒有可抓的 feed。
+
+開關是公開設定 `news.fetch`（boolean，可不填）。沒有這個欄位，或值是 false，行為與 L1 相同：`run-once` 不對新聞主機發請求，`exposure_news` 仍是 `news_not_supplied`。`--news-input` 仍是離線路徑，來源 `caller_supplied`。只有 `news.fetch` 為 true 才抓，來源標成 `allowlisted_get`。
+
+抓取規則：
+
+- 只走既有的唯讀 transport（`request_allowlisted_get`）。方法是 GET。請求不帶錢包地址、wallet id、tenant、帳戶標籤、API key 或私人設定。除了目錄裡已有的 query（Aave 的 `order=created`）之外，不加參數。User-Agent 固定是 `WalletGuardianNews/1`，不含使用者身份。
+- 重新導向只留在同一個 host。DNS 先解析再釘住連線位址。私人位址、loopback、metadata IP 在送出前拒絕。
+- 每個 run 共用一個新聞預算，最多 8 次 GET，含重新導向的每一跳。用完是 `budget_exhausted`，不是空新聞。這不是使用者的 RPC 預算。
+- 回應超過該 feed 的 `max_bytes` 是 `response_too_large`。`<!DOCTYPE` 或 `<!ENTITY` 在解析前拒絕。拒絕或解析失敗是該 feed 的 `fetch_error`，不會被記成「沒有新聞」。同一次 run 裡其他 feed 仍會解析。
+- 條件 GET：依 feed URL 記住 ETag 與 Last-Modified。下一輪只送 `If-None-Match` 與 `If-Modified-Since`。這兩個不是憑證 header，不走 Authorization，來源也沒有 credential。304 重用上一輪存下的項目，該 feed 是 `not_modified`（新鮮），不是缺口。沒有 ETag 而項目相同，不開新 incident，也不再發一次警報。
+- 同一則 incident（同一個 id）標題或本文變了，是更新，不是新 incident。每個錢包最多一筆 `exposure_update`，去重鍵含內容雜湊，所以同一版不會再通知。連到錢包的規則仍是 L1：只連觀察到的部位，或仍有效的授權。沒有部位也沒有授權就不通知。部位 unknown 是每個錢包一筆去重的 `exposure_unknown`，不是損失警報。
+
+覆蓋不會把缺口說成完成：
+
+- 錢包曝險到某個協議，或啟用的插件屬於某個協議，而該協議沒有可抓的 feed（UXLINK、Lista）時，`exposure_news` 的 reason 含 `no_allowlisted_feed`，並列出協議 id。整體不會是 complete，也不會寫成「沒有新聞」。
+- 單一 feed 抓成功而且沒有對上的項目，可以是該 feed 的 `empty`。只要還有曝險協議沒有 feed，整體 coverage 就不是 ok。
+- feed 失敗是 `fetch_error`。超過預算是 `budget_exhausted`。沒開抓取是 `news_not_supplied`。全部 feed 都失敗時 quality 是 error，不是 empty。
+- `exposure_news` 在來源能力目錄裡仍是 unsupported，所以即使抓取成功，quality 也不會是 `complete_in_declared_scope`。這不是 live pass。
+
+狀態寫在既有 DB 的 `capability_state`：capability 是 `exposure_news`，payload 只有 `news_fetch`（每個 feed 的 etag、last_modified、last_ok_at、fingerprints，以及 incident 與 content hash）。這列不是錢包，也不帶 coverage 宣告。不寫入 `private/`。
+
+沒有改 `action-client`、送出語意或 `.gitlab-ci.yml`。沒有新增 Python 依賴。
+
