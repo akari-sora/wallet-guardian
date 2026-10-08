@@ -718,6 +718,7 @@ summary {
   line-height: 1.45;
   overflow-wrap: break-word;
   line-break: strict;
+  text-spacing-trim: trim-start;
 }
 
 .wallet-option[aria-pressed="true"]::after,
