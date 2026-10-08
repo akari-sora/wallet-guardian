@@ -1,0 +1,89 @@
+{
+  "id": "aave_v3",
+  "version": "1",
+  "networks": [
+    "arbitrum-one",
+    "avalanche-c",
+    "base-mainnet",
+    "bsc-mainnet",
+    "ethereum-mainnet",
+    "optimism-mainnet",
+    "polygon-pos"
+  ],
+  "contracts": {
+    "arbitrum-one": {
+      "pool": {
+        "address": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+        "source_url": "https://github.com/bgd-labs/aave-address-book",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "not verified on-chain by this package"
+      }
+    },
+    "avalanche-c": {
+      "pool": {
+        "address": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+        "source_url": "https://github.com/bgd-labs/aave-address-book",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "not verified on-chain by this package"
+      }
+    },
+    "base-mainnet": {
+      "pool": {
+        "address": "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
+        "source_url": "https://github.com/bgd-labs/aave-address-book",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "not verified on-chain by this package"
+      }
+    },
+    "bsc-mainnet": {
+      "pool": {
+        "address": "0x6807dc923806fE8Fd134338EABCA509979a7e0cB",
+        "source_url": "https://github.com/bgd-labs/aave-address-book",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "not verified on-chain by this package"
+      }
+    },
+    "ethereum-mainnet": {
+      "pool": {
+        "address": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
+        "source_url": "https://github.com/bgd-labs/aave-address-book",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "not verified on-chain by this package"
+      }
+    },
+    "optimism-mainnet": {
+      "pool": {
+        "address": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+        "source_url": "https://github.com/bgd-labs/aave-address-book",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "not verified on-chain by this package"
+      }
+    },
+    "polygon-pos": {
+      "pool": {
+        "address": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+        "source_url": "https://github.com/bgd-labs/aave-address-book",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "not verified on-chain by this package"
+      }
+    }
+  },
+  "required_sources": [
+    "evm_rpc"
+  ],
+  "view_methods": [
+    "balanceOf(address)",
+    "getUserAccountData(address)"
+  ],
+  "capabilities": [
+    "positions"
+  ],
+  "notes": "Aave v3 Pool addresses from the public address book. Documented on 2026-10-09. Not verified on-chain by this package. No user accounts."
+}
