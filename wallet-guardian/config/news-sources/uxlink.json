@@ -22,5 +22,5 @@
       "fetch": "manual_not_fetched_by_monitor"
     }
   ],
-  "notes": "Public source list only. The monitor does not fetch these URLs. No API key. Not verified live."
+  "notes": "Notice and blog are HTML. No machine feed was verified, so nothing here is fetched. The X account is manual. No API key. Not a live pass."
 }

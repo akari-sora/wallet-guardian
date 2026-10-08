@@ -420,6 +420,18 @@
         "auto_purchase",
         "auto_disable_schedule"
       ]
+    },
+    "news": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fetch": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "fetch"
+      ]
     }
   },
   "required": [
