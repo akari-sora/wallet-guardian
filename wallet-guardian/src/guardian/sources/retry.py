@@ -154,12 +154,18 @@ def _contains_rate_limit(value: Any) -> bool:
 
 
 def _etherscan_empty(body: Any) -> bool:
+    """Etherscan's real empty shape is {"status":"0","message":"No transactions found","result":[]}.
+
+    Older/proxy variants put the text in ``result``. Either way the result must be
+    empty: a non-empty list with status 0 stays partial.
+    """
     if not isinstance(body, dict) or str(body.get("status")) != "0":
         return False
     result = body.get("result")
-    if not isinstance(result, str):
+    texts = [value for value in (body.get("message"), result) if isinstance(value, str)]
+    if not any("No transactions found" in text or "No records found" in text for text in texts):
         return False
-    return "No transactions found" in result or "No records found" in result
+    return result == [] or isinstance(result, str)
 
 
 def _retry_after(headers: Mapping[str, str], now: float) -> float | None:

@@ -231,3 +231,24 @@ W3 在這個分支加上事件、能力 coverage 與原子游標。鏈 adapter �
 
 - 沒有鏈 adapter，沒有餘額、歷史、權限或風險的解碼。coverage 是分母：沒列到的就是 unknown，不是安全，也不是零。
 - 沒有任何 live 來源驗證。fixture 通過不是節點通過。probe 不會是 live_pass。缺 key 仍是 BLOCKED，不是已驗證，也不是沒有資產。
+
+## W4 實作狀態
+
+W4 在這個分支加上 T0 七條 EVM 的資產與歷史讀取。上面 W3「鏈 adapter 還沒有」是 W3 當時的範圍。從這一節起，EVM 讀取在這個分支，而且只靠合成 fixture。沒有任何來源被 live 驗證。`run-once`、`SnapshotCycle`、Lista 與 CLI 的行為沒有改。鏈登錄的 `enabled` 仍是 false，`status` 仍是 `planned_not_live_verified`。
+
+現在有的東西：
+
+- `guardian.sources.etherscan` 經既有的唯讀 transport 呼叫 Etherscan V2 `GET /v2/api`。module/action 只走 W2 的 allowlist。API key 由呼叫端從環境變數名稱 `ETHERSCAN_API_KEY` 解出來，放在 query 的 `apikey`，不寫進 repr；錯誤文字會遮罩。`No transactions found` 是該次查詢的空結果。`Max rate limit reached` 會重試。免費方案不支援該鏈是 BLOCKED（`plan_not_supported`），不是空錢包，也不是 0。`page * offset` 超過 10000 就把區塊範圍對半切；單一塊仍然放不下就留下 `single_block_over_limit:<block>`，`pagination_complete` 是 false。失敗或半套的讀取不推進 cursor。
+- `guardian.sources.blockscout` 讀 `/api/v2/addresses/{address}/transactions`、`token-transfers`、`internal-transactions`，用 `next_page_params` 翻頁。路徑在 W2 的 `/api/v2/addresses/` 前綴裡。這是第二層來源，backend 是 `blockscout`。
+- `guardian.sources.nodereal` 只對 `ethereum-mainnet` 與 `bsc-mainnet` 呼叫 `nr_getAssetTransfers`。區塊跨度超過 100000 會切開。`maxCount` 是 `0x3E8`。後續頁用既有的 `pageKey` walker。`external`、`internal`、`20`、`721`、`1155` 分開對到各自的能力，不併成一格。
+- `guardian.chains.evm` 在記任何餘額或事件之前，用 `eth_chainId` 對登錄的 `evm_chain_id`。對不上是 `chain_id_mismatch`，什麼都不記。原生餘額來自 `eth_getBalance`，金額是 wei 的整數字串。`history.native_external`、`history.native_internal`、`history.fungible`、`history.nft` 各是一格。只有 RPC 時，`eth_getLogs` 可以在有限區塊範圍內讀代幣歷史；原生地址歷史沒有來源，那兩格是 `rpc_has_no_address_history`，不會 complete。只有原生餘額成功時，`portfolio_summary` 不會把資產組合標成 complete。收據的 `0x1` / `0x0` 交給 `effects_from_tx`：失敗的交易沒有資產成功事件。手續費是 `gasUsed * effectiveGasPrice`；OP Stack（OP Mainnet、Base）有 `l1Fee` 就加進去，沒有就標 `fee_incomplete`，不補一個假的 L1 費用。ERC-20/721/1155 的 log 依 topic 解。mint、burn、batch、自轉、重複 log、fee/rebase 的金額差分開處理。解不出來的 topic 是 unknown，不猜，也不寫成 0。大於 2^53 的金額維持整數。小數 18/6/8 用 `amounts` 的整數換算。
+
+還沒接上的東西：
+
+- 沒有 live 來源驗證。fixture 通過不是節點通過。沒有 `live_pass`。缺 key 仍是 BLOCKED，不是已驗證，也不是沒有資產。
+- 真的要打來源時，操作者自己提供 `ETHERSCAN_API_KEY`、各鏈的 EVM RPC endpoint，以及選用的 NodeReal endpoint。公開設定只放環境變數名稱，不放 key，也不放帶 key 的 URL。
+- 權限與 permit 是 W5，不在這包。
+
+W4 審查補充：
+- Etherscan V2 實際的空結果是 `{"status":"0","message":"No transactions found","result":[]}`（文字在 message、result 是空陣列）。W2 的分類原本只認 result 是字串，會把它當 `partial`；已修正為 `empty`（該查詢範圍內完整），非空陣列仍是 `partial`。
+- 2026-10-08 審查者在 box 上的唯讀 smoke（只查公開合約，key 遮罩，結果未寫入設定）：Ethereum 的 txlist／tokentx 正常回 ok／empty；用同一把免費 key 查 BSC 回 `plan_not_supported`（BLOCKED，不是空錢包）。這不是 live_pass，能力檔的 probe 仍是 untested。
