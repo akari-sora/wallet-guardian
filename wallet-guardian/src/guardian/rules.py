@@ -136,6 +136,14 @@ class AlertPolicy:
     def _one(self, candidate: Candidate) -> AlertDecision:
         if candidate.kind == "internal":
             return self._internal(candidate)
+        if candidate.kind == "position":
+            return self._decision(
+                candidate,
+                alert=True,
+                kind="position_change",
+                valuation_unknown=False,
+                identity=candidate.identity,
+            )
         if candidate.permission_change:
             return self._permission(candidate)
         eth_hit = self._native_eth_hit(candidate)

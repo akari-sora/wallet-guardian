@@ -7,7 +7,10 @@ import json
 import os
 import sys
 import time
+from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from guardian.actions.policy import agent_wallet_request, parse_intent
@@ -118,6 +121,8 @@ def build_parser() -> argparse.ArgumentParser:
     compared = sub.add_parser("compare-legacy", parents=[common])
     compared.add_argument("--mcm-config", required=True)
     compared.add_argument("--legacy-state", required=True)
+    compared.add_argument("--since", default=None, help="ISO window start")
+    compared.add_argument("--until", default=None, help="ISO window end")
 
     watchdog = sub.add_parser("watchdog", parents=[common])
     watchdog.add_argument("--mcm-config", required=True)
@@ -129,12 +134,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def dispatch(args: argparse.Namespace, *, backend: Any = None, sender: Any = None) -> tuple[dict, int]:
+def dispatch(
+    args: argparse.Namespace,
+    *,
+    backend: Any = None,
+    sender: Any = None,
+    clock: Callable[[], float] | None = None,
+) -> tuple[dict, int]:
     if args.command == "doctor":
         return doctor(), 0
     if args.command == "run-once":
         if getattr(args, "mcm_config", None):
-            return _mcm_run(args, backend, sender)
+            return _mcm_run(args, backend, sender, clock)
         result = run_once(Path(args.config), Path(args.db) if args.db else None)
         return result, 0 if result["status"] != "degraded" else 3
     if args.command == "self-check":
@@ -207,7 +218,7 @@ def dispatch(args: argparse.Namespace, *, backend: Any = None, sender: Any = Non
     if args.command == "compare-legacy":
         return _mcm_compare(args)
     if args.command == "watchdog":
-        return _mcm_watchdog(args)
+        return _mcm_watchdog(args, clock)
     if args.command == "monitor":
         return _mcm_plan(args)
     raise GuardianError("unknown command")
@@ -342,7 +353,12 @@ def _mcm_probe(args: argparse.Namespace, backend: Any) -> tuple[dict, int]:
         database.close()
 
 
-def _mcm_run(args: argparse.Namespace, backend: Any, sender: Any) -> tuple[dict, int]:
+def _mcm_run(
+    args: argparse.Namespace,
+    backend: Any,
+    sender: Any,
+    clock: Callable[[], float] | None,
+) -> tuple[dict, int]:
     public, private, database = _open_mcm(args.mcm_config)
     try:
         report = run_capability_pipeline(
@@ -351,7 +367,7 @@ def _mcm_run(args: argparse.Namespace, backend: Any, sender: Any) -> tuple[dict,
             private,
             database,
             backend=_chosen_backend(backend),
-            clock=time.time,
+            clock=time.time if clock is None else clock,
             no_send=bool(args.no_send),
             sender=sender,
         )
@@ -381,19 +397,42 @@ def _mcm_export(args: argparse.Namespace) -> tuple[dict, int]:
 def _mcm_compare(args: argparse.Namespace) -> tuple[dict, int]:
     _public, private, database = _open_mcm(args.mcm_config)
     try:
-        return compare_with_legacy(args.legacy_state, database, private.accounts.tenant_id), 0
+        return compare_with_legacy(
+            args.legacy_state,
+            database,
+            private.accounts.tenant_id,
+            since=getattr(args, "since", None),
+            until=getattr(args, "until", None),
+        ), 0
     finally:
         database.close()
 
 
-def _mcm_watchdog(args: argparse.Namespace) -> tuple[dict, int]:
+def _mcm_watchdog(args: argparse.Namespace, clock: Callable[[], float] | None) -> tuple[dict, int]:
     public, private, database = _open_mcm(args.mcm_config)
     try:
-        report = Watchdog(database, private.accounts.tenant_id, public).evaluate(None, _now())
+        record = database.latest_run(private.accounts.tenant_id)
+        loaded = _loaded_run(record)
+        report = Watchdog(database, private.accounts.tenant_id, public).evaluate(loaded, _now(clock))
     finally:
         database.close()
     report["live_verified"] = False
+    report["live_pass"] = False
     return report, 0
+
+
+def _loaded_run(record: dict[str, Any] | None) -> SimpleNamespace | None:
+    """The persisted run, or None when this monitor has not finished one."""
+    if not isinstance(record, dict):
+        return None
+    required = record.get("required")
+    return SimpleNamespace(
+        finished=record.get("finished") if isinstance(record.get("finished"), str) else "",
+        required=required if isinstance(required, dict) else {},
+        run_id=record.get("run_id") if isinstance(record.get("run_id"), str) else "",
+        started=record.get("started") if isinstance(record.get("started"), str) else "",
+        status=record.get("status") if isinstance(record.get("status"), str) else "unknown",
+    )
 
 
 def _mcm_plan(args: argparse.Namespace) -> tuple[dict, int]:
@@ -408,11 +447,18 @@ def _chosen_backend(backend: Any) -> Any:
     return default_backend() if backend is None else backend
 
 
-def _now() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+def _now(clock: Callable[[], float] | None = None) -> str:
+    moment = time.time() if clock is None else clock()
+    return datetime.fromtimestamp(moment, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def main(argv: list[str] | None = None, *, backend: Any = None, sender: Any = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    backend: Any = None,
+    sender: Any = None,
+    clock: Callable[[], float] | None = None,
+) -> int:
     load_local_env()
     parser = build_parser()
     try:
@@ -420,7 +466,7 @@ def main(argv: list[str] | None = None, *, backend: Any = None, sender: Any = No
         # Touch config validation early for discover/run so a bad address fails closed.
         if args.command in {"run-once", "wallets"} and getattr(args, "config", None):
             load_config(Path(args.config))
-        payload, code = dispatch(args, backend=backend, sender=sender)
+        payload, code = dispatch(args, backend=backend, sender=sender, clock=clock)
     except GuardianError as exc:
         payload = {"status": "error", "error_type": type(exc).__name__, "error": redact(str(exc))}
         code = exc.exit_code
