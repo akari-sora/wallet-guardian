@@ -344,10 +344,12 @@ function walletConnectPanel(): typeof wcPanel {
   note.textContent = "桌機：用手機錢包 App 掃描 QR。手機：按錢包按鈕跳到錢包 App，確認後切回這個分頁；不用掃自己的 QR。連線邀請 5 分鐘內有效，只核准 BNB Smart Chain 的 personal_sign，不送出交易。";
   const cancel = document.createElement("button");
   cancel.type = "button";
+  cancel.className = "secondary";
   cancel.textContent = "取消 WalletConnect 連線";
   cancel.addEventListener("click", () => walletConnect?.cancel());
   const disconnect = document.createElement("button");
   disconnect.type = "button";
+  disconnect.className = "secondary";
   disconnect.textContent = "中斷 WalletConnect";
   disconnect.addEventListener("click", () => {
     void walletConnect?.disconnect();
@@ -493,6 +495,7 @@ function paintVerification(model: RereadView): void {
       reasons.append(item);
     }
   }
+  paintStatusChips();
 }
 
 function unlisten(provider: EthereumProvider): void {
@@ -670,6 +673,78 @@ function requestUserSend(plan: Plan): void {
   throw new Error("獨立重讀不是送出授權。允許實際送出保持關閉。不會呼叫錢包。");
 }
 
+// Presentation only. Copies state this page already holds into the status chips.
+// A missing chip is a no-op so the review harness, which only knows the original ids, is unchanged.
+function paintStatus(rootId: string, valueId: string, value: string, state: string): void {
+  const valueNode = document.querySelector<HTMLElement>(valueId);
+  if (valueNode) valueNode.textContent = value;
+  const root = document.querySelector<HTMLElement>(rootId);
+  if (root?.dataset) root.dataset.state = state;
+}
+
+// The 401 message from loadPrivateTask() is a "please log in" state, not a failure.
+function needsLoginView(): boolean {
+  return view.className === "error" && (view.textContent ?? "").startsWith("這個任務要先登入");
+}
+
+function taskStatusLabel(): string {
+  if (needsLoginView()) return "需要登入";
+  if (view.className === "error") return "無法顯示";
+  if ((view.textContent ?? "").startsWith("未執行任務已取消")) return "已取消";
+  if (view.className === "empty") return "尚未載入";
+  if (lastTask) return "已載入";
+  if (lastPlan) return "本機計畫";
+  return "—";
+}
+
+function chainStatusLabel(): string {
+  const label = lastPlan?.human_summary?.chain_label;
+  if (walletChainId != null && lastPlan != null && walletChainId === lastPlan.chain_id && label) return label;
+  if (walletChainId != null) return String(walletChainId);
+  if (label) return label;
+  return "未知";
+}
+
+function walletStatusLabel(): { text: string; state: string } {
+  const selectedName = selectedCandidate?.name?.trim() ?? "";
+  if (selectedName.length > 0) return { text: selectedName, state: "ok" };
+  const found = walletCandidates();
+  const onlyName = found.length === 1 ? (found[0]?.name?.trim() ?? "") : "";
+  if (onlyName.length > 0) return { text: onlyName, state: "ok" };
+  if (found.length > 1 || wcCandidate) return { text: "未選擇", state: "warn" };
+  return { text: "—", state: "idle" };
+}
+
+function paintStatusChips(): void {
+  // Presentation must never interrupt a login, wallet, or task path.
+  try {
+    paintStatusChipsUnsafe();
+  } catch {
+    // Chips keep their previous text; the authoritative state lives in #session, #verify and #view.
+  }
+}
+
+function paintStatusChipsUnsafe(): void {
+  const loggedIn = Boolean(csrfToken && sessionAddress);
+  paintStatus(
+    "#chip-login",
+    "#chip-login-value",
+    authBusy ? "處理中…" : loggedIn ? "已登入" : "尚未登入",
+    authBusy ? "warn" : loggedIn ? "ok" : "idle",
+  );
+  const wallet = walletStatusLabel();
+  paintStatus("#chip-wallet", "#chip-wallet-value", wallet.text, wallet.state);
+  const chainText = chainStatusLabel();
+  const chainMismatch = walletChainId != null && lastPlan != null && walletChainId !== lastPlan.chain_id;
+  paintStatus("#chip-chain", "#chip-chain-value", chainText, chainMismatch ? "warn" : chainText === "未知" ? "idle" : "ok");
+  const taskText = taskStatusLabel();
+  if (view.dataset) view.dataset.tone = needsLoginView() ? "login" : "";
+  const taskState = taskText === "無法顯示" ? "danger" : taskText === "已取消" || taskText === "需要登入" ? "warn" : taskText === "已載入" || taskText === "本機計畫" ? "ok" : "idle";
+  paintStatus("#chip-task", "#chip-task-value", taskText, taskState);
+  const sendValue = document.querySelector<HTMLElement>("#chip-send-value");
+  if (sendValue) sendValue.textContent = "允許實際送出：關閉";
+}
+
 function syncAccountControls(): void {
   const logout = document.querySelector<HTMLButtonElement>("#logout");
   const cancel = document.querySelector<HTMLButtonElement>("#cancel-task");
@@ -678,9 +753,14 @@ function syncAccountControls(): void {
   if (logout) { logout.hidden = !csrfToken; logout.disabled = authBusy; }
   if (loginButton) loginButton.disabled = authBusy;
   if (cancel) { cancel.hidden = !privateCancelAllowed; cancel.disabled = authBusy; }
-  if (identity) identity.textContent = csrfToken && sessionAddress
-    ? `讀取身分：${sessionAddress}。不是交易授權。`
-    : "尚未登入。登入只建立讀取工作階段，不是交易授權。";
+  if (identity) {
+    identity.textContent = csrfToken && sessionAddress
+      ? `讀取身分：${sessionAddress}。不是交易授權。`
+      : "尚未登入。登入只建立讀取工作階段，不是交易授權。";
+    if (typeof identity.setAttribute === "function" && csrfToken && sessionAddress) identity.setAttribute("translate", "no");
+    else if (typeof identity.removeAttribute === "function") identity.removeAttribute("translate");
+  }
+  paintStatusChips();
 }
 
 function hideCancel(): void {
@@ -757,6 +837,10 @@ function appendFacts(list: HTMLElement, rows: Array<[string, string]>): void {
     term.textContent = label;
     const detail = document.createElement("dd");
     detail.textContent = value;
+    if (/0x[a-fA-F0-9]{8,}/.test(value) || /^ref_[a-f0-9]{8,}$/.test(value)) {
+      detail.className = "mono";
+      if (typeof detail.setAttribute === "function") detail.setAttribute("translate", "no");
+    }
     list.append(term, detail);
   }
 }
@@ -819,6 +903,7 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
   heading.textContent = "Lista 提款計畫預覽（尚未驗證可執行）";
 
   const list = document.createElement("dl");
+  list.className = "facts";
   appendFacts(list, [
     ["來源錢包", summary.sender],
     ["鏈", summary.chain_label],
@@ -936,12 +1021,14 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
   });
   const capability = document.createElement("button");
   capability.type = "button";
+  capability.className = "secondary";
   capability.textContent = "查詢批次能力";
   capability.addEventListener("click", () => {
     void queryCapability(plan.chain_id, generation);
   });
   const reread = document.createElement("button");
   reread.type = "button";
+  reread.className = "secondary";
   reread.textContent = "重讀鏈上狀態（唯讀）";
   reread.addEventListener("click", () => {
     if (generation !== loadGeneration) return;
@@ -951,15 +1038,18 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
   paintVerification(currentVerification());
 
   const details = document.createElement("details");
+  details.className = "code-fold";
   const summaryNode = document.createElement("summary");
   summaryNode.textContent = "技術細節";
   const pre = document.createElement("pre");
   pre.textContent = JSON.stringify(task ?? plan, null, 2);
+  if (typeof pre.setAttribute === "function") pre.setAttribute("translate", "no");
   details.append(summaryNode, pre);
 
   lastPlan = plan;
   lastTask = task;
   view.append(mode, heading, list, stepHeading, steps, wait, actions, reasonList, evidenceHeading, evidence, details);
+  paintStatusChips();
 }
 
 async function queryCapability(chainId: number, generation: number): Promise<void> {
@@ -1395,10 +1485,10 @@ function renderWalletPicker(): void {
         const icon = document.createElement("img");
         icon.src = candidate.icon;
         icon.alt = "";
-        icon.width = 24;
-        icon.height = 24;
         icon.referrerPolicy = "no-referrer";
         icon.className = "wallet-icon";
+        icon.width = 32;
+        icon.height = 32;
         button.append(icon);
       }
       const name = document.createElement("span");
@@ -1454,6 +1544,7 @@ function renderWalletPicker(): void {
       ? "使用此錢包登入（只簽讀取訊息）"
       : "登入（只簽讀取訊息）";
   }
+  paintStatusChips();
 }
 
 async function logout(): Promise<void> {

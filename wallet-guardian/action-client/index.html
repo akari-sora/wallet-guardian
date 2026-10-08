@@ -2,45 +2,89 @@
 <html lang="zh-Hant">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231c1915'/%3E%3C/svg%3E" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#efeae0" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#121416" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231e3d34'/%3E%3Cpath d='M8 2.6 4.2 4.2v3.5c0 2.4 1.6 4.5 3.8 5.2 2.2-.7 3.8-2.8 3.8-5.2V4.2L8 2.6z' fill='%23efeae0'/%3E%3C/svg%3E" />
     <title>任務工作台｜Wallet Guardian</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <main>
-      <header>
-        <h1>錢包瀏覽器任務工作台</h1>
-        <p>在你自己的錢包裡核對目標、資產、接收人與費用。這個頁面是固定版本，只接受 typed 任務資料，不會在執行時產生簽名腳本，也不會把主錢包私鑰送到監控程式。</p>
+    <a class="skip" href="#view">跳到任務內容</a>
+    <main class="app">
+      <header class="app-header">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div class="brand-text">
+            <p class="product-name" translate="no">Wallet Guardian</p>
+            <h1>錢包瀏覽器任務工作台</h1>
+          </div>
+        </div>
+        <p class="lede">在你自己的錢包裡核對目標、資產、接收人與費用。這個頁面是固定版本，只接受 typed 任務資料，不會在執行時產生簽名腳本，也不會把主錢包私鑰送到監控程式。</p>
       </header>
-      <div class="banner" id="banner">主網簽名未授權。私人任務只在 /t/&lt;ref&gt; 由本人錢包登入後查看；查看連結不是執行授權。按鈕只會說明阻塞原因，不會呼叫錢包。鎖畫面不等於鎖鏈。lock screen ≠ lock chain.</div>
-      <section id="wallet-picker" class="wallet-picker" aria-label="選擇錢包">
-        <p id="wallet-status" class="status">正在尋找瀏覽器錢包（EIP-6963 公告、幣安 binancew3w 介面、window.ethereum）。選擇前不會向任何錢包索取帳戶。</p>
-        <div id="wallet-list" class="wallet-list" role="group" aria-label="偵測到的錢包"></div>
-        <p class="lock-note">錢包名稱、圖示與 rdns 都是錢包自述，不是身分驗證。登入身分只看簽過固定讀取訊息的地址。</p>
-      </section>
-      <p id="session" class="status">尚未登入。登入只建立讀取工作階段，不是交易授權。ERC-1271 合約帳戶不支援。</p>
-      <div class="row">
-        <button type="button" id="login">登入（只簽讀取訊息）</button>
-        <button type="button" id="logout" hidden>登出</button>
-        <button type="button" id="cancel-task" hidden>取消未執行任務</button>
-        <button type="button" id="load-sample">載入合成範例</button>
-        <label class="file">
-          開啟任務檔
-          <input id="file" type="file" accept="application/json,.json" hidden />
-        </label>
-        <button type="button" id="clear">取消</button>
+
+      <div class="status-strip" role="group" aria-label="目前狀態">
+        <p class="chip chip-seal" id="chip-send" data-state="closed">
+          <span class="seal-icon" aria-hidden="true"></span>
+          <span class="chip-v" id="chip-send-value">允許實際送出：關閉</span>
+        </p>
+        <p class="chip" id="chip-login" data-state="idle">
+          <span class="chip-k">登入狀態</span>
+          <span class="chip-v" id="chip-login-value">尚未登入</span>
+        </p>
+        <p class="chip" id="chip-wallet" data-state="idle">
+          <span class="chip-k">錢包</span>
+          <span class="chip-v" id="chip-wallet-value" translate="no">—</span>
+        </p>
+        <p class="chip" id="chip-chain" data-state="idle">
+          <span class="chip-k">鏈</span>
+          <span class="chip-v" id="chip-chain-value" translate="no">未知</span>
+        </p>
+        <p class="chip" id="chip-task" data-state="idle">
+          <span class="chip-k">任務狀態</span>
+          <span class="chip-v" id="chip-task-value">尚未載入</span>
+        </p>
       </div>
-      <section id="verify" class="verify" aria-live="polite" aria-label="獨立核對">
-        <p id="verify-reread" data-check="reread" data-state="insufficient">獨立鏈上重讀：資料不足（insufficient）</p>
-        <p id="verify-simulation" data-check="simulation" data-state="not_done">交易效果模擬：未做（not done）</p>
-        <p id="verify-send" data-check="send" data-state="closed">允許實際送出：關閉（closed）</p>
-        <p id="wallet-outcome" data-check="outcome" data-state="closed">錢包結果：尚未提出（not started）。交易雜湊不是完成。</p>
-        <p id="poison-note" class="lock-note">確認這次領到自己的原地址，只代表這一筆。不是永遠信任這個地址，也不是通訊錄。</p>
-        <p class="lock-note">鎖畫面不等於鎖鏈。lock screen ≠ lock chain.</p>
-        <ul id="verify-reasons" class="reasons"></ul>
-      </section>
-      <section id="view" class="empty">尚未載入任務。合成範例不是你的鏈上餘額。</section>
+
+      <div class="banner" id="banner" role="status">主網簽名未授權。私人任務只在 /t/&lt;ref&gt; 由本人錢包登入後查看；查看連結不是執行授權。按鈕只會說明阻塞原因，不會呼叫錢包。鎖畫面不等於鎖鏈。lock screen ≠ lock chain.</div>
+
+      <div class="workspace">
+        <div class="side">
+          <section id="wallet-picker" class="wallet-picker panel" aria-label="選擇錢包">
+            <h2>選擇錢包</h2>
+            <p id="wallet-status" class="status">正在尋找瀏覽器錢包（EIP-6963 公告、幣安 binancew3w 介面、window.ethereum）。選擇前不會向任何錢包索取帳戶。</p>
+            <div id="wallet-list" class="wallet-list" role="group" aria-label="偵測到的錢包"></div>
+            <p class="lock-note">錢包名稱、圖示與 rdns 都是錢包自述，不是身分驗證。登入身分只看簽過固定讀取訊息的地址。</p>
+          </section>
+          <section class="account panel" aria-label="讀取工作階段">
+            <h2>讀取工作階段</h2>
+            <p id="session" class="status">尚未登入。登入只建立讀取工作階段，不是交易授權。ERC-1271 合約帳戶不支援。</p>
+            <div class="row account-actions">
+              <button type="button" id="login" class="primary">登入（只簽讀取訊息）</button>
+              <button type="button" id="logout" class="ghost" hidden>登出</button>
+              <button type="button" id="cancel-task" class="danger" hidden>取消未執行任務</button>
+              <button type="button" id="load-sample" class="secondary">載入合成範例</button>
+              <label class="file">
+                開啟任務檔
+                <input id="file" name="task-file" type="file" accept="application/json,.json" />
+              </label>
+              <button type="button" id="clear" class="ghost">取消</button>
+            </div>
+          </section>
+          <section id="verify" class="verify panel" aria-live="polite" aria-label="獨立核對">
+            <h2>獨立核對</h2>
+            <p id="verify-reread" data-check="reread" data-state="insufficient">獨立鏈上重讀：資料不足（insufficient）</p>
+            <p id="verify-simulation" data-check="simulation" data-state="not_done">交易效果模擬：未做（not done）</p>
+            <p id="verify-send" data-check="send" data-state="closed">允許實際送出：關閉（closed）</p>
+            <p id="wallet-outcome" data-check="outcome" data-state="closed">錢包結果：尚未提出（not started）。交易雜湊不是完成。</p>
+            <p id="poison-note" class="lock-note">確認這次領到自己的原地址，只代表這一筆。不是永遠信任這個地址，也不是通訊錄。</p>
+            <p class="lock-note">鎖畫面不等於鎖鏈。lock screen ≠ lock chain.</p>
+            <ul id="verify-reasons" class="reasons"></ul>
+          </section>
+        </div>
+        <section id="view" class="empty">尚未載入任務。合成範例不是你的鏈上餘額。</section>
+      </div>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>
