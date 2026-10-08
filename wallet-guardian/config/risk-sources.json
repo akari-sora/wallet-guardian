@@ -1,0 +1,367 @@
+{
+  "chainabuse": {
+    "credential_env": "CHAINABUSE_API_KEY",
+    "endpoint_env": "CHAINABUSE_API_URL",
+    "notes": "Auth is an HTTP header. This transport has no header field, so a configured key is credential_transport_unsupported and a missing key is credential_missing. Neither result is an empty report list or a safe address. Not live verified.",
+    "source": {
+      "retrieved": "2026-10-09",
+      "status": "documented, not live verified",
+      "url": "https://docs.chainabuse.com/api"
+    },
+    "transport": "credential_transport_unsupported"
+  },
+  "goplus": {
+    "credential_env": "GOPLUS_API_KEY",
+    "endpoint_env": "GOPLUS_API_URL",
+    "functions": {
+      "address_security": {
+        "chains": {
+          "arbitrum-one": "42161",
+          "avalanche-c": "43114",
+          "base-mainnet": "8453",
+          "bsc-mainnet": "56",
+          "ethereum-mainnet": "1",
+          "linea-mainnet": "59144",
+          "opbnb-mainnet": "204",
+          "optimism-mainnet": "10",
+          "polygon-pos": "137",
+          "scroll-mainnet": "534352",
+          "solana-mainnet": "solana",
+          "tron-mainnet": "tron",
+          "zksync-era": "324"
+        },
+        "documented_chain_ids": [
+          "1",
+          "10",
+          "25",
+          "56",
+          "100",
+          "128",
+          "137",
+          "204",
+          "250",
+          "321",
+          "324",
+          "42161",
+          "43114",
+          "59144",
+          "8453",
+          "201022",
+          "534352",
+          "solana",
+          "tron"
+        ],
+        "notes": "chain_id solana on this path is address security, not Solana token security. Mantle 5000 is not in this function's documented chain_id enum.",
+        "path": "/api/v1/address_security/{address}",
+        "query": {
+          "chain_id": "{chain_id}"
+        },
+        "result": "flat",
+        "source": {
+          "retrieved": "2026-10-09",
+          "status": "documented, not live verified",
+          "url": "https://docs.gopluslabs.io/reference/addresscontractusingget_1"
+        }
+      },
+      "approval_security": {
+        "chains": {
+          "arbitrum-one": "42161",
+          "avalanche-c": "43114",
+          "bsc-mainnet": "56",
+          "ethereum-mainnet": "1",
+          "polygon-pos": "137"
+        },
+        "documented_chain_ids": [
+          "1",
+          "56",
+          "66",
+          "128",
+          "137",
+          "250",
+          "42161",
+          "43114"
+        ],
+        "notes": "Documented path chain ids are ETH, BSC, OKC, Heco, Polygon, Fantom, Arbitrum, and Avalanche. Base and OP Mainnet are not in that list. A 0 flag is not safe.",
+        "path": "/api/v1/approval_security/{chain_id}",
+        "query": {
+          "contract_addresses": "{address}"
+        },
+        "result": "keyed_or_flat",
+        "source": {
+          "retrieved": "2026-10-09",
+          "status": "documented, not live verified",
+          "url": "https://docs.gopluslabs.io/reference/approvalcontractusingget"
+        }
+      },
+      "solana_token_security": {
+        "chains": {
+          "solana-mainnet": "solana"
+        },
+        "documented_chain_ids": [
+          "solana"
+        ],
+        "notes": "Separate endpoint from EVM address_security and from EVM token_security. No chain_id path parameter.",
+        "path": "/api/v1/solana/token_security",
+        "query": {
+          "contract_addresses": "{address}"
+        },
+        "result": "keyed",
+        "source": {
+          "retrieved": "2026-10-09",
+          "status": "documented, not live verified",
+          "url": "https://docs.gopluslabs.io/reference/solanatokensecurityusingget"
+        }
+      },
+      "token_security": {
+        "chains": {
+          "arbitrum-one": "42161",
+          "avalanche-c": "43114",
+          "base-mainnet": "8453",
+          "blast-mainnet": "81457",
+          "bsc-mainnet": "56",
+          "ethereum-mainnet": "1",
+          "linea-mainnet": "59144",
+          "mantle-mainnet": "5000",
+          "opbnb-mainnet": "204",
+          "optimism-mainnet": "10",
+          "polygon-pos": "137",
+          "scroll-mainnet": "534352",
+          "sonic-mainnet": "146",
+          "tron-mainnet": "tron",
+          "unichain-mainnet": "130",
+          "zksync-era": "324"
+        },
+        "documented_chain_ids": [
+          "1",
+          "10",
+          "25",
+          "56",
+          "66",
+          "100",
+          "130",
+          "137",
+          "143",
+          "146",
+          "169",
+          "177",
+          "204",
+          "250",
+          "321",
+          "324",
+          "480",
+          "988",
+          "1514",
+          "1868",
+          "2741",
+          "4200",
+          "4663",
+          "5000",
+          "5042",
+          "9745",
+          "42161",
+          "42766",
+          "43114",
+          "48900",
+          "59144",
+          "80094",
+          "81457",
+          "8453",
+          "201022",
+          "534352",
+          "5734951",
+          "tron"
+        ],
+        "notes": "EVM token security chain ids from the GoPlus supported-chain response details. Solana is not this function.",
+        "path": "/api/v1/token_security/{chain_id}",
+        "query": {
+          "contract_addresses": "{address}"
+        },
+        "result": "keyed",
+        "source": {
+          "retrieved": "2026-10-09",
+          "status": "documented, not live verified",
+          "url": "https://docs.gopluslabs.io/reference/response-details-9"
+        }
+      }
+    },
+    "notes": "Keyless only. GoPlus Authorization is a header, which this transport cannot carry. A configured GOPLUS_API_KEY is reported as credential_transport_unsupported, not sent, and not a live result. String flag 0 means not flagged by that function, not safe. Not live verified.",
+    "source": {
+      "retrieved": "2026-10-09",
+      "status": "documented, not live verified",
+      "url": "https://docs.gopluslabs.io/reference/tokensecurityusingget_1"
+    }
+  },
+  "ofac": {
+    "max_age_days": 7,
+    "notes": "The user supplies a local SDN XML file. This package does not download it. Digital Currency Address - ETH matches every EVM network listed on that ticker. Match is exact after per-family normalization. A missing list is unknown, not a clear screen. Not live verified.",
+    "source": {
+      "retrieved": "2026-10-09",
+      "status": "documented, not live verified",
+      "url": "https://ofac.treasury.gov/specially-designated-nationals-list-data-formats-data-schemas"
+    },
+    "tickers": {
+      "BTC": {
+        "family": "bitcoin",
+        "networks": [
+          "bitcoin-mainnet"
+        ]
+      },
+      "ETH": {
+        "family": "evm",
+        "networks": [
+          "arbitrum-one",
+          "avalanche-c",
+          "base-mainnet",
+          "blast-mainnet",
+          "bsc-mainnet",
+          "ethereum-mainnet",
+          "hyperevm-mainnet",
+          "linea-mainnet",
+          "mantle-mainnet",
+          "opbnb-mainnet",
+          "optimism-mainnet",
+          "polygon-pos",
+          "scroll-mainnet",
+          "sonic-mainnet",
+          "unichain-mainnet",
+          "zksync-era"
+        ]
+      },
+      "SOL": {
+        "family": "solana",
+        "networks": [
+          "solana-mainnet"
+        ]
+      },
+      "TRX": {
+        "family": "tron",
+        "networks": [
+          "tron-mainnet"
+        ]
+      },
+      "XBT": {
+        "family": "bitcoin",
+        "networks": [
+          "bitcoin-mainnet"
+        ]
+      }
+    }
+  },
+  "pricing": {
+    "credential_env": "COINGECKO_API_KEY",
+    "credential_query_param": "x_cg_demo_api_key",
+    "endpoint_env": "COINGECKO_API_URL",
+    "max_age_seconds": 3600,
+    "missing_credential": "not_an_error",
+    "networks": {
+      "arbitrum-one": {
+        "family": "evm",
+        "native_coin_id": "ethereum",
+        "native_decimals": 18,
+        "native_identity": "evm-native:42161",
+        "native_symbol": "ETH",
+        "platform_id": "arbitrum-one",
+        "source": {
+          "retrieved": "2026-10-09",
+          "status": "documented",
+          "url": "https://docs.coingecko.com/reference/asset-platforms-list"
+        }
+      },
+      "avalanche-c": {
+        "family": "evm",
+        "native_coin_id": "avalanche-2",
+        "native_decimals": 18,
+        "native_identity": "evm-native:43114",
+        "native_symbol": "AVAX",
+        "platform_id": "avalanche",
+        "source": {
+          "retrieved": "2026-10-09",
+          "status": "documented",
+          "url": "https://docs.coingecko.com/reference/asset-platforms-list"
+        }
+      },
+      "base-mainnet": {
+        "family": "evm",
+        "native_coin_id": "ethereum",
+        "native_decimals": 18,
+        "native_identity": "evm-native:8453",
+        "native_symbol": "ETH",
+        "platform_id": "base",
+        "source": {
+          "retrieved": "2026-10-09",
+          "status": "documented",
+          "url": "https://docs.coingecko.com/reference/asset-platforms-list"
+        }
+      },
+      "bsc-mainnet": {
+        "family": "evm",
+        "native_coin_id": "binancecoin",
+        "native_decimals": 18,
+        "native_identity": "evm-native:56",
+        "native_symbol": "BNB",
+        "platform_id": "binance-smart-chain",
+        "source": {
+          "retrieved": "2026-10-09",
+          "status": "documented",
+          "url": "https://docs.coingecko.com/reference/asset-platforms-list"
+        }
+      },
+      "ethereum-mainnet": {
+        "family": "evm",
+        "native_coin_id": "ethereum",
+        "native_decimals": 18,
+        "native_identity": "evm-native:1",
+        "native_symbol": "ETH",
+        "platform_id": "ethereum",
+        "source": {
+          "retrieved": "2026-10-09",
+          "status": "documented",
+          "url": "https://docs.coingecko.com/reference/simple-token-price"
+        }
+      },
+      "optimism-mainnet": {
+        "family": "evm",
+        "native_coin_id": "ethereum",
+        "native_decimals": 18,
+        "native_identity": "evm-native:10",
+        "native_symbol": "ETH",
+        "platform_id": "optimistic-ethereum",
+        "source": {
+          "retrieved": "2026-10-09",
+          "status": "documented",
+          "url": "https://docs.coingecko.com/reference/asset-platforms-list"
+        }
+      },
+      "polygon-pos": {
+        "family": "evm",
+        "native_coin_id": "polygon-ecosystem-token",
+        "native_decimals": 18,
+        "native_identity": "evm-native:137",
+        "native_symbol": "POL",
+        "platform_id": "polygon-pos",
+        "source": {
+          "retrieved": "2026-10-09",
+          "status": "documented",
+          "url": "https://docs.coingecko.com/reference/asset-platforms-list"
+        }
+      },
+      "solana-mainnet": {
+        "family": "solana",
+        "native_coin_id": "solana",
+        "native_decimals": 9,
+        "native_identity": "solana-native:SOL",
+        "native_symbol": "SOL",
+        "platform_id": "solana",
+        "source": {
+          "retrieved": "2026-10-09",
+          "status": "documented",
+          "url": "https://docs.coingecko.com/reference/simple-price"
+        }
+      }
+    },
+    "notes": "Native coin ids are the gas-asset coin ids, not symbols. Arbitrum, Base, and OP Mainnet use the ethereum coin id because the gas asset is ETH; the ARB token id is not used. Polygon uses polygon-ecosystem-token. Avalanche's platform id is avalanche and its coin id is avalanche-2. These ids are documented, not live verified. A missing COINGECKO_API_KEY is not an error. Prices are not hardcoded to 0 or 1 USD.",
+    "usd_threshold": "1000",
+    "vs_currency": "usd"
+  },
+  "status": "documented, not live verified"
+}
