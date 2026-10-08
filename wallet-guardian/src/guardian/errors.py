@@ -12,6 +12,10 @@ class ConfigError(GuardianError):
 class SecurityError(GuardianError):
     exit_code = 4
 
+    def __init__(self, message: str = "", *, reason: str | None = None) -> None:
+        super().__init__(message)
+        self.reason = message if reason is None else reason
+
 
 class PolicyError(SecurityError):
     pass
