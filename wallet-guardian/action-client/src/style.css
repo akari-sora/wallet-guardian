@@ -412,6 +412,8 @@ h2, h3 { scroll-margin-top: 16px; text-wrap: balance; }
     display: flex;
     flex-direction: column;
     justify-content: center;
+    align-items: center;
+    text-align: center;
     min-height: min(52vh, 420px);
     position: sticky;
     top: calc(var(--space-4) + env(safe-area-inset-top));
@@ -698,6 +700,8 @@ summary {
 .wallet-name-detail {
   display: block;
   margin-top: 2px;
+  /* Trim the leading full-width "（" so the detail line shares the name's left edge. */
+  text-spacing-trim: trim-start;
   color: var(--muted);
   font-size: 0.875rem;
   font-weight: 500;

@@ -8,6 +8,7 @@
 const GLOSS_NW = /（[A-Za-z ._-]+）/y;
 const PATH_REF = /\/t\/<ref>/y;
 const LOCK_PHRASE = /lock screen ≠ lock chain\.?/y;
+const LOCK_PHRASE_ZH = /鎖畫面不等於鎖鏈。?/y;
 const PERSONAL_SIGN = /personal_sign/y;
 const WINDOW_REF = /window\.[a-zA-Z][a-zA-Z0-9_.]*/y;
 const EIP = /EIP-\d+/y;
@@ -20,6 +21,7 @@ const RULES = [
   { kind: "nw", re: GLOSS_NW },
   { kind: "nw", re: PATH_REF },
   { kind: "nw", re: LOCK_PHRASE },
+  { kind: "nw", re: LOCK_PHRASE_ZH },
   { kind: "nw", re: PERSONAL_SIGN },
   { kind: "mono", re: WINDOW_REF },
   { kind: "mono", re: EIP },
