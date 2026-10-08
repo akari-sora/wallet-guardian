@@ -286,7 +286,11 @@ test('WA-06 utf8 and hex transport carry identical bytes, and both recover the s
   for (const tampered of ['\n' + message, message.replace(/\n/g, '\r\n'), `\u0019Ethereum Signed Message:\n${message.length}${message}`]) {
     assert.notEqual(recoverAddress(message, walletSign(tampered, key)).address, address.toLowerCase());
   }
-  assert.deepEqual(Object.values(SIGN_ENCODING), [ENCODING_UTF8, ENCODING_UTF8, ENCODING_UTF8], 'hex is not enabled without real-device evidence');
+  // Injected sources stay utf8 (hex needs real-device evidence). W-B: WalletConnect uses hex because the
+  // WalletConnect/Reown Ethereum JSON-RPC reference defines the personal_sign message as DATA (hex).
+  assert.deepEqual({ ...SIGN_ENCODING }, {
+    eip6963: ENCODING_UTF8, binancew3w: ENCODING_UTF8, 'window.ethereum': ENCODING_UTF8, walletconnect: ENCODING_HEX,
+  });
 });
 
 test('WA-06 the policy only lets the fixed SIWE bytes through, to the address being logged in', () => {

@@ -543,8 +543,13 @@ test("function errors and unknown api paths are no-store json, never static task
   assert.equal(routes.exclude.includes("/api/*"), false);
   assert.equal(existsSync(new URL("../../public/tasks", import.meta.url)), false);
   assert.equal(existsSync(new URL("../../public/api", import.meta.url)), false);
-  const headers = readFileSync(new URL("../../public/_headers", import.meta.url), "utf8");
-  assert.equal(headers.includes("/api"), false);
+  // _headers is generated at build time from src/csp.mjs (WALLET-CONNECT-01 W-B5); it never targets /api.
+  const { pagesHeaders } = await import("../csp.mjs");
+  for (const walletConnect of [false, true]) {
+    const headers = pagesHeaders({ walletConnect });
+    assert.equal(headers.includes("/api"), false);
+    assert.match(headers, /Content-Security-Policy: default-src 'none'/);
+  }
 });
 
 test("challenge is bound to domain, chain, and attempt, and is rate limited", async () => {
