@@ -1,0 +1,300 @@
+{
+  "adapter": "solana_rpc",
+  "allowed_operations": [
+    {
+      "method": "getAccountInfo",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getBalance",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getBlock",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getBlockHeight",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getBlockTime",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getBlocks",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getEpochInfo",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getEpochSchedule",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getFeeForMessage",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getFirstAvailableBlock",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getGenesisHash",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getHealth",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getInflationReward",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getLatestBlockhash",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getMinimumBalanceForRentExemption",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getMultipleAccounts",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getProgramAccounts",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getRecentPrioritizationFees",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getSignatureStatuses",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getSignaturesForAddress",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getSlot",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getSupply",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getTokenAccountBalance",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getTokenAccountsByDelegate",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getTokenAccountsByOwner",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getTokenSupply",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getTransaction",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getTransactionCount",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "getVersion",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "isBlockhashValid",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "minimumLedgerSlot",
+      "protocol": "jsonrpc"
+    }
+  ],
+  "backend": "solana-rpc",
+  "capabilities": {
+    "address_risk": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "asset_risk": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.fungible": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "balances.native": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "balances.nft": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "bridges": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "exposure_news": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "history.fungible": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "history.native_external": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "history.native_internal": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "history.nft": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.cosmos_authz": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.cosmos_feegrant": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.erc1155_operator": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.erc20": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.erc721_operator": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.erc721_token": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.move_capability": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.spl_authority": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "permissions.spl_delegate": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "permissions.ton_extensions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.tron_account": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permits.dai_variant": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permits.erc2612_observed": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permits.offchain_unused": {
+      "notes": "未提交的離線簽名不可觀察，不能標成 complete。",
+      "probe": "documented",
+      "support": "not_observable"
+    },
+    "permit2.allowance": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permit2.signature_usage": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "positions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "sanctions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "withdrawals": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    }
+  },
+  "families": [
+    "solana"
+  ],
+  "limits": [
+    {
+      "name": "public_rpc",
+      "notes": "公開 RPC 只適合作低量降級。本包不記載一個可承諾的免費吞吐數字。",
+      "retrieved": "2026-10-08",
+      "source_url": "https://solana.com/docs/rpc/http/getgenesishash",
+      "verification": "unverified"
+    }
+  ],
+  "networks": [
+    "solana-mainnet"
+  ],
+  "notes": "只掃 owner 公鑰不能涵蓋所有入帳。沒發現的已關閉 token account 是 history discovery gap。公開 RPC 沒有本包可寫的歷史 SLA。沒有 live 驗證。",
+  "probe": "untested",
+  "protocol": "jsonrpc"
+}
