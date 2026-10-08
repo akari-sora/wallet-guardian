@@ -42,7 +42,12 @@ export function challenge(overrides = {}) {
 }
 
 class Element {
-  constructor() { this.children = []; this.listeners = new Map(); this.hidden = false; this.disabled = false; this._text = ''; }
+  constructor(tag = 'div') { this.tagName = String(tag).toUpperCase(); this.children = []; this.listeners = new Map(); this.hidden = false; this.disabled = false; this._text = ''; this.dataset = {}; this.attributes = {}; }
+  // The client must never parse wallet-provided strings as HTML.
+  set innerHTML(_value) { throw new Error('innerHTML is forbidden in the client'); }
+  set outerHTML(_value) { throw new Error('outerHTML is forbidden in the client'); }
+  insertAdjacentHTML() { throw new Error('insertAdjacentHTML is forbidden in the client'); }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
   set textContent(value) { this._text = String(value); this.children = []; }
   get textContent() { return this._text + this.children.map(x => x.textContent ?? String(x)).join(' '); }
   append(...children) { this.children.push(...children); }
@@ -50,7 +55,7 @@ class Element {
   addEventListener(event, handler) { this.listeners.set(event, handler); }
 }
 
-export async function harness({ onFetch, onWallet, initialSession = session(), pathname = `/t/${REF}` } = {}) {
+export async function harness({ onFetch, onWallet, initialSession = session(), pathname = `/t/${REF}`, setupWindow, importOverrides = {} } = {}) {
   const sourceRoot = process.env.GUARDIAN_REVIEW_SOURCE_DIR
     ? resolve(process.env.GUARDIAN_REVIEW_SOURCE_DIR)
     : new URL('../src/', import.meta.url).pathname;
@@ -59,13 +64,14 @@ export async function harness({ onFetch, onWallet, initialSession = session(), p
   for (const match of source.matchAll(/from\s+["'](\.\/[^"']+)["']/g)) {
     imports.set(match[1], await import(pathToFileURL(resolve(sourceRoot, match[1])).href));
   }
-  const elements = new Map(['view','banner','login','logout','cancel-task','load-sample','file','clear','session','verify','verify-reread','verify-simulation','verify-send','verify-reasons','wallet-outcome','poison-note'].map(x => [x, new Element()]));
+  for (const [name, override] of Object.entries(importOverrides)) imports.set(name, override(imports.get(name)));
+  const elements = new Map(['view','banner','login','logout','cancel-task','load-sample','file','clear','session','verify','verify-reread','verify-simulation','verify-send','verify-reasons','wallet-outcome','poison-note','wallet-picker','wallet-status','wallet-list'].map(x => [x, new Element()]));
   const calls = [], walletCalls = [];
   const providerListeners = new Map();
   const documentListeners = new Map();
   const windowListeners = new Map();
   const document = { querySelector: selector => elements.get(selector.replace(/^#/, '')),
-    createElement: () => new Element(),
+    createElement: tag => new Element(tag),
     addEventListener: (event, handler) => documentListeners.set(event, handler) };
   const window = { location: new URL(pathname, ORIGIN),
     addEventListener: (event, handler) => windowListeners.set(event, handler),
@@ -95,6 +101,7 @@ export async function harness({ onFetch, onWallet, initialSession = session(), p
     if (path.startsWith('/api/tasks/')) return jsonResponse(await envelope());
     throw new Error(`Unexpected network request: ${path}`);
   };
+  if (typeof setupWindow === 'function') setupWindow(window);
   const context = vm.createContext({ document, window, fetch, crypto:globalThis.crypto,
     URL, URLSearchParams, Headers, Request, Response, AbortController, AbortSignal,
     TextEncoder, TextDecoder, console, setTimeout, clearTimeout, setInterval, clearInterval,
@@ -105,7 +112,11 @@ export async function harness({ onFetch, onWallet, initialSession = session(), p
   });
   const append = `\nglobalThis.__review = {
     login, logout, cancelPrivateTask, loadPrivateTask, openPrivateTask, queryCapability, restoreSession, reverifyCurrent,
-    getState: () => ({ loadGeneration, lastPlan, lastTask, csrfToken, privateRef, privateRevision, privateCancelAllowed, reread: currentVerification() })
+    selectWallet: typeof selectWallet === 'function' ? selectWallet : undefined,
+    walletCandidates: typeof walletCandidates === 'function' ? walletCandidates : undefined,
+    getState: () => ({ loadGeneration, lastPlan, lastTask, csrfToken, privateRef, privateRevision, privateCancelAllowed, reread: currentVerification(),
+      authBusy, sessionAddress,
+      ...(typeof connectionEpoch === 'number' ? { connectionEpoch, selected: selectedCandidate, revokePending, lastRevocation } : {}) })
   };`;
   const transpiled = ts.transpileModule(
     source.replace('import.meta.env.VITE_GUARDIAN_MAINNET_SEND', JSON.stringify('true')) + append,

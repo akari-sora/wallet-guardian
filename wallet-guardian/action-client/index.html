@@ -14,6 +14,11 @@
         <p>在你自己的錢包裡核對目標、資產、接收人與費用。這個頁面是固定版本，只接受 typed 任務資料，不會在執行時產生簽名腳本，也不會把主錢包私鑰送到監控程式。</p>
       </header>
       <div class="banner" id="banner">主網簽名未授權。私人任務只在 /t/&lt;ref&gt; 由本人錢包登入後查看；查看連結不是執行授權。按鈕只會說明阻塞原因，不會呼叫錢包。鎖畫面不等於鎖鏈。lock screen ≠ lock chain.</div>
+      <section id="wallet-picker" class="wallet-picker" aria-label="選擇錢包">
+        <p id="wallet-status" class="status">正在尋找瀏覽器錢包（EIP-6963 公告、幣安 binancew3w 介面、window.ethereum）。選擇前不會向任何錢包索取帳戶。</p>
+        <div id="wallet-list" class="wallet-list" role="group" aria-label="偵測到的錢包"></div>
+        <p class="lock-note">錢包名稱、圖示與 rdns 都是錢包自述，不是身分驗證。登入身分只看簽過固定讀取訊息的地址。</p>
+      </section>
       <p id="session" class="status">尚未登入。登入只建立讀取工作階段，不是交易授權。ERC-1271 合約帳戶不支援。</p>
       <div class="row">
         <button type="button" id="login">登入（只簽讀取訊息）</button>
