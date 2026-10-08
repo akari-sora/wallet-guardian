@@ -390,13 +390,14 @@ class Database:
                 applied[row["migration_id"]] = row["sha256"]
         for path in files:
             migration_id = path.stem
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            script = _normalized_sql(path)
+            digest = hashlib.sha256(script.encode("utf-8")).hexdigest()
             previous = applied.get(migration_id)
             if previous is not None:
                 if previous != digest:
                     raise ConfigError(f"mcm migration sha256 changed: {migration_id}")
                 continue
-            self.conn.executescript(path.read_text(encoding="utf-8"))
+            self.conn.executescript(script)
             with self.conn:
                 self.conn.execute(
                     "INSERT INTO mcm_schema_migrations(migration_id, applied_at, sha256) VALUES (?, ?, ?)",
@@ -488,6 +489,12 @@ class Database:
             "UPDATE wallet_label_aliases SET last_seen=? WHERE tenant_id=? AND label=?",
             (now, tenant, label),
         )
+
+
+def _normalized_sql(path: Path) -> str:
+    """Migration text with LF line endings, so a CRLF checkout (Windows autocrlf)
+    hashes and runs exactly like the LF file in git."""
+    return path.read_bytes().decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
 
 
 def mcm_migration_directory() -> Path:

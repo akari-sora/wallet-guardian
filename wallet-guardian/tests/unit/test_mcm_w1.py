@@ -945,3 +945,32 @@ def _dump(path: Path) -> dict[str, list[tuple]]:
     found["user_version"] = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
     return found
+
+
+def test_mcm_w1_03_migration_digest_ignores_crlf_checkout(tmp_path):
+    """A DB migrated from a CRLF (Windows) checkout must reopen on an LF checkout."""
+    from guardian import storage as storage_module
+
+    source = storage_module.mcm_migration_directory()
+    lf_dir = tmp_path / "lf"
+    crlf_dir = tmp_path / "crlf"
+    lf_dir.mkdir()
+    crlf_dir.mkdir()
+    for path in source.glob("*.sql"):
+        text = path.read_bytes().decode("utf-8").replace("\r\n", "\n")
+        (lf_dir / path.name).write_bytes(text.encode("utf-8"))
+        (crlf_dir / path.name).write_bytes(text.replace("\n", "\r\n").encode("utf-8"))
+    db_path = tmp_path / "state.sqlite"
+    original = storage_module.mcm_migration_directory
+    try:
+        storage_module.mcm_migration_directory = lambda: crlf_dir
+        Database(db_path).close()
+        storage_module.mcm_migration_directory = lambda: lf_dir
+        db = Database(db_path)
+        try:
+            rows = db.conn.execute("SELECT migration_id FROM mcm_schema_migrations").fetchall()
+            assert [row[0] for row in rows] == sorted(path.stem for path in source.glob("*.sql"))
+        finally:
+            db.close()
+    finally:
+        storage_module.mcm_migration_directory = original
