@@ -399,3 +399,44 @@ Reviewer 補充（L0 review）：
 - watchdog 判定最新 run 過期的門檻是 2 倍輪詢間隔，跟 `last_success_at` 一致，避免獨立觸發的 watchdog 在下一輪跑完前誤報失明。
 - `compare-legacy` 只比對有完整事件身份（錢包、鏈、交易、位置、種類、標的）的舊紀錄。現行舊例行的 state 只有 `alerted` 字串與 `latest_seen`，沒有 `events` 清單，所以對真實舊 state 比較時會全部落在 `uncomparable`。把舊例行輸出轉成事件列的工作屬於 L3（`ops/mcm-shadow-evidence`，legacy import／comparison 更新），正式 shadow 計數前要完成。
 
+## L1 實作狀態
+
+L0 那段「Kinza 與 UXLINK 仍沒有插件」說的是當時的缺口。這一節是 L1 補上的範圍。仍沒有 live 驗證，報告維持 `live_verified: false`，`live_pass` 不會是 true。`abi_checked_by_reviewer: 2026-10-09` 只是 reviewer 的唯讀 ABI 紀錄，不是 live pass。
+
+裁定：
+
+- Kinza Pool 與 PoolAddressesProvider（BSC、Ethereum，官方文件）是 documented read-only candidates。不是安全清單，不是 spender 信任清單，也不是 Action Client 執行白名單。對 Pool 的新無限授權仍會照常告警。
+- Provider 是登錄身份，不是 spender。對 Provider 的授權不會當成「經由授權的 Kinza 曝險」。
+- 信任 Pool 之前，同一次讀取要兩邊對上：`Provider.getPool()` 等於釘死的 Pool，而且 `Pool.ADDRESSES_PROVIDER()` 等於釘死的 Provider。對不上或讀不到是 `unknown`，原因 `provider_mismatch` 或 `identity_unreadable`，不會記成 observed 或 none。
+- UXLINK 新幣在 Ethereum。舊幣在 Arbitrum One 與 BNB Chain，地址字串相同，但是兩條鏈上的兩個資產身份（network + address）。舊幣標籤是 `deprecated_legacy`、`migration_eligibility: unknown`、`claimability: unknown`、`price_mapping: separate_from_new_token`。不標成 redeem-only、redeemable、1:1 或 claimable。持有舊幣不證明可遷移。舊幣估值是 `valuation_unknown`，不是 0，也不套新幣價格。`symbol()` 只是輔助檢查。
+- 新聞可以連到舊幣這個家族，但不會因此宣稱每條鏈都發生同一起鑄造事件。
+- opBNB 上的 Kinza、Mantle 上的 UXLINK 只留在文件，插件沒有啟用。
+
+釘死的公開合約在 `config/protocols/kinza.json`、`config/protocols/uxlink-holdings.json`、`config/assets/uxlink.json` 與 `protocols/pins.py`。status 是 `documented`。地址不寫進這份文件。來源：
+
+| 對象 | 網路 | 來源 |
+|---|---|---|
+| Kinza Pool 與 Provider | bsc-mainnet (56) | https://docs.kinza.finance/resources/deployed-contracts/bnb-chain |
+| Kinza Pool 與 Provider | ethereum-mainnet (1) | https://docs.kinza.finance/resources/deployed-contracts/ethereum |
+| UXLINK 新幣 | ethereum-mainnet (1) | https://docs.uxlink.io/layer/announcement/uxlink-supply-distribution |
+| UXLINK 舊幣 | arbitrum-one (42161) 與 bsc-mainnet (56)，同一地址字串、兩個身份 | https://docs.uxlink.io/layer/announcement/notice |
+| UXLINK 領取頁（只作來源，不代表可領） | — | https://dapp.uxlink.io/new-uxlink-tokens/claim |
+
+`evm_contracts("kinza")` 只有 Pool。Provider 不在裡面。
+
+Reviewer 在 2026-10-09 用唯讀 `eth_call` 看過：BSC 與 Ethereum 上 `getPool()` 與 `ADDRESSES_PROVIDER()` 互相等於釘死地址。`getReservesList()` 回 `address[]`（BSC 25 個、Ethereum 15 個）。`getReserveData(asset)` 是 16 個 ABI word；word 8 是 aToken，word 10 是 variableDebtToken（Aave v3 排列）。aToken 的 `POOL()` 等於 Pool、`UNDERLYING_ASSET_ADDRESS()` 等於該資產；variableDebt 的 `UNDERLYING_ASSET_ADDRESS()` 等於該資產。這包沒有自己再做鏈上驗證。
+
+讀取：
+
+- Kinza 插件先對 Provider／Pool，再讀 `getUserAccountData`。準備金用鏈上 `getReservesList()`，再讀 `getReserveData` 的 word 8／10，並核對 aToken 與 variable debt 的 `POOL()` 與 `UNDERLYING_ASSET_ADDRESS()`。對不上是 `reserve_identity_mismatch`。帳戶總額沒有對應的腿是 `reserves_incomplete`。單次超過 40 個準備金是 `reserve_bound`，不會把讀到一半當成完整部位。
+- UXLINK 持倉走同一條 L0 插件路徑（`uxlink-holdings`）。部位摘要與部位變化告警帶著舊幣標籤。
+- `run-once` 可選 `--news-input`（呼叫端給的 RSS／Atom 或既有結構化列，不抓取，來源標成 `caller_supplied`）與 `--price-input`。Kinza 新聞只連到觀察到的 Kinza 部位，或 spender 是 Kinza Pool 的有效授權。UXLINK 新聞只連到釘死代幣的有效授權，或 UXLINK 持倉腿。沒有部位也沒有有效授權就沒有通知。部位 unknown 時每個錢包一筆去重的 `exposure_unknown`，不是損失告警。沒有 `--news-input` 時 `exposure_news` 維持缺口（`news_not_supplied`），不是「沒有新聞」。
+
+還沒做的：
+
+- 沒有自己打 live RPC，也沒有把 `live_verified` 設成 true。
+- 沒有抓新聞。抓取留給 L2。
+- opBNB Kinza 與 Mantle UXLINK 只有文件，沒有插件網路。
+- 沒有改 `action-client`、送出語意、`.gitlab-ci.yml`，也沒有把 Pool 放進執行白名單。
+- 例子設定 `examples/monitor.json` 的插件清單維持 L0 的三個，避免既有測試把 Kinza 當成預設啟用。
+
