@@ -252,3 +252,24 @@ W4 在這個分支加上 T0 七條 EVM 的資產與歷史讀取。上面 W3「�
 W4 審查補充：
 - Etherscan V2 實際的空結果是 `{"status":"0","message":"No transactions found","result":[]}`（文字在 message、result 是空陣列）。W2 的分類原本只認 result 是字串，會把它當 `partial`；已修正為 `empty`（該查詢範圍內完整），非空陣列仍是 `partial`。
 - 2026-10-08 審查者在 box 上的唯讀 smoke（只查公開合約，key 遮罩，結果未寫入設定）：Ethereum 的 txlist／tokentx 正常回 ok／empty；用同一把免費 key 查 BSC 回 `plan_not_supported`（BLOCKED，不是空錢包）。這不是 live_pass，能力檔的 probe 仍是 untested。
+
+## W5 實作狀態
+
+W5 在這個分支加上 EVM 權限與已經上鏈的 permit。只靠合成 fixture。沒有任何來源被 live 驗證。`run-once`、`SnapshotCycle`、Lista 與 CLI 的行為沒有改。鏈登錄的 `enabled` 仍是 false，`status` 仍是 `planned_not_live_verified`。`config/source-capabilities/` 沒有改，沒有 `live_pass`。
+
+現在有的東西：
+
+- `guardian.chains.evm.permissions` 把 Approval 分成 ERC-20、ERC-721 的單一代幣、ERC-721 operator、ERC-1155 operator。`ApprovalForAll` 的簽名兩邊共用。只有呼叫端給了 ERC-165 `supportsInterface`，或 W4 的轉帳種類證據，才歸到 721 或 1155。兩邊都說支援、或沒有證據，是 `operator_unknown_standard`，不猜。owner 取索引 topic，不取 `tx.from`。變更是 new、increased、decreased、extended、revoked、consumed、first_observed。沒有前態是 first_observed，不會說成剛新增。額度等於 2^256-1，或大於等於 2^255，標 unlimited。`eth_call` 的目前額度和事件不一致時，以目前狀態為準，reason 是 `event_state_mismatch`。目前讀取失敗時狀態是 unknown，raw amount 留空，不會說成已撤銷、零或安全，cursor 留在上一次。`transferFrom` 造成的下降是 consumed，不是使用者撤銷。失敗的收據（status `0x0`）經 `effects_from_tx` 不會產生授權成功事件。餘額是 0 但仍有效、而且 spender 沒有標籤或標成風險的額度會留下，標 `zero_balance_exposure`。沒有標籤是 unlabeled，不是 safe。
+- 歷史不完整（分頁沒完、有 gap、讀取失敗、log 壞掉）時，coverage 帶 `history_incomplete_permissions_unknown`，不會 complete。沒有看到授權但歷史不完整，摘要是這個 reason，不是「沒有授權」，也不是安全。失敗的讀取不推進 cursor。
+- `guardian.chains.evm.permits` 把已提交的 ERC-2612 和 DAI permit 分開。兩者都要有結果 Approval，加上 `nonces(owner)` 增加。提交者可以是 relayer，也可以包在 multicall 裡。owner 來自 permit 參數和 Approval topic，不是 `tx.from`。這不是簽章的密碼學驗收，只是已上鏈 calldata 的形狀。Permit2 分成兩層：代幣對 Permit2 合約的 ERC-20 授權（`permissions.erc20`，spender 是 Permit2），以及 Permit2 對 spender 的 AllowanceTransfer（amount、expiration、nonce，`permit2.allowance`）。過期不是有效。Lockdown 而且目前額度確認是 0，才是 revoked。SignatureTransfer 的已用 nonce（`UnorderedNonceInvalidation` 或 nonceBitmap 裡設上的 bit）只記在 `permit2.signature_usage`，`persistent_allowance` 是 false。沒設上的 bit 不會被列成未使用簽名。
+- `permits.offchain_unused` 永遠是 support `not_observable`、quality `unknown`、reason `offchain_signature_not_observable`。沒有函式會對它回 safe 或 none。看到一筆已上鏈 permit 也不會讓未提交的簽名變成可觀測。
+- `config/deployments/permit2/` 對 T0 七條 EVM 各一份。地址是公開的 Permit2（寫在那七份設定裡，不另抄進這份文件），status 是 `documented`，來源是 https://github.com/Uniswap/permit2 ，retrieved 是 2026-10-08。本包沒有在鏈上核對這個地址。
+
+還沒接上的東西：
+
+- 沒有 live 來源驗證。fixture 通過不是節點通過。probe 維持 untested。缺 key 仍是 BLOCKED，不是已驗證，也不是沒有資產。
+- 沒提交的簽名看不到。缺歷史不是「沒有授權」。
+- 這包不編碼 approve、revoke、permit、increaseAllowance，也不簽名、不廣播。讀取只用 allowance、isApprovedForAll、getApproved、supportsInterface、balanceOf、nonces、Permit2 allowance 與 nonceBitmap 這些 view。
+
+W5 審查補充：
+- 2026-10-08 審查者在 box 上的唯讀 smoke（公開 RPC、不用 key，只查公開的代幣合約與 Permit2，結果未寫入設定）：Ethereum 上 Permit2 地址有 bytecode；`allowance`、Permit2 `allowance`、`nonceBitmap` 這幾個 view 經 W2 transport 正常回 ok 並能解碼；`permits.offchain_unused` 仍是 not_observable；試圖編碼 `approve` 被拒。這不是 live_pass，Permit2 設定的 status 仍是 `documented`，probe 仍是 untested。
