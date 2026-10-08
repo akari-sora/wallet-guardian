@@ -109,7 +109,12 @@ class AaveV3(ViewPlugin):
                     plugin_id=self.plugin_id,
                     underlying_identity=reserve["underlying"],
                 ))
-        if not saw_balance and (collateral_base or debt_base):
+        has_receipt = any(leg.kind == "receipt" for leg in legs)
+        has_debt = any(leg.kind == "debt" for leg in legs)
+        if (collateral_base and not has_receipt) or (debt_base and not has_debt) or (
+            not saw_balance and (collateral_base or debt_base)
+        ):
+            # The account reports collateral or debt that the supplied reserves do not explain.
             return unknown_position(
                 plugin_id=self.plugin_id,
                 wallet_id=wallet_id,

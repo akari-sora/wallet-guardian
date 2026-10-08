@@ -352,3 +352,7 @@ W8 在這個分支加上協議部位與曝險新聞的程式庫。只靠合成 f
 - 沒有 live 來源驗證。fixture 通過不是節點通過，也不是新聞訂閱通過。沒有 `live_pass`。鏈登錄的 `enabled` 仍是 false。
 - 新聞的即時抓取要等以後的 W2 news adapter。這一包只解析呼叫端給的 bytes。X 帳號維持人工，監控不會自己去抓。
 - 這包沒有接到 `run-once`、`SnapshotCycle` 或 CLI。未知不是沒有曝險。地址是 documented，不是 on-chain verified。Stake memcmp 的 12 與 44 也沒有 live 核對。
+
+W8 review fixes:
+- Aave v3: when `getUserAccountData` reports collateral or debt that the supplied reserve list does not explain, the plugin returns `unknown` (`reserves_incomplete`), never a partial `observed`.
+- Known gap (W9): Kinza and UXLINK are listed news sources but have no plugin and no pinned contract or token yet, so their incidents link to no wallet. Exposure stays unobserved until W9 adds pins from private config. This is a coverage gap, not "no exposure".

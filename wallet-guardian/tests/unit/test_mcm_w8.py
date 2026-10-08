@@ -1046,3 +1046,34 @@ def _install_lista(transport, *, rows, balance, quoted, statuses=None) -> None:
             ListaSlisBnb.operation(LISTA_PROXY, "convertSnBnbToBnb(uint256)", [balance]),
             rpc_ok(abi_hex(["uint256"], [quoted])),
         )
+
+
+def test_mcm_w8_02_aave_reserves_that_miss_reported_debt_are_unknown():
+    transport = world()
+    install_chain_ids(transport)
+    pool = AAVE_POOLS["ethereum-mainnet"]
+    install(
+        transport,
+        "evm-eth",
+        AaveV3.operation(pool, "getUserAccountData(address)", [OWNER]),
+        rpc_ok(abi_hex(["uint256"] * 6, [COLLATERAL_BASE, DEBT_BASE, 0, 8000, 7000, HEALTH])),
+    )
+    install(transport, "evm-eth", AaveV3.operation(A_TOKEN, "balanceOf(address)", [OWNER]), rpc_ok(abi_hex(["uint256"], [ATOKEN_RAW])))
+    install(transport, "evm-eth", AaveV3.operation(DEBT_TOKEN, "balanceOf(address)", [OWNER]), rpc_ok(abi_hex(["uint256"], [0])))
+    observed = run(
+        "aave_v3",
+        transport,
+        "ethereum-mainnet",
+        private={"reserves": [{
+            "a_token": A_TOKEN,
+            "debt_decimals": 6,
+            "decimals": 18,
+            "network": "ethereum-mainnet",
+            "underlying": UNDERLYING,
+            "variable_debt_token": DEBT_TOKEN,
+        }]},
+    )
+    # The pool reports debt that the supplied reserve list does not explain: never a partial "observed".
+    assert observed.status == "unknown"
+    assert observed.legs == ()
+    assert "reserves_incomplete" in observed.reason_codes
