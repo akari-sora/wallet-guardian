@@ -76,6 +76,9 @@ export async function postChallenge(request, env, db, now) {
   const windowStart = now - (now % cfg.challengeWindow);
   await db.prepare("DELETE FROM challenges WHERE expires_at <= ?").bind(now).run();
   await db.prepare("DELETE FROM rate_buckets WHERE window_start < ?").bind(windowStart).run();
+  if (await rateLimited(db, `challenge-ip:${ip}`, now, cfg.challengeWindow, cfg.challengeIpLimit)) {
+    return json(429, { error: "rate_limited", execution_authorized: false });
+  }
   if (await rateLimited(db, `challenge:${ip}:${address}`, now, cfg.challengeWindow, cfg.challengeLimit)) {
     return json(429, { error: "rate_limited", execution_authorized: false });
   }
@@ -136,6 +139,10 @@ export async function postVerify(request, env, db, now) {
   }
   if (typeof body.message !== "string" || typeof body.signature !== "string") {
     return json(400, { error: "invalid_request" });
+  }
+  const ip = request.headers.get("cf-connecting-ip") || "unknown";
+  if (await rateLimited(db, `verify-ip:${ip}`, now, cfg.verifyWindow, cfg.verifyIpLimit)) {
+    return json(429, { error: "rate_limited", execution_authorized: false });
   }
   const attempt = cookies(request)[ATTEMPT] ?? "";
   const csrf = request.headers.get("x-csrf-token") ?? "";

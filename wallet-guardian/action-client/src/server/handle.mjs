@@ -1,5 +1,5 @@
 import { getSession, postChallenge, postLogout, postVerify } from "./auth.mjs";
-import { primary, readConfig } from "./db.mjs";
+import { primary, privateApiConfigured, readConfig } from "./db.mjs";
 import { internalError, json, nowSeconds } from "./http.mjs";
 import { getTask, postCancel, postCreate } from "./tasks.mjs";
 
@@ -25,6 +25,10 @@ async function route(request, env) {
     return json(404, { error: "complete_not_supported", execution_authorized: false, tx_hash_verified: false });
   }
   if (!path.startsWith("/api")) return json(404, { error: "not_found", execution_authorized: false });
+  // Preview deployments carry no D1 binding or AUTH audience: the private API stays unavailable there.
+  if (!privateApiConfigured(env)) {
+    return json(503, { error: "private_api_unavailable", execution_authorized: false });
+  }
 
   let matched = false;
   for (const entry of ROUTES) {

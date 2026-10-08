@@ -14,3 +14,4 @@ wallet-guardian/action-client/dist/
 .env
 .env.*
 *.env
+wallet-guardian/action-client/.wrangler/
