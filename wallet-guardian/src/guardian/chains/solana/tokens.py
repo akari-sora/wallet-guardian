@@ -313,7 +313,7 @@ def scan_owner(
         closed = tuple(sorted(set(prior_token_accounts) - current))
         if closed:
             gaps.append(CLOSED_HISTORY_GAP)
-    until = previous_cursor if canonical_address(previous_cursor or "") and _looks_like_signature(previous_cursor) else None
+    until = previous_cursor if _looks_like_signature(previous_cursor) else None
     walks: list[SignatureWalk] = []
     page_complete = True
     addresses = [(wallet, "wallet")]

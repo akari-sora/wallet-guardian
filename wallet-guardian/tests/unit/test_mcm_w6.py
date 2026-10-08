@@ -495,6 +495,24 @@ def test_mcm_w6_01_signature_page_cap_is_partial_and_keeps_the_cursor():
     assert "getTransaction" not in methods(transport)
 
 
+def test_mcm_w6_01_signature_cursor_is_used_as_until_on_the_next_scan():
+    session = open_session()
+    transport = session.adapter.transport
+    install(transport, "solana-rpc", balance_operation(OWNER), rpc_ok({"context": {"slot": 9}, "value": 20}))
+    install(transport, "solana-rpc", token_accounts_operation(OWNER, SPL_TOKEN_PROGRAM), rpc_ok({"context": {"slot": 9}, "value": []}))
+    install(transport, "solana-rpc", token_accounts_operation(OWNER, TOKEN_2022_PROGRAM), rpc_ok({"context": {"slot": 9}, "value": []}))
+    install(transport, "solana-rpc", signatures_operation(OWNER, limit=10, until=SIG_OLD), rpc_ok([
+        {"blockTime": 2, "err": None, "memo": None, "signature": SIG, "slot": 9},
+    ]))
+    scan = session.scan(
+        OWNER, prior_token_accounts=(), previous_cursor=SIG_OLD, limit=10, fetch_transactions=False,
+        tenant_id=TENANT, wallet_id=WALLET_ID, observed_at=OBSERVED,
+    )
+    assert scan.pagination_complete is True
+    assert [item.signature for item in scan.signatures] == [SIG]
+    assert scan.cursor == SIG
+
+
 def test_mcm_w6_01_budget_cap_keeps_cursor_and_does_not_invent_a_balance():
     transport = world(daily=1)
     found = entry()
