@@ -3,7 +3,17 @@
   "allowed_operations": [
     {
       "http_method": "GET",
-      "path": "*",
+      "path": "/api/v3/coins/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/api/v3/ping",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/api/v3/simple/*",
       "protocol": "rest"
     }
   ],

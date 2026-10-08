@@ -10,7 +10,7 @@ from guardian.sources.budget import BudgetExhausted
 from guardian.sources.capabilities import load_source_capabilities
 from guardian.sources.fixtures import RawResponse
 from guardian.sources.router import SourceRouter, independent_source_count, require_independent_quorum
-from support import SYNTH, budget, harness, install, json_body, source
+from mcm_w2_support import SYNTH, budget, harness, install, json_body, source
 
 
 def _balance(value: str = "0x2") -> RawResponse:
@@ -164,3 +164,14 @@ def test_mcm_w2_03_same_backend_is_not_an_independent_quorum():
         require_independent_quorum(["v2", "v3"], backends, minimum=2)
     assert caught.value.reason == "quorum_not_independent"
     assert require_independent_quorum(["v2", "scan"], backends, minimum=2) == 2
+
+
+def test_mcm_w2_03_missing_route_is_unknown_not_complete():
+    from guardian.sources.router import SourceRouter
+
+    calls: list = []
+    router = SourceRouter([], {}, None, lambda source_id, op: calls.append(source_id))
+    result = router.fetch("ethereum-mainnet", "history.native_internal", lambda _sid: None)
+    assert result.quality == "unknown"
+    assert result.reason_codes == ("no_route",)
+    assert result.source_id is None and calls == []

@@ -3,7 +3,17 @@
   "allowed_operations": [
     {
       "http_method": "GET",
-      "path": "*",
+      "path": "/api/PublicationPreview/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/api/download/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/exports/*",
       "protocol": "rest"
     }
   ],

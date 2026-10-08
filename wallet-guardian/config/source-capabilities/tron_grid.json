@@ -228,7 +228,8 @@
       "name": "plan_specific",
       "notes": "官方限額按方案與端點而異。不要把舊的 20 QPS 或每日 100,000 寫進程式。429 與 403 要退避。",
       "retrieved": "2026-10-08",
-      "source_url": "https://developers.tron.network/reference/rate-limits"
+      "source_url": "https://developers.tron.network/reference/rate-limits",
+      "verification": "unverified"
     }
   ],
   "networks": [

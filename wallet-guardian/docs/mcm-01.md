@@ -164,6 +164,12 @@ W1 在這個分支落地公開設定、私人帳戶與穩定身份。上面「�
 - `guardian.storage` 保持 `PRAGMA user_version=1`。MCM 遷移在 `migrations/monitor/`，記錄在 `mcm_schema_migrations`。重開是 no-op。
 - `guardian.legacy_state` 讀舊的私人 JSON，寫入去重、抑制與游標。不寫 `alerts` 或 `outbox`，也不從 `runs` 製造快照。同一個內容再匯入是 no-op。
 
+- 審查補強（reviewer）：
+  - DNS rebinding：每次請求只解析一次 DNS，驗證通過的同一個 IP 直接釘給 socket（`PreparedCall.connect_ip`；`HttpxBackend` 以 IP 連線，保留 `Host` header 與 TLS SNI，憑證仍對原 hostname 驗證）。HTTP client 不會再自己查一次 DNS。
+  - GraphQL 變數預設值（`$x: Int = 1`）可以解析；`mutation`／`subscription` 帶預設值仍拒絕；語法不明一律 fail closed。
+  - GET-only adapter（blockscout、esplora、cosmos_rest、aptos_rest、goplus、coingecko、ofac_sls、chainabuse、debank）改成每個 adapter 的 path allowlist（`/` 結尾是前綴，否則是完整路徑），未知路徑拒絕。清單是暫定的，各 adapter 在 W4+ 實作時再經審查調整。
+  - 能力檔 `limits[].verification`：`numbers_checked_against_source_url_2026-10-08` 表示數字已對照 `source_url`（Etherscan、Helius、TON Center、NodeReal、Esplora）；`unverified` 表示沒有核對，且檔內沒有寫數字。
+
 還沒接上的東西：
 
 - `run-once` 仍走既有設定與 BNB Chain 路徑，直到 W9。這包沒有改 `service.run_once`、`SnapshotCycle` 的行為或 CLI 指令。

@@ -3,7 +3,22 @@
   "allowed_operations": [
     {
       "http_method": "GET",
-      "path": "*",
+      "path": "/api/v1/address_security/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/api/v1/approval_security/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/api/v1/solana/token_security",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/api/v1/token_security/*",
       "protocol": "rest"
     }
   ],

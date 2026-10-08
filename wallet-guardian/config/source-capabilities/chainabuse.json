@@ -3,7 +3,12 @@
   "allowed_operations": [
     {
       "http_method": "GET",
-      "path": "*",
+      "path": "/v0/addresses/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/v0/reports",
       "protocol": "rest"
     }
   ],

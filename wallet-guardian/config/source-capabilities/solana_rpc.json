@@ -287,7 +287,8 @@
       "name": "public_rpc",
       "notes": "公開 RPC 只適合作低量降級。本包不記載一個可承諾的免費吞吐數字。",
       "retrieved": "2026-10-08",
-      "source_url": "https://solana.com/docs/rpc/http/getgenesishash"
+      "source_url": "https://solana.com/docs/rpc/http/getgenesishash",
+      "verification": "unverified"
     }
   ],
   "networks": [

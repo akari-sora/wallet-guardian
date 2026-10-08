@@ -3,7 +3,17 @@
   "allowed_operations": [
     {
       "http_method": "GET",
-      "path": "*",
+      "path": "/v1/protocol/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/v1/token/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/v1/user/*",
       "protocol": "rest"
     }
   ],

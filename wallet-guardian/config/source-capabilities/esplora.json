@@ -3,7 +3,52 @@
   "allowed_operations": [
     {
       "http_method": "GET",
-      "path": "*",
+      "path": "/address/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/api/address/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/api/block/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/api/blocks/tip/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/api/scripthash/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/api/tx/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/block/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/blocks/tip/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/scripthash/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/tx/*",
       "protocol": "rest"
     }
   ],
@@ -169,7 +214,8 @@
       "notes": "已確認歷史以每頁 25 筆往下翻。本包沒有可承諾的免費吞吐數字。",
       "retrieved": "2026-10-08",
       "source_url": "https://github.com/Blockstream/esplora/blob/master/API.md",
-      "page_size": 25
+      "page_size": 25,
+      "verification": "numbers_checked_against_source_url_2026-10-08"
     }
   ],
   "networks": [

@@ -233,7 +233,8 @@
       "retrieved": "2026-10-08",
       "source_url": "https://docs.nodereal.io/reference/nr_getassettransfers",
       "max_block_span": 100000,
-      "max_count": 1000
+      "max_count": 1000,
+      "verification": "numbers_checked_against_source_url_2026-10-08"
     }
   ],
   "networks": [

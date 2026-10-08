@@ -3,7 +3,37 @@
   "allowed_operations": [
     {
       "http_method": "GET",
-      "path": "*",
+      "path": "/cosmos/authz/v1beta1/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/cosmos/bank/v1beta1/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/cosmos/base/tendermint/v1beta1/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/cosmos/feegrant/v1beta1/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/cosmos/staking/v1beta1/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/cosmos/tx/v1beta1/txs/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/ibc/core/channel/v1/*",
       "protocol": "rest"
     }
   ],

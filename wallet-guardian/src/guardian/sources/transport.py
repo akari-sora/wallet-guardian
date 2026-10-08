@@ -11,7 +11,7 @@ from __future__ import annotations
 import ipaddress
 import socket
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 
@@ -101,12 +101,14 @@ class HttpxBackend:
 
         owns = self._client is None
         client = self._client or httpx.Client(timeout=self.timeout, follow_redirects=False)
+        url, headers, extensions = pinned_request(call)
         try:
             with client.stream(
                 call.method,
-                call.url,
+                url,
                 content=call.body or None,
-                headers={"accept": "application/json"},
+                headers=headers,
+                extensions=extensions,
             ) as response:
                 buf = bytearray()
                 for chunk in response.iter_bytes():
@@ -123,6 +125,27 @@ class HttpxBackend:
         finally:
             if owns:
                 client.close()
+
+
+def pinned_request(call: PreparedCall) -> tuple[str, dict[str, str], dict[str, str]]:
+    """Connect to the validated IP while keeping the Host header and TLS SNI name.
+
+    TLS certificates are still checked against the original hostname via SNI, so
+    pinning does not weaken certificate validation.
+    """
+    headers = {"accept": "application/json"}
+    extensions: dict[str, str] = {}
+    if not call.connect_ip:
+        return call.url, headers, extensions
+    parts = urlsplit(call.url)
+    host = parts.hostname or ""
+    ip = ipaddress.ip_address(call.connect_ip)
+    ip_text = f"[{ip}]" if ip.version == 6 else str(ip)
+    netloc = ip_text if parts.port is None else f"{ip_text}:{parts.port}"
+    headers["host"] = host if parts.port is None else f"{host}:{parts.port}"
+    if parts.scheme == "https":
+        extensions["sni_hostname"] = host
+    return parts._replace(netloc=netloc).geturl(), headers, extensions
 
 
 class ReadOnlyTransport:
@@ -177,10 +200,10 @@ class ReadOnlyTransport:
             raise SecurityError("endpoint_mismatch", reason="endpoint_mismatch")
         hops = 0
         while True:
-            _guard_url(current, allow_private=source.allow_private_network, resolve=self.resolve)
+            pinned = _guard_url(current, allow_private=source.allow_private_network, resolve=self.resolve)
             if _host_key(current) != registered:
                 raise SecurityError("redirect_host", reason="redirect_host")
-            call = _encode(source_id, operation, current)
+            call = replace(_encode(source_id, operation, current), connect_ip=pinned)
             raw = self._send(source, call, priority=priority, credits=credits)
             if len(raw.body) > self.max_response_bytes:
                 raise TransportError("response_too_large")
@@ -389,15 +412,41 @@ def _parse_body(protocol: str, body: bytes) -> Any:
     raise TransportError("bad_json")
 
 
-def _guard_url(url: str, *, allow_private: bool, resolve) -> None:
+def _guard_url(url: str, *, allow_private: bool, resolve) -> str | None:
+    """Validate ``url`` and return the address the connection must use.
+
+    DNS is resolved exactly once per request. The same answer is validated and
+    then pinned for the socket, so a second lookup inside the HTTP client cannot
+    swap in a private address (DNS rebinding). A literal IP host returns None.
+    """
+    host = (urlsplit(url).hostname or "").lower().rstrip(".")
+    answers: list[str] | None = None
+    if host and _literal_ip(host) is None:
+        resolver = resolve or _default_resolve
+        try:
+            answers = list(resolver(host))
+        except OSError:
+            raise SecurityError("dns_failed", reason="dns_failed") from None
+
+    def cached(_host: str) -> list[str]:
+        return list(answers or [])
+
     if allow_private:
-        _validate_relaxed(url, resolve=resolve)
-        return
+        _validate_relaxed(url, resolve=cached)
+    else:
+        try:
+            validate_url(url, resolve=cached)
+        except SecurityError as exc:
+            reason = _SSRF_REASON.get(str(exc), "endpoint_rejected")
+            raise SecurityError(reason, reason=reason) from None
+    return answers[0] if answers else None
+
+
+def _literal_ip(host: str):
     try:
-        validate_url(url, resolve=resolve)
-    except SecurityError as exc:
-        reason = _SSRF_REASON.get(str(exc), "endpoint_rejected")
-        raise SecurityError(reason, reason=reason) from None
+        return ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return None
 
 
 def _validate_relaxed(url: str, *, resolve) -> None:

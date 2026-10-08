@@ -3,7 +3,32 @@
   "allowed_operations": [
     {
       "http_method": "GET",
-      "path": "*",
+      "path": "/api",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/api/v2/addresses/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/api/v2/blocks/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/api/v2/stats",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/api/v2/tokens/*",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/api/v2/transactions/*",
       "protocol": "rest"
     }
   ],

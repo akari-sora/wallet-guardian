@@ -408,7 +408,8 @@
       "retrieved": "2026-10-08",
       "source_url": "https://docs.etherscan.io/resources/rate-limits",
       "max_rps": 3,
-      "max_requests_per_day": 100000
+      "max_requests_per_day": 100000,
+      "verification": "numbers_checked_against_source_url_2026-10-08"
     }
   ],
   "networks": [

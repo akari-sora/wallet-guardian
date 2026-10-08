@@ -190,7 +190,8 @@
       "retrieved": "2026-10-08",
       "source_url": "https://docs.ton.org/api/rate-limit",
       "no_key_max_rps": 1,
-      "free_key_max_rps": 10
+      "free_key_max_rps": 10,
+      "verification": "numbers_checked_against_source_url_2026-10-08"
     }
   ],
   "networks": [

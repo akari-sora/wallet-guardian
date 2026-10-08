@@ -15,7 +15,7 @@ from guardian.sources.fixtures import FixtureFailure, RawResponse, request_key
 from guardian.sources.pagination import walk_page_key, walk_page_offset
 from guardian.sources.retry import classify_response, read_with_retry
 from guardian.sources.transport import TransportError
-from support import SYNTH, budget, clock_pair, harness, install, json_body, source
+from mcm_w2_support import SYNTH, budget, clock_pair, harness, install, json_body, source
 
 RPC = {"id": 1, "jsonrpc": "2.0", "result": "0x1"}
 

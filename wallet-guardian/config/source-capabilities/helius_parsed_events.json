@@ -177,7 +177,8 @@
       "max_credits_per_month": 1000000,
       "rpc_max_rps": 10,
       "das_enhanced_max_rps": 2,
-      "parsed_events_credit_cost": 10
+      "parsed_events_credit_cost": 10,
+      "verification": "numbers_checked_against_source_url_2026-10-08"
     }
   ],
   "networks": [

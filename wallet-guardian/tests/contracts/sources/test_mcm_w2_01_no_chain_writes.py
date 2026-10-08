@@ -10,7 +10,7 @@ from guardian.security.transport_policy import ADAPTER_PROTOCOL, Operation
 from guardian.sources.capabilities import load_source_capabilities
 from guardian.sources.fixtures import PreparedCall
 from guardian.sources.transport import HttpxBackend, TransportError
-from support import SYNTH, harness, install, json_body, source, text_body
+from mcm_w2_support import SYNTH, harness, install, json_body, source, text_body
 
 
 def _rpc(group: str = "readers"):
@@ -321,3 +321,35 @@ def test_mcm_w2_01_capability_operations_match_policy_and_are_not_live():
     assert "JSON-RPC" in catalog.get("sui_graphql").notes
     assert catalog.declares("evm_rpc", "ethereum-mainnet", "balances.native") is True
     assert catalog.declares("evm_rpc", "ethereum-mainnet", "history.native_internal") is False
+
+
+def test_mcm_w2_01_graphql_variable_default_query_allowed_but_mutation_with_default_denied():
+    from guardian.security.transport_policy import assert_operation_allowed
+
+    query = 'query Read($owner: SuiAddress = "0x1", $first: Int = 5) { address(address: $owner) { balance { totalBalance } } }'
+    assert_operation_allowed(Operation("graphql", "sui_graphql", document=query))
+    mutation = 'mutation Run($tx: String = "AA==") { executeTransactionBlock(txBytes: $tx) { digest } }'
+    with pytest.raises(SecurityError) as caught:
+        assert_operation_allowed(Operation("graphql", "sui_graphql", document=mutation))
+    assert caught.value.reason == "graphql_mutation"
+    with pytest.raises(SecurityError) as caught:
+        assert_operation_allowed(Operation("graphql", "sui_graphql", document="= { a }"))
+    assert caught.value.reason == "graphql_malformed"
+
+
+def test_mcm_w2_01_get_only_adapter_unknown_path_fails_closed_and_read_path_reaches_backend():
+    transport, backend, _clock, _sleep = harness(
+        {"scout": source("blockscout", "SCOUT_URL", "scout")},
+        {"scout": {"max_concurrency": 2, "max_requests_per_day": 20, "max_rps": 1000, "retry_attempts": 0}},
+        {"SCOUT_URL": "https://scout.example.invalid"},
+    )
+    read = Operation("rest", "blockscout", http_method="GET", path=f"/api/v2/addresses/{SYNTH}")
+    install(transport, "scout", read, json_body({"coin_balance": "42"}))
+    result = transport.request("scout", read)
+    assert int(result.body["coin_balance"]) == 42
+    before = len(backend.calls)
+    for path in ("/api/v2/smart-contracts/verify", "/api/v2/anything", "/admin", "/api/v2/addresses/"):
+        with pytest.raises(SecurityError) as caught:
+            transport.request("scout", Operation("rest", "blockscout", http_method="GET", path=path))
+        assert caught.value.reason == "rest_denied"
+    assert len(backend.calls) == before

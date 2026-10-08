@@ -50,6 +50,8 @@ class SourceRouter:
 
     def fetch(self, network: str, capability: str, operation_for: Callable[[str], Any]) -> CapabilityResult:
         route = _route_for(self.routing, network, capability)
+        if not route:
+            return CapabilityResult(capability, None, "unknown", True, ("no_route",), (), None)
         tried: list[str] = []
         reasons: list[str] = []
         saw_budget = False

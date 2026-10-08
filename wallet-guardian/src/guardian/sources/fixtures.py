@@ -38,6 +38,7 @@ class PreparedCall:
     url: str
     body: bytes
     protocol: str
+    connect_ip: str | None = None
 
     def __repr__(self) -> str:
         return f"PreparedCall(method={self.method!r}, url={redact(self.url)!r}, protocol={self.protocol!r})"
