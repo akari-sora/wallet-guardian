@@ -606,7 +606,7 @@ def test_mcm_w7_02_function_coverage_configured_key_is_not_sent():
     install(transport, "goplus", operation, {"code": 1, "message": "OK", "result": {ETH: {"is_honeypot": "1"}}})
     flagged = client.read(function="token_security", network_id="ethereum-mainnet", target=ETH)
     assert flagged.status == "flagged"
-    assert flagged.credential_status == "credential_header"
+    assert flagged.credential_status == "credential_not_registered"
     assert flagged.safe is False
     assert urls(transport)
     assert all(GP_KEY not in url for url in urls(transport))

@@ -72,7 +72,13 @@ class GoPlusClient:
             if str(exc) != "credential_missing":
                 raise
             self._credential = None
-        self.credential_status = "credential_header" if self._credential else "keyless"
+        # Only claim header auth when the registered transport source will actually carry it.
+        if _source_has_credential(transport, source_id):
+            self.credential_status = "credential_header"
+        elif self._credential:
+            self.credential_status = "credential_not_registered"
+        else:
+            self.credential_status = "keyless"
         self.clock = clock or (lambda: 0.0)
         self.sleep = sleep or (lambda _seconds: None)
         self.random = random or (lambda: 0.0)

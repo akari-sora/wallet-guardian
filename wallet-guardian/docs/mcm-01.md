@@ -369,10 +369,10 @@ W9 把第一次可交給別人跑的唯讀路徑接上。只靠合成 fixture �
 - `guardian.scheduler:Watchdog` 在失明時一筆、恢復時一筆。重複失明不另開。它不斷言可以關掉排程，也不刪狀態。`monitor plan` 的 `started` 是 false。
 - `guardian.comparison:compare_with_legacy` 只讀舊狀態檔。輸出沒有原始地址。
 - CLI 新增 `config validate`、`sources probe`、`run-once --mcm-config`、`coverage --mcm-config`、`export --public`、`compare-legacy`、`watchdog`、`monitor plan`。沒有新旗標時，舊指令的行為不變。操作步驟見 `docs/quickstart-monitor.md`。
+- W7 後續：`Operation.headers` 只接受 header **名稱** 的 tuple（不能帶值）；每個 adapter 的白名單在 `CREDENTIAL_HEADERS`（目前只有 `goplus`／`chainabuse` 的 `authorization`）。值只來自已登錄來源的 `credential_env`，送出前格式化成 `Bearer` 或 `Basic base64(secret:)`，並用 `MaskedSecret` 遮罩。任務／回應資料不能變成 request header。缺 credential 時不發請求（`credential_missing`）。401／403 是 `credential_rejected`，不是 safe。GoPlus 的 `credential_status` 只有來源真的帶著憑證時才是 `credential_header`；環境有 key、來源沒登錄時是 `credential_not_registered`。GoPlus `/token` 鑄造不在這包，也沒有 live 驗證。
 
 還沒做的：
 
 - 沒有 live 來源，也沒有把監控切到這條路徑。舊例行要等私人 profile 的交接旗標與 sender 都接上之後，才停止送出。
-- GoPlus 的 `GOPLUS_API_KEY` 是事先鑄好的 access token。簽名的 `/token` 交換不在這包，也沒有 live 驗證。來源註冊了 token 時，讀取帶 `Authorization: Bearer`；沒有 token 仍是 keyless。Chainabuse 有 key 時帶 `Authorization: Basic`，格式是 `base64(secret + ":")`，同樣沒有 live 驗證。沒有 key 不發請求。401／403 是 `credential_rejected`，不是 safe。
 - 新聞 RSS 沒有在這包下載。Kinza 與 UXLINK 仍沒有插件與釘死合約，新聞不會因此掛到錢包。
 - 沒有具體 sender。`configured_sender` 但沒有注入 sender 是 `sender_not_configured`，列留在 pending。
