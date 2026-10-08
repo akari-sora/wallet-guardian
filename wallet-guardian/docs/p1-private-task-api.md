@@ -49,7 +49,7 @@ npm run test:gate
 npm run build
 ```
 
-D1 遷移在 `action-client/migrations/0001_p1_init.sql`。`wrangler.jsonc` 的 `database_id` 是佔位，尚未建立資料庫。正式環境要另外設定 `AUTH_DOMAIN`、`AUTH_URI`、`AUTH_CHAIN_ID`，以及只存在 D1 裡的 publish credential。這次沒有部署。
+D1 遷移在 `action-client/migrations/0001_p1_init.sql`。正式 D1 `wallet-guardian-tasks` 與 `AUTH_*` 設定、發行憑證工具與真 runtime 測試見 `docs/d1-private-task-live.md`。
 
 ## 仍不做
 

@@ -6,7 +6,9 @@ Mode C stays off unless a verified on-chain mechanism enforces the limits.
 
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 from typing import Any
 
 from guardian.errors import PolicyError, SecurityError
@@ -81,6 +83,68 @@ def issue_task_link(ref: str, origin: str | None) -> dict[str, Any]:
         "reason": None if fixed else "no_fixed_https_origin",
         "url": f"{origin.rstrip('/')}/t/{ref}" if fixed else None,
         "ref": ref,
+        "execution_authorized": False,
+        "contains_private_state": False,
+    }
+
+
+PRIVATE_TASK_ORIGINS_PATH = Path(__file__).resolve().parents[3] / "config" / "deployments" / "private-task-origins.json"
+PRIVATE_TASK_DEFAULT_DEPLOYMENT = "wg-private-task-v1"
+
+
+def load_private_task_origins(path: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Versioned view-origin policy shared with the Pages API. Not an execution allowlist."""
+    data = json.loads((path or PRIVATE_TASK_ORIGINS_PATH).read_text(encoding="utf-8"))
+    if data.get("schema") != "guardian.private_task_origins.v1":
+        raise PolicyError("unknown private task origin policy schema")
+    out: dict[str, dict[str, Any]] = {}
+    for entry in data.get("deployments", []):
+        origin = entry.get("origin")
+        if (
+            not isinstance(origin, str)
+            or not origin.startswith("https://")
+            or origin.rstrip("/") != origin
+            or entry.get("task_path") != "/t/{ref}"
+            or entry.get("purpose") != "private_task_view"
+            or entry.get("execution_authorized") is not False
+        ):
+            raise PolicyError("private task origin entry is not a view-only https origin")
+        out[entry["deployment_id"]] = entry
+    return out
+
+
+def issue_private_task_link(
+    ref: str,
+    deployment_id: str = PRIVATE_TASK_DEFAULT_DEPLOYMENT,
+    *,
+    policy: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """View link for a private task. The origin comes only from the approved policy file.
+
+    Environment or caller may pick a deployment_id; neither can supply a new origin.
+    Approving a view origin does not set fixed_https_origin or authorize execution.
+    """
+    assert_opaque_ref(ref)
+    entries = load_private_task_origins() if policy is None else policy
+    entry = entries.get(deployment_id)
+    if entry is None:
+        return {
+            "issued": False,
+            "reason": "view_origin_not_approved",
+            "url": None,
+            "ref": ref,
+            "purpose": "private_task_view",
+            "execution_authorized": False,
+            "contains_private_state": False,
+        }
+    return {
+        "issued": True,
+        "reason": None,
+        "url": entry["origin"] + entry["task_path"].replace("{ref}", ref),
+        "ref": ref,
+        "deployment_id": deployment_id,
+        "purpose": "private_task_view",
+        "view_origin_approved": True,
         "execution_authorized": False,
         "contains_private_state": False,
     }

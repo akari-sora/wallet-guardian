@@ -3,6 +3,7 @@ import { CLIENT_BUILD } from "../gate.mjs";
 import { assertInertPayload, validatePlan } from "../plan-validation.mjs";
 import { loadSession } from "./auth.mjs";
 import { readConfig } from "./db.mjs";
+import { viewLink } from "./origins.mjs";
 import { json, randomHex, readJson, sha256Hex, timingSafeEqual } from "./http.mjs";
 import { checksumAddress } from "./siwe.mjs";
 
@@ -172,7 +173,7 @@ async function publishCredential(db, request, now) {
 }
 
 export async function postCreate(request, env, db, now) {
-  readConfig(env);
+  const cfg = readConfig(env);
   const parsed = await readJson(request, 128 * 1024);
   if (parsed.error) return json(parsed.error === "too_large" ? 413 : 400, { error: parsed.error, execution_authorized: false });
   const credential = await publishCredential(db, request, now);
@@ -201,14 +202,8 @@ export async function postCreate(request, env, db, now) {
   task.ref = ref;
   task.execution_authorized = false;
   task.wallet_request_allowed = false;
-  task.link = {
-    issued: false,
-    reason: "no_fixed_https_origin",
-    url: null,
-    ref,
-    execution_authorized: false,
-    contains_private_state: false,
-  };
+  // View link only from the versioned origin policy. Not execution authorization.
+  task.link = viewLink(cfg.origin, ref);
   if (task.evidence && typeof task.evidence === "object") {
     task.evidence.fixed_https_origin = false;
     task.evidence.mainnet_execution_authorized = false;
@@ -242,6 +237,8 @@ export async function postCreate(request, env, db, now) {
   ]);
   return json(201, closed({
     ref,
+    view_url: task.link.url,
+    expires_at: body.expires_at,
     revision: 1,
     tenant_id: tenant,
     wallet_address: checksumAddress(wallet),

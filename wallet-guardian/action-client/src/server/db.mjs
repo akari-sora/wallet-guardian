@@ -28,6 +28,12 @@ export function readConfig(env) {
   if (!Number.isInteger(challengeGlobalLimit) || challengeGlobalLimit < 1 || challengeGlobalLimit > 10000) {
     throw new Error("auth config missing");
   }
+  // Cross-address budgets per source IP (cf-connecting-ip). Not only the per-address bucket.
+  const challengeIpLimit = Number(env.AUTH_CHALLENGE_IP_LIMIT ?? 30);
+  const verifyIpLimit = Number(env.AUTH_VERIFY_IP_LIMIT ?? 30);
+  for (const limit of [challengeIpLimit, verifyIpLimit]) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error("auth config missing");
+  }
   return {
     domain,
     uri,
@@ -38,5 +44,13 @@ export function readConfig(env) {
     challengeLimit,
     challengeGlobalLimit,
     challengeWindow: 600,
+    challengeIpLimit,
+    verifyIpLimit,
+    verifyWindow: 600,
   };
+}
+
+/** True when this deployment has the D1 binding and AUTH audience it needs (preview has neither). */
+export function privateApiConfigured(env) {
+  return Boolean(env && env.DB && typeof env.DB.withSession === "function" && env.AUTH_DOMAIN && env.AUTH_URI && env.AUTH_CHAIN_ID);
 }

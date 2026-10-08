@@ -393,3 +393,25 @@ def test_cli_workbench_reports_untested_evidence():
     assert payload["evidence"]["mainnet_execution_authorized"] is False
     assert payload["link_is_execution_authorization"] is False
     assert payload["runtime_signing_js"] is False
+
+
+def test_private_task_view_link_uses_only_the_versioned_origin():
+    from guardian.actions.workbench import issue_private_task_link, load_private_task_origins, evidence_status
+
+    policy = load_private_task_origins()
+    entry = policy["wg-private-task-v1"]
+    assert entry["origin"] == "https://wallet-guardian-action-client.pages.dev"
+    assert entry["purpose"] == "private_task_view"
+    assert entry["execution_authorized"] is False
+    link = issue_private_task_link(REF)
+    assert link["issued"] is True
+    assert link["url"] == "https://wallet-guardian-action-client.pages.dev/t/" + REF
+    assert link["execution_authorized"] is False
+    assert link["contains_private_state"] is False
+    unknown = issue_private_task_link(REF, "https://evil.example")
+    assert unknown["issued"] is False
+    assert unknown["url"] is None
+    assert unknown["reason"] == "view_origin_not_approved"
+    # Approving a view origin does not flip the execution-side flag.
+    assert evidence_status()["fixed_https_origin"] is False
+    assert evidence_status()["mainnet_execution_authorized"] is False

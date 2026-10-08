@@ -1,4 +1,7 @@
 {
+  // Pages project config. Top level = local dev + production.
+  // Preview deployments get no D1 and no AUTH vars, so the private API stays unavailable there.
+  "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "wallet-guardian-action-client",
   "compatibility_date": "2026-10-07",
   "pages_build_output_dir": "./dist",
@@ -9,12 +12,27 @@
       "enabled": true
     }
   },
+  // AUTH_* are login audience settings, not secrets and not execution authorization.
+  "vars": {
+    "AUTH_DOMAIN": "wallet-guardian-action-client.pages.dev",
+    "AUTH_URI": "https://wallet-guardian-action-client.pages.dev",
+    "AUTH_CHAIN_ID": "56",
+    "AUTH_CHALLENGE_LIMIT": "10",
+    "AUTH_CHALLENGE_GLOBAL_LIMIT": "200"
+  },
+  // database_id is the UUID returned by `wrangler d1 create` / `wrangler d1 info` (account 22f1…4dfb).
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "wallet-guardian-tasks",
-      "database_id": "00000000-0000-4000-8000-000000000000",
+      "database_id": "6cbe9ad2-7a9b-4a4b-b1e5-f9d6f6a87ce3",
       "migrations_dir": "migrations"
     }
-  ]
+  ],
+  "env": {
+    "preview": {
+      "vars": {},
+      "d1_databases": []
+    }
+  }
 }

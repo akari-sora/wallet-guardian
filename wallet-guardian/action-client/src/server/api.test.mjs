@@ -189,8 +189,12 @@ test("happy login reads only the caller's task and preflight does not authorize 
   assert.equal(loaded.body.task.preflight.preflight_ok, true);
   assert.equal(loaded.body.task.wallet_request_allowed, false);
   assert.equal(loaded.body.task.execution_authorized, false);
-  assert.equal(loaded.body.task.link.issued, false);
-  assert.equal(loaded.body.task.link.url, null);
+  // The view link comes from config/deployments/private-task-origins.json, not from the task.
+  assert.equal(loaded.body.task.link.issued, true);
+  assert.equal(loaded.body.task.link.purpose, "private_task_view");
+  assert.equal(loaded.body.task.link.url, `${ORIGIN}/t/${created.body.ref}`);
+  assert.equal(loaded.body.task.link.execution_authorized, false);
+  assert.equal(created.body.view_url, `${ORIGIN}/t/${created.body.ref}`);
   assert.equal(loaded.body.task.evidence.fixed_https_origin, false);
   assert.equal(loaded.body.task.ref, created.body.ref);
   const after = await box.db().prepare("SELECT updated_at, status, executed FROM tasks WHERE ref = ?").bind(created.body.ref).first();
@@ -490,7 +494,12 @@ test("browser session cannot publish and omitted tenant comes from the credentia
 test("function errors and unknown api paths are no-store json, never static tasks", async () => {
   const broken = await onRequest({
     request: new Request(`${ORIGIN}/api/session`),
-    env: { DB: { withSession() { throw new Error("primary down"); } } },
+    env: {
+      DB: { withSession() { throw new Error("primary down"); } },
+      AUTH_DOMAIN: "wallet-guardian-action-client.pages.dev",
+      AUTH_URI: ORIGIN,
+      AUTH_CHAIN_ID: "56",
+    },
   });
   assert.equal(broken.status, 500);
   assertNoStore(broken);
@@ -623,4 +632,60 @@ test("expired challenges are removed before the global quota is applied", async 
   assert.equal(blocked.body.error, "rate_limited");
   const live = await box.db().prepare("SELECT COUNT(*) AS n FROM challenges WHERE consumed = 0").bind().first();
   assert.equal(Number(live.n), 1);
+});
+
+test("preview without D1 or AUTH vars answers private_api_unavailable as no-store json", async () => {
+  for (const env of [{}, { AUTH_DOMAIN: "wallet-guardian-action-client.pages.dev", AUTH_URI: ORIGIN, AUTH_CHAIN_ID: "56" }]) {
+    for (const path of ["/api/session", "/api/tasks/ref_" + "0".repeat(32)]) {
+      const response = await onRequest({ request: new Request(`${ORIGIN}${path}`), env });
+      assert.equal(response.status, 503);
+      assertNoStore(response);
+      const body = JSON.parse(await response.text());
+      assert.equal(body.error, "private_api_unavailable");
+      assert.equal(body.execution_authorized, false);
+    }
+  }
+  const rpc = await onRequest({ request: new Request(`${ORIGIN}/api/rpc`), env: {} });
+  assert.equal(rpc.status, 404);
+});
+
+test("view link is issued only for an origin listed in the versioned policy", async () => {
+  const key = secp256k1.utils.randomPrivateKey();
+  const other = openEnv({ AUTH_DOMAIN: "other.example", AUTH_URI: "https://other.example" });
+  const credential = await publish(other, key, "tenant-o");
+  const { created } = await createTask(other, credential.token, key);
+  assert.equal(created.response.status, 201, created.text);
+  assert.equal(created.body.view_url, null);
+  const row = await other.db().prepare("SELECT payload_json FROM tasks WHERE ref = ?").bind(created.body.ref).first();
+  const stored = JSON.parse(row.payload_json);
+  assert.equal(stored.link.issued, false);
+  assert.equal(stored.link.reason, "view_origin_not_approved");
+  assert.equal(stored.link.url, null);
+  assert.equal(stored.evidence.fixed_https_origin, false);
+});
+
+test("verify and challenge have a cross-address budget per source ip", async () => {
+  const box = openEnv({ AUTH_CHALLENGE_IP_LIMIT: "3", AUTH_VERIFY_IP_LIMIT: "2", AUTH_CHALLENGE_LIMIT: "10" });
+  const ip = "198.51.100.23";
+  const statuses = [];
+  for (let i = 0; i < 4; i += 1) {
+    const address = checksumAddress(addressOf(secp256k1.utils.randomPrivateKey()));
+    const issued = await take(box.env, "POST", "/api/auth/challenge", { json: { address }, ip });
+    statuses.push(issued.response.status);
+  }
+  assert.deepEqual(statuses, [200, 200, 200, 429]);
+  const elsewhere = await take(box.env, "POST", "/api/auth/challenge", {
+    json: { address: checksumAddress(addressOf(secp256k1.utils.randomPrivateKey())) },
+    ip: "198.51.100.24",
+  });
+  assert.equal(elsewhere.response.status, 200);
+  const verifyStatuses = [];
+  for (let i = 0; i < 3; i += 1) {
+    const attempt = await take(box.env, "POST", "/api/auth/verify", {
+      json: { message: "x", signature: "0x" + "11".repeat(65) },
+      ip,
+    });
+    verifyStatuses.push(attempt.response.status);
+  }
+  assert.deepEqual(verifyStatuses, [401, 401, 429]);
 });

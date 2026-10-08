@@ -27,7 +27,7 @@ const PLAN_VERSION = "guardian.action_plan.v1";
 const CLIENT_BUILD = "action-client@0.3.0";
 const REF_PATTERN = /^ref_[a-f0-9]{32}$/;
 const BANNER =
-  "主網簽名未授權。沒有固定 HTTPS 網域，不會發行可在手機錢包開啟的任務連結。按鈕只會說明阻塞原因，不會呼叫錢包。";
+  "主網簽名未授權。私人任務只在 /t/<ref> 由本人錢包登入後查看；查看連結不是執行授權。按鈕只會說明阻塞原因，不會呼叫錢包。";
 
 const SECRET_KEYS = new Set([
   "private_key",
@@ -105,6 +105,7 @@ type Step = {
 type TaskLink = {
   issued?: boolean;
   url?: string | null;
+  purpose?: string;
   execution_authorized?: boolean;
 };
 
@@ -582,13 +583,17 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
   if (!decision.buttonEnabled) reasons.push("確認鈕關閉。任務自述的 preflight 不能當成重讀通過，也不能打開送出。");
   if (!MAINNET_SEND) reasons.push("VITE_GUARDIAN_MAINNET_SEND 沒有打開。監控程式不能簽名。");
   if (task?.mode === "C") reasons.push("模式 C 不支援。沒有鏈上權限合約。");
-  if (task && !task.link?.issued) reasons.push("沒有固定 HTTPS 網域，所以沒有發行公開任務連結。");
+  if (task && !task.link?.issued) reasons.push("這筆任務沒有已核准的查看來源，所以沒有發行查看連結。");
   banner.textContent = "尚未對錢包提出交易。主網送出保持關閉。重讀通過不是模擬通過，也不是送出授權。鎖畫面不等於鎖鏈。";
 
   const alternatives = (plan.alternatives ?? [])
     .map((item) => `${item.id}${item.completes_original_redeem ? "" : "（不是完成原贖回）"}`)
     .join("、");
-  const linkLabel = task?.link?.issued ? "不跟隨這份資料裡的網址。連結不是執行授權。" : "未發行";
+  const linkLabel = task?.link?.issued
+    ? task.link.purpose === "private_task_view"
+      ? "已發行私人查看連結（/t/<ref>，需本人登入）。只用於查看，不是執行授權。"
+      : "不跟隨這份資料裡的網址。連結不是執行授權。"
+    : "未發行";
 
   view.className = "card";
   view.replaceChildren();
@@ -612,7 +617,7 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
     ["模擬", `${summary.simulation_status}（${plan.simulation.source}，區塊 ${plan.simulation.block_number ?? "未知"}）`],
     ["其他路徑", alternatives || "無"],
     ["任務參考碼", task?.ref ?? "僅本機檔案"],
-    ["公開連結", linkLabel],
+    ["查看連結", linkLabel],
   ]);
 
   const stepHeading = document.createElement("h3");

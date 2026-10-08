@@ -7,6 +7,7 @@ This repository is a read-only monitor plus an unsigned action planner.
 - The Action Client may only request a wallet signature after a separate release turns that path on. This build keeps it off because mainnet test transactions are not authorized.
 - Emit `guardian.task.v1` typed data only. Do not generate or run signing JavaScript at runtime.
 - A task link is not execution authorization. It carries an opaque `ref_` and no other user's private state. Do not issue a public link without a fixed HTTPS origin. `fixed_https_origin` stays false until a real origin policy exists.
+- Private-task VIEW links (`/t/<ref>`) come only from `config/deployments/private-task-origins.json`. A view origin is not execution authorization and does not flip `fixed_https_origin`. Publish tokens (`WG_PUBLISH_TOKEN`) live only in a 0600 secret store outside the repo; D1 keeps their hash.
 - Private tasks are read through the Pages Function at `/api/tasks/<ref>` after SIWE, not from static `/tasks/<ref>.json`. Do not add a generic `/rpc` or a client COMPLETE write. ERC-1271 contract-account login is unsupported; do not accept an EOA owner signature as another address.
 - Limited execution credentials are secrets. Do not place them in this shared workspace.
 - Do not ask for arbitrary EIP-7702 delegation, unlimited approval, a new admin, asset migration, or an account upgrade to save clicks.
