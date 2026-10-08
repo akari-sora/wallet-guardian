@@ -376,3 +376,19 @@ W9 把第一次可交給別人跑的唯讀路徑接上。只靠合成 fixture �
 - 沒有 live 來源，也沒有把監控切到這條路徑。舊例行要等私人 profile 的交接旗標與 sender 都接上之後，才停止送出。
 - 新聞 RSS 沒有在這包下載。Kinza 與 UXLINK 仍沒有插件與釘死合約，新聞不會因此掛到錢包。
 - 沒有具體 sender。`configured_sender` 但沒有注入 sender 是 `sender_not_configured`，列留在 pending。
+
+## L0 實作狀態
+
+L0 只把已經做好的讀取接到公開 CLI `guardian run-once --mcm-config --no-send`。沒有新鏈、沒有送出、沒有改 `delivery.py` 的語意，也沒有 live 驗證。fixture 通過仍是 `live_verified: false`，`live_pass` 不會是 true。地址只使用合成的 `0x000…0001` 形式。
+
+| 缺口 | 狀態 | 證明 |
+|---|---|---|
+| G1 原生／代幣轉帳進 outbox | 已接上。本輪新讀到的列變成候選，經 `AlertPolicy` 後寫進既有 outbox。缺價格是 `valuation_unknown`，不是 0 美元。 | `test_mcm_live_l0_01_second_round_material_transfer`、`test_mcm_live_l0_07_unknown_price_no_zero_and_no_double_count` |
+| G2 基準輪之後的新授權，並從儲存的 cursor 續讀 | 已接上。授權不再只在基準輪產生候選。間隔大於一頁時分頁；這一輪蓋不滿就不推進 cursor。 | `test_mcm_live_l0_02_post_baseline_new_approval`、`test_mcm_live_l0_03_restart_cursor_pagination_gap` |
+| G3 已設定且有憑證的 Etherscan indexer | 已接上。`history.native_external` 會呼叫 `account_history`。缺憑證仍是 `blocked`／`credential_missing`。 | `test_mcm_live_l0_04_configured_indexer_protocol_path` |
+| G4 已設定插件的部位 | 已接上。適用的公開插件經 `run_plugin` 讀取。失敗是 `unknown` 加原因，不是空部位或零。 | `test_mcm_live_l0_04_configured_indexer_protocol_path` |
+| G5 required 含非原生能力，watchdog 讀持久化的 run | 已接上。原生成功但 token／授權失敗是 `degraded`。消失的 required key 是失敗。`last_success_at` 只在全部 required 健康時前進。 | `test_mcm_live_l0_05_non_native_health_and_missing_required_scope` |
+| G6 比較鍵是錢包加交易加位置加種類，並限在同一個窗口 | 已接上。輸出有 matched、legacy_only、mcm_only、awaiting_finality、uncomparable。沒有身份的舊列是 uncomparable。輸出遮罩交易與地址。 | `test_mcm_live_l0_06_wallet_event_window_comparison` |
+| G7 送出租約比外部接受更長，本地崩潰後可能重送 | 已知缺口，留給 L4（`mcm/single-channel-delivery`，MCM-LIVE-L4-03／04／05）。本包不改 `delivery.py`。 | 文件紀錄，沒有改送出語意 |
+
+基準輪只出摘要。同一鏈狀態重跑不新增 outbox 列。`test_mcm_live_l0_08_baseline_evidence_no_synthetic_live_pass` 鎖定基準標籤與 `live_verified: false`。
