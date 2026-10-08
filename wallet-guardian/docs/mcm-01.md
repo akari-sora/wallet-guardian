@@ -213,3 +213,21 @@ W2 在這個分支加上唯讀 transport、共享預算、有限重試、分頁�
 - 沒有把新鏈接到 `guardian.cli:dispatch` 或 `guardian.service:run_once`。
 - 沒有 live probe，沒有 SKIP 充當 PASS，沒有把 `planned_not_live_verified` 說成可用。
 - 私人地址、key、通知收件人與狀態值只留在操作者機器。這份契約不記載它們。
+
+## W3 實作狀態
+
+W3 在這個分支加上事件、能力 coverage 與原子游標。鏈 adapter 還沒有。沒有任何來源被 live 驗證。`run-once`、`SnapshotCycle`、Lista 與 CLI 的行為沒有改。
+
+現在有的東西：
+
+- `guardian.events` 把一筆交易收成鏈事件。身份是 tenant、wallet_id、network、tx_id、sub_index、kind、asset 的 sha256，不含區塊雜湊，所以同一筆再送不會變成第二筆。失敗的交易（EVM status `0x0`，或 Solana `meta.err`）不會產生資產或授權的成功事件；實際付出的手續費可以記成 `fee`，另外有一筆 `tx_failed`。`tx_status` 是 unknown 的事件不能當成成功告警。
+- 最終性跟各鏈自己的政策走，不套用固定 12 個確認。Ethereum 看 finalized tag。Solana 看 commitment；那個 finalized 只是 commitment 的名字，不是不可逆保證。Bitcoin 的確認數只到政策門檻的 confirmed，不會標成絕對 finalized。來源鏈 finalized 不是跨鏈完成；完成要目的鏈的成功事件，退款是 refunded。
+- 重組不默默刪事件。舊區塊雜湊已經不是 canonical、而且這次沒有重新觀測到的事件標成 orphaned，並留下 correction。重新包含的同一身份是更新，不是第二筆。亂序和正序得到同一組結果。`rollback_to` 只把該高度以上標成 orphaned。
+- `guardian.coverage.build_coverage` 對每個啟用的錢包、每條啟用的鏈、能力目錄裡的每一格各寫一列，不是每個鏈族一列。沒有觀測是 unknown，reason 是 `not_queried`。`gaps` 是空的但 `gap_detection_complete` 是 false，不算完整。`permits.offchain_unused` 維持 unknown，不能 complete。只有 `balances.native` 完整不是完整資產組合，reason 是 `native_only_not_portfolio`。價格沒有觀測就是 unknown，不是 0。錯誤讀取保留原來的 `last_success_at`。這些列用 `guardian.jsonschema_lite` 對 `schemas/coverage.schema.json` 檢查。缺的列是 unknown，不是安全，也不是零。
+- `guardian.monitoring.reconcile_capabilities` 按能力替換。原生餘額成功不會刪掉失敗的代幣列；失敗的代幣列留成 STALE，舊的 raw amount 還在，不會寫成 0。empty、error、partial 三種結果分開。`SnapshotCycle` 維持原樣。
+- `migrations/monitor/0002_mcm_events_coverage.sql` 加上 `chain_events`、`capability_state`、`capability_cursors`。`PRAGMA user_version` 仍是 1。`commit_capability_cycle` 在同一個 `BEGIN IMMEDIATE` 裡寫事件、能力狀態、游標和 outbox。中途失敗全部回滾，游標不會先往前。游標不能倒退，除非走明確的 rollback。告警仍走既有的 dedup。
+
+還沒接上的東西：
+
+- 沒有鏈 adapter，沒有餘額、歷史、權限或風險的解碼。coverage 是分母：沒列到的就是 unknown，不是安全，也不是零。
+- 沒有任何 live 來源驗證。fixture 通過不是節點通過。probe 不會是 live_pass。缺 key 仍是 BLOCKED，不是已驗證，也不是沒有資產。
