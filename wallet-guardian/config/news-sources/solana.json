@@ -9,8 +9,10 @@
     {
       "url": "https://status.solana.com/history.rss",
       "kind": "rss",
-      "fetch": "not_fetched_by_monitor"
+      "fetch": "allowlisted_get",
+      "verified": "2026-10-09",
+      "max_bytes": 131072
     }
   ],
-  "notes": "Public source list only. The monitor does not fetch these URLs. No API key. Not verified live."
+  "notes": "The status RSS is an allowlisted public GET verified 2026-10-09 (application/rss+xml, weak ETag, about 26 KiB; cap 128 KiB). No API key. Not a live pass."
 }

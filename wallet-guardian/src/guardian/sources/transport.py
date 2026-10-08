@@ -140,6 +140,13 @@ def pinned_request(call: PreparedCall) -> tuple[str, dict[str, str], dict[str, s
     if call.body:
         # JSON-RPC, GraphQL and REST POST bodies are JSON. Solana RPC answers 415 without this.
         headers["content-type"] = "application/json"
+    for name, value in getattr(call, "public_headers", ()) or ():
+        folded = str(name).lower()
+        if folded not in {"accept", "if-modified-since", "if-none-match", "user-agent"}:
+            continue
+        if not isinstance(value, str) or any(mark in value for mark in "\r\n\x00"):
+            continue
+        headers[folded] = value
     for name, value in getattr(call, "credential_headers", ()) or ():
         if not isinstance(name, str) or name.lower() in {"accept", "content-type", "cookie", "host"}:
             continue
@@ -237,6 +244,82 @@ class ReadOnlyTransport:
                 current = target
                 continue
             return _finish(source_id, operation.protocol, raw, self.max_response_bytes)
+
+    def request_allowlisted_get(
+        self,
+        source_id: str,
+        *,
+        conditional: Mapping[str, str] | None = None,
+        accept: str,
+        user_agent: str,
+        max_response_bytes: int,
+    ) -> TransportResult:
+        """GET one public document. Conditional validators are not credentials.
+
+        ``Operation.headers`` is the credential-name allowlist and is rejected
+        when the source has no credential. ``If-None-Match`` and
+        ``If-Modified-Since`` therefore travel on this path only. Authorization
+        and any other header are refused. The body of a 200 is raw bytes.
+        """
+        source = self._source(source_id)
+        if source.credential is not None and source.credential.present:
+            raise SecurityError("news_credential_forbidden", reason="news_credential_forbidden")
+        if source.allow_private_network:
+            raise SecurityError("private_endpoint", reason="private_endpoint")
+        cap = max_response_bytes
+        if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1 or cap > self.max_response_bytes:
+            raise TransportError("response_too_large")
+        pairs: list[tuple[str, str]] = [("accept", accept), ("user-agent", user_agent)]
+        for name, value in (conditional or {}).items():
+            folded = str(name).strip().lower()
+            if folded not in {"if-modified-since", "if-none-match"}:
+                raise SecurityError("header_not_allowed", reason="header_not_allowed")
+            if not isinstance(value, str) or not value.strip() or any(mark in value for mark in "\r\n\x00"):
+                raise SecurityError("header_value_not_allowed", reason="header_value_not_allowed")
+            pairs.append((folded, value.strip()))
+        current = source.endpoint
+        registered = _host_key(source.endpoint)
+        if _host_key(current) != registered:
+            raise SecurityError("endpoint_mismatch", reason="endpoint_mismatch")
+        hops = 0
+        while True:
+            if _host_key(current) != registered:
+                raise SecurityError("redirect_host", reason="redirect_host")
+            pinned = _guard_url(current, allow_private=False, resolve=self.resolve)
+            call = PreparedCall(
+                source_id, "GET", current, b"", "xml", connect_ip=pinned, public_headers=tuple(pairs),
+            )
+            raw = self._send(source, call, priority="normal", credits=1)
+            if len(raw.body) > cap:
+                raise TransportError("response_too_large")
+            if raw.status in _REDIRECTS:
+                hops += 1
+                if hops > self.max_hops:
+                    raise SecurityError("too_many_redirects", reason="too_many_redirects")
+                location = _header(raw.headers, "location")
+                if not location:
+                    raise SecurityError("redirect_missing", reason="redirect_missing")
+                target = urljoin(current, location)
+                if urlsplit(target).username or urlsplit(target).password:
+                    raise SecurityError("url_userinfo", reason="url_userinfo")
+                if _host_key(target) != registered:
+                    raise SecurityError("redirect_host", reason="redirect_host")
+                current = target
+                continue
+            if raw.status == 304:
+                lowered = {str(key).lower(): str(value) for key, value in raw.headers.items()}
+                return TransportResult(
+                    source_id=source_id,
+                    status=304,
+                    body=b"",
+                    category="not_modified",
+                    quality="partial",
+                    retryable=False,
+                    blocked=False,
+                    reason="not_modified",
+                    headers=lowered,
+                )
+            return _finish(source_id, "xml", raw, cap)
 
     def _source(self, source_id: str) -> RegisteredSource:
         return self.endpoints.get(source_id)
@@ -455,6 +538,10 @@ def _result(source_id: str, status: int, body: Any, classification: Classificati
 
 
 def _parse_body(protocol: str, body: bytes) -> Any:
+    if protocol == "xml":
+        if not body:
+            raise TransportError("bad_json")
+        return bytes(body)
     if not body:
         raise TransportError("bad_json")
     try:

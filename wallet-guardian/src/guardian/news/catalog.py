@@ -1,6 +1,8 @@
-"""News-source config. URLs are recorded. This package does not fetch them.
+"""News-source config. This module records URLs. It does not fetch them.
 
-X accounts are manual. There is no API key and no paid news provider.
+The only catalog is ``config/news-sources/``. ``config/news/sources.json`` is not
+a second copy. X accounts stay manual. Allowlisted GET is limited to the RSS
+URLs a public check actually returned. There is no API key and no paid provider.
 """
 
 from __future__ import annotations
@@ -17,6 +19,20 @@ _ROOT = Path(__file__).resolve().parents[3]
 NEWS_DIR = _ROOT / "config" / "news-sources"
 _DATE = re.compile(r"^20[0-9]{2}-[01][0-9]-[0-3][0-9]$")
 _KINDS = frozenset({"announcements", "blog", "rss", "status", "x_account"})
+_FETCH_MANUAL = "manual_not_fetched_by_monitor"
+_FETCH_NONE = "not_fetched_by_monitor"
+_FETCH_GET = "allowlisted_get"
+_FETCHES = frozenset({_FETCH_GET, _FETCH_MANUAL, _FETCH_NONE})
+_FEED_KEYS = frozenset({"fetch", "kind", "max_bytes", "url", "verified"})
+_MAX_FEED_BYTES = 1_048_576
+_AAVE_FEED = "https://governance.aave.com/latest.rss?order=created"
+_AAVE_MIN_BYTES = 512 * 1024
+# Public GETs on 2026-10-09. Do not add a guessed /feed or /rss URL.
+ALLOWLISTED_FEED_URLS = frozenset({
+    _AAVE_FEED,
+    "https://medium.com/feed/@kinzafinance",
+    "https://status.solana.com/history.rss",
+})
 _FORBIDDEN = frozenset({
     "__import__",
     "api_key",
@@ -46,6 +62,8 @@ class NewsFeed:
     url: str
     kind: str
     fetch: str
+    verified: str | None = None
+    max_bytes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +118,8 @@ def load_news_source(document: Mapping[str, Any]) -> NewsSource:
 def _feed(item: Any) -> NewsFeed:
     if not isinstance(item, Mapping):
         raise NewsConfigError("feed")
+    if any(key not in _FEED_KEYS for key in item):
+        raise NewsConfigError("feed_field")
     url = item.get("url")
     kind = item.get("kind")
     fetch = item.get("fetch")
@@ -107,12 +127,34 @@ def _feed(item: Any) -> NewsFeed:
         raise NewsConfigError("feed_url")
     if kind not in _KINDS:
         raise NewsConfigError("feed_kind")
-    if kind == "x_account":
-        if fetch != "manual_not_fetched_by_monitor":
-            raise NewsConfigError("x_fetch")
-    elif fetch != "not_fetched_by_monitor":
+    if fetch not in _FETCHES:
         raise NewsConfigError("fetch")
-    return NewsFeed(url, str(kind), str(fetch))
+    if kind == "x_account":
+        if fetch != _FETCH_MANUAL:
+            raise NewsConfigError("x_fetch")
+        _reject_fetch_fields(item)
+        return NewsFeed(url, str(kind), str(fetch))
+    if fetch == _FETCH_NONE:
+        _reject_fetch_fields(item)
+        return NewsFeed(url, str(kind), str(fetch))
+    if fetch != _FETCH_GET or kind != "rss" or url not in ALLOWLISTED_FEED_URLS:
+        raise NewsConfigError("fetch")
+    verified = item.get("verified")
+    if not isinstance(verified, str) or _DATE.fullmatch(verified) is None:
+        raise NewsConfigError("verified")
+    max_bytes = item.get("max_bytes")
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int):
+        raise NewsConfigError("max_bytes")
+    if max_bytes < 1 or max_bytes > _MAX_FEED_BYTES:
+        raise NewsConfigError("max_bytes")
+    if url == _AAVE_FEED and max_bytes < _AAVE_MIN_BYTES:
+        raise NewsConfigError("max_bytes")
+    return NewsFeed(url, str(kind), str(fetch), verified, max_bytes)
+
+
+def _reject_fetch_fields(item: Mapping[str, Any]) -> None:
+    if "verified" in item or "max_bytes" in item:
+        raise NewsConfigError("feed_field")
 
 
 def _reject(value: Any) -> None:

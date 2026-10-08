@@ -17,5 +17,5 @@
       "fetch": "manual_not_fetched_by_monitor"
     }
   ],
-  "notes": "Public source list only. The monitor does not fetch these URLs. No API key. Not verified live."
+  "notes": "Blog HTML only. No machine feed was verified, so nothing here is fetched. No API key. Not a live pass."
 }

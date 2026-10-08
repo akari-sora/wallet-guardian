@@ -30,7 +30,15 @@ from guardian.events import ChainEvent
 from guardian.errors import GuardianError
 from guardian.monitoring import CapabilityCycle
 from guardian.network_registry import load_registry
-from guardian.news.exposure import WalletExposure, exposure_alert, link_exposure, load_caller_incidents
+from guardian.news.exposure import (
+    ExposureNotice,
+    WalletExposure,
+    exposed_protocols,
+    exposure_alert,
+    link_exposure,
+    load_caller_incidents,
+)
+from guardian.news.fetch import FetchReport, fetch_allowlisted_news, news_state_row
 from guardian.protocols.models import unknown_position
 from guardian.protocols.registry import PLUGIN_REGISTRY
 from guardian.protocols.runner import run_plugin
@@ -60,6 +68,24 @@ _PLUGIN_IDS = {
     "solana_stake": "solana_stake",
     "uxlink-holdings": "uxlink_holdings",
     "uxlink_holdings": "uxlink_holdings",
+}
+_PLUGIN_NEWS = {
+    "aave-v3": "aave",
+    "aave_v3": "aave",
+    "kinza": "kinza",
+    "lista-slisbnb": "lista",
+    "lista_slisbnb": "lista",
+    "solana-stake": "solana",
+    "solana_stake": "solana",
+    "uxlink-holdings": "uxlink",
+    "uxlink_holdings": "uxlink",
+}
+_CANON_NEWS = {
+    "aave_v3": "aave",
+    "kinza": "kinza",
+    "lista_slisbnb": "lista",
+    "solana_stake": "solana",
+    "uxlink": "uxlink",
 }
 
 
@@ -153,6 +179,11 @@ def run_capability_pipeline(
     news_reason = "news_not_supplied"
     if news_input is not None:
         news_book, news_reason = load_caller_incidents(news_input)
+    fetched = None
+    if _news_fetch_enabled(public_config):
+        fetched = fetch_allowlisted_news(
+            database, tenant, backend, resolve=_resolve, now=started, clock=clock,
+        )
     quotes = _price_quotes(price_input)
     news_coverage = _news_observation(news_input is not None, news_reason)
     for account, network in enabled:
@@ -187,6 +218,11 @@ def run_capability_pipeline(
         )
         observations[(account.wallet_id, network, "exposure_news")] = news_coverage
         _fill_gaps(public_config, private_inputs, catalog, account.wallet_id, network, observations)
+    if fetched is not None:
+        _apply_fetched_coverage(
+            observations, enabled, fetched, public_config, position_rows, approval_state,
+            news_input is not None, news_reason,
+        )
     rows = build_coverage(enabled_pairs(enabled), observations, catalog, registry, started)
     required = _required_map(enabled, rows, observations, position_summaries, public_config, private_inputs, registry)
     decisions = policy.apply(candidates, baseline_scopes=baseline)
@@ -199,17 +235,28 @@ def run_capability_pipeline(
         if labels:
             payload["labels"] = labels
         alerts.append(payload)
-    if news_book is not None:
+    if fetched is not None or news_book is not None:
         active_approvals = _active_from_state(approval_state, enabled)
-        for notice in link_exposure(news_book.incidents, _wallet_exposures(position_rows, active_approvals)):
-            alerts.append(exposure_alert(tenant, notice, _notice_network(notice.wallet_id, position_rows, active_approvals)))
+        wallets = _wallet_exposures(position_rows, active_approvals)
+        if fetched is not None:
+            # Only incidents that are new or revised in this fetch can notify; a
+            # feed's first fetch is a quiet baseline apart from recent items.
+            fresh = [item for item in fetched.book.incidents if item.incident_id in fetched.linkable]
+            for notice in link_exposure(fresh, wallets):
+                alerts.append(_fetched_alert(tenant, notice, position_rows, active_approvals, fetched))
+        if news_book is not None:
+            for notice in link_exposure(news_book.incidents, wallets):
+                alerts.append(exposure_alert(tenant, notice, _notice_network(notice.wallet_id, position_rows, active_approvals)))
     cursors = _merge_cursors(observations, explicit_cursors, held_cursors)
     cycle = CapabilityCycle(database, tenant)
+    capability_rows = _storage_rows(rows, position_state, approval_state)
+    if fetched is not None:
+        capability_rows.append(news_state_row(fetched.state, started))
     finished_cycle = cycle.finish(
         incoming=_incoming(native_reads, registry),
         results=_result_map(native_reads, registry),
         events=events,
-        capability_rows=_storage_rows(rows, position_state, approval_state),
+        capability_rows=capability_rows,
         cursors=cursors,
         alerts=alerts,
     )
@@ -361,6 +408,111 @@ def _price_quotes(price_input: bytes | None) -> tuple[CallerQuote, ...]:
         return parse_price_input(price_input)
     except AssetManifestError as exc:
         raise GuardianError("price input is not readable") from exc
+
+
+def _news_fetch_enabled(public_config: PublicConfig) -> bool:
+    """Public config opts in. Absent or false keeps the caller-supplied path unchanged."""
+    news = public_config.document.get("news")
+    return isinstance(news, dict) and news.get("fetch") is True
+
+
+def _apply_fetched_coverage(
+    observations,
+    enabled,
+    fetched: FetchReport,
+    public_config,
+    position_rows,
+    approval_state,
+    supplied: bool,
+    caller_reason: str,
+) -> None:
+    plugins = [item for item in public_config.document.get("plugins") or [] if isinstance(item, str)]
+    active = _active_from_state(approval_state, enabled)
+    by_wallet = {item.wallet_id: item for item in _wallet_exposures(position_rows, active)}
+    scoped: dict[str, set[str]] = {}
+    for account, _network in enabled:
+        if account.wallet_id not in scoped:
+            scoped[account.wallet_id] = _scope_news(plugins, by_wallet.get(account.wallet_id))
+    for account, network in enabled:
+        gaps = tuple(sorted(scoped[account.wallet_id] - set(fetched.fetchable)))
+        observations[(account.wallet_id, network, "exposure_news")] = _fetched_observation(
+            fetched, gaps, supplied, caller_reason,
+        )
+
+
+def _scope_news(plugins: Sequence[str], exposure: WalletExposure | None) -> set[str]:
+    """Protocols the wallet is exposed to, plus protocols of enabled plugins."""
+    found: set[str] = set()
+    for plugin in plugins:
+        name = _PLUGIN_NEWS.get(plugin)
+        if name:
+            found.add(name)
+    if exposure is None:
+        return found
+    for protocol in exposed_protocols(exposure):
+        name = _CANON_NEWS.get(protocol)
+        if name:
+            found.add(name)
+    return found
+
+
+def _fetched_observation(
+    fetched: FetchReport,
+    gaps: tuple[str, ...],
+    supplied: bool,
+    caller_reason: str,
+) -> CoverageObservation:
+    """Fetched news is allowlisted_get. A missing feed or a failed read stays a gap."""
+    reasons = ["allowlisted_get"]
+    sources = ["allowlisted_get"]
+    if supplied:
+        sources.append("caller_supplied")
+        reasons.append("caller_supplied")
+        reasons.append(caller_reason or "not_fetched")
+    statuses = {feed.status for feed in fetched.feeds}
+    if "not_modified" in statuses:
+        reasons.append("not_modified")
+    if "fetch_error" in statuses:
+        reasons.append("fetch_error")
+    if "budget_exhausted" in statuses:
+        reasons.append("budget_exhausted")
+    if gaps:
+        reasons.append("no_allowlisted_feed")
+        reasons.extend(gaps)
+    failed = frozenset({"budget_exhausted", "fetch_error"})
+    all_failed = bool(fetched.feeds) and statuses <= failed
+    category = "error" if all_failed or (supplied and bool(caller_reason)) else "partial"
+    return CoverageObservation(
+        category=category,
+        pagination_complete=False,
+        gap_detection_complete=False,
+        gaps=gaps,
+        declared="caller_supplied" if supplied and not fetched.feeds else "allowlisted_get",
+        sources=tuple(sources),
+        reason_codes=tuple(dict.fromkeys(reasons)),
+        trust="unverified",
+        price_quality="unknown",
+        evidence_refs=tuple(f"{feed.source_id}:{feed.status}" for feed in fetched.feeds),
+    )
+
+
+def _fetched_alert(tenant, notice, position_rows, approvals, fetched: FetchReport):
+    if notice.kind == "exposure" and notice.incident_id in fetched.updated_ids:
+        notice = ExposureNotice(
+            wallet_id=notice.wallet_id,
+            kind="exposure_update",
+            protocols=notice.protocols,
+            incident_id=notice.incident_id,
+            loss_alert=False,
+            via=notice.via,
+            content_hash=fetched.content_hashes.get(notice.incident_id or "", ""),
+        )
+    return exposure_alert(
+        tenant,
+        notice,
+        _notice_network(notice.wallet_id, position_rows, approvals),
+        source="allowlisted_get",
+    )
 
 
 def _news_observation(supplied: bool, reason: str) -> CoverageObservation:

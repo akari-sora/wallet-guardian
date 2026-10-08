@@ -27,6 +27,7 @@ from guardian.news import (
     parse_feed,
     parse_structured,
 )
+from guardian.news.catalog import ALLOWLISTED_FEED_URLS, NewsConfigError, load_news_source
 from guardian.pricing.quote import PriceProvenance, PriceQuote, value_usd
 from guardian.protocols import (
     PLUGIN_REGISTRY,
@@ -822,9 +823,23 @@ def test_mcm_w8_04_exposure_news_links_positions_and_dedups_reposts():
         "https://x.com/lista_dao",
     }
     assert all(feed.fetch == "manual_not_fetched_by_monitor" for feed in x_accounts)
-    others = [feed for source in sources.values() for feed in source.feeds if feed.kind != "x_account"]
+    fetched = [feed for source in sources.values() for feed in source.feeds if feed.fetch == "allowlisted_get"]
+    assert {feed.url for feed in fetched} == set(ALLOWLISTED_FEED_URLS)
+    assert all(feed.kind == "rss" and feed.verified == "2026-10-09" for feed in fetched)
+    assert all(isinstance(feed.max_bytes, int) and 1 <= feed.max_bytes <= 1_048_576 for feed in fetched)
+    aave_cap = next(feed.max_bytes for feed in fetched if feed.url.startswith("https://governance.aave.com/"))
+    assert aave_cap is not None and aave_cap >= 512 * 1024
+    others = [
+        feed for source in sources.values() for feed in source.feeds
+        if feed.kind != "x_account" and feed.url not in ALLOWLISTED_FEED_URLS
+    ]
     assert others
     assert all(feed.fetch == "not_fetched_by_monitor" for feed in others)
+    borrowed = json.loads((ROOT / "config" / "news-sources" / "aave.json").read_text(encoding="utf-8"))
+    borrowed["feeds"][0]["fetch"] = "scraped"
+    with pytest.raises(NewsConfigError) as unknown_fetch:
+        load_news_source(borrowed)
+    assert unknown_fetch.value.reason == "fetch"
     for path in (ROOT / "config" / "news-sources").glob("*.json"):
         text = path.read_text(encoding="utf-8").lower()
         assert "api_key" not in text

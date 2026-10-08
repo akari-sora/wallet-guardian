@@ -11,7 +11,8 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
+from urllib.parse import urlsplit
 
 from guardian.errors import ConfigError
 from guardian.network_registry import load_registry
@@ -223,6 +224,43 @@ def _limits(raw: Any, adapter: str) -> list[dict[str, Any]]:
             raise ConfigError(f"limit date is malformed: {adapter}")
         cleaned.append(dict(item))
     return cleaned
+
+
+NEWS_USER_AGENT = "WalletGuardianNews/1"
+NEWS_CONDITIONAL_HEADERS = ("If-Modified-Since", "If-None-Match")
+
+
+@dataclass(frozen=True)
+class NewsFetchCapability:
+    """GET-only metadata for official news. No credential and no env var."""
+
+    http_method: str
+    credential: None
+    hosts: tuple[str, ...]
+    conditional_headers: tuple[str, ...]
+    user_agent: str
+
+
+def news_fetch_capability(sources: Mapping[str, Any] | None = None) -> NewsFetchCapability:
+    """Hosts come from feeds the catalog marked allowlisted_get. Nothing else."""
+    from guardian.news.catalog import load_news_sources
+
+    loaded = sources if sources is not None else load_news_sources()
+    hosts: list[str] = []
+    for source in loaded.values():
+        for feed in source.feeds:
+            if feed.fetch != "allowlisted_get":
+                continue
+            host = (urlsplit(feed.url).hostname or "").lower().rstrip(".")
+            if host:
+                hosts.append(host)
+    return NewsFetchCapability(
+        http_method="GET",
+        credential=None,
+        hosts=tuple(sorted(set(hosts))),
+        conditional_headers=NEWS_CONDITIONAL_HEADERS,
+        user_agent=NEWS_USER_AGENT,
+    )
 
 
 def _strings(raw: Any, field_name: str, adapter: str) -> list[str]:

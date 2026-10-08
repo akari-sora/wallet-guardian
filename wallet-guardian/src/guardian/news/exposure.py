@@ -51,14 +51,17 @@ class ExposureNotice:
     incident_id: str | None
     loss_alert: bool
     via: str
+    content_hash: str = ""
 
     def __post_init__(self) -> None:
-        if self.kind not in {"exposure", "exposure_unknown"}:
+        if self.kind not in {"exposure", "exposure_unknown", "exposure_update"}:
             raise ValueError("notice_kind")
         if self.loss_alert:
             raise ValueError("news_is_not_a_loss_alert")
         if self.kind == "exposure_unknown" and self.incident_id is not None:
             raise ValueError("exposure_unknown_is_deduped")
+        if self.kind == "exposure_update" and not self.incident_id:
+            raise ValueError("exposure_update_needs_incident")
 
 
 def load_caller_incidents(data: bytes) -> tuple[IncidentBook | None, str]:
@@ -92,10 +95,25 @@ def load_caller_incidents(data: bytes) -> tuple[IncidentBook | None, str]:
     return book, ""
 
 
-def exposure_alert(tenant: str, notice: ExposureNotice, network: str) -> dict[str, Any]:
-    """One outbox row. Dedup is wallet plus incident, not a loss alert."""
+def exposure_alert(
+    tenant: str,
+    notice: ExposureNotice,
+    network: str,
+    *,
+    source: str = "caller_supplied",
+) -> dict[str, Any]:
+    """One outbox row. Dedup is wallet plus incident, not a loss alert.
+
+    An updated incident uses ``exposure_update`` and includes the content hash,
+    so the same revision is deduped and a later revision can notify once.
+    """
+    if source not in {"allowlisted_get", "caller_supplied"}:
+        raise ValueError("news_source")
     incident = notice.incident_id or "exposure_unknown"
-    material = "\x1f".join((tenant, notice.wallet_id, notice.kind, incident))
+    parts = [tenant, notice.wallet_id, notice.kind, incident]
+    if notice.kind == "exposure_update":
+        parts.append(notice.content_hash)
+    material = "\x1f".join(parts)
     return {
         "dedup_key": hashlib.sha256(material.encode("utf-8")).hexdigest(),
         "identity": f"{notice.kind}:{incident}:{','.join(notice.protocols)}",
@@ -104,11 +122,31 @@ def exposure_alert(tenant: str, notice: ExposureNotice, network: str) -> dict[st
         "loss_alert": False,
         "network": network,
         "protocols": list(notice.protocols),
-        "source": "caller_supplied",
+        "source": source,
         "valuation_unknown": False,
         "via": notice.via,
         "wallet_id": notice.wallet_id,
     }
+
+
+def exposed_protocols(wallet: WalletExposure) -> frozenset[str]:
+    """Canonical protocols with an observed or unknown position, a UXLINK leg, or an active approval."""
+    found: set[str] = set()
+    for protocol in _approved_protocols(wallet.approvals):
+        found.add(protocol)
+    for observation in wallet.positions:
+        mapped = {
+            "aave_v3": "aave_v3",
+            "kinza": "kinza",
+            "lista_slisbnb": "lista_slisbnb",
+            "solana_stake": "solana_stake",
+            "uxlink_holdings": "uxlink",
+        }.get(observation.plugin_id)
+        if observation.status in {"observed", "unknown"} and mapped:
+            found.add(mapped)
+        if _has_uxlink_leg(observation):
+            found.add("uxlink")
+    return frozenset(found)
 
 
 def link_exposure(incidents: Sequence[Any], wallets: Sequence[WalletExposure]) -> tuple[ExposureNotice, ...]:
