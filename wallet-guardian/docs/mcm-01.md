@@ -271,3 +271,5 @@ W5 在這個分支加上 EVM 權限與已經上鏈的 permit。只靠合成 fixt
 - 沒提交的簽名看不到。缺歷史不是「沒有授權」。
 - 這包不編碼 approve、revoke、permit、increaseAllowance，也不簽名、不廣播。讀取只用 allowance、isApprovedForAll、getApproved、supportsInterface、balanceOf、nonces、Permit2 allowance 與 nonceBitmap 這些 view。
 
+W5 審查補充：
+- 2026-10-08 審查者在 box 上的唯讀 smoke（公開 RPC、不用 key，只查公開的代幣合約與 Permit2，結果未寫入設定）：Ethereum 上 Permit2 地址有 bytecode；`allowance`、Permit2 `allowance`、`nonceBitmap` 這幾個 view 經 W2 transport 正常回 ok 並能解碼；`permits.offchain_unused` 仍是 not_observable；試圖編碼 `approve` 被拒。這不是 live_pass，Permit2 設定的 status 仍是 `documented`，probe 仍是 untested。
