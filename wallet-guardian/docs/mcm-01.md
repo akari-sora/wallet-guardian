@@ -293,3 +293,8 @@ W6 在這個分支加上 Solana 資產與權限讀取。只靠合成 fixture。�
 - 沒有 live 來源驗證。fixture 通過不是節點通過。沒有 `live_pass`。鏈登錄的 `enabled` 仍是 false。
 - 真的要打來源時，操作者自己提供 `SOLANA_RPC_URL`，以及選用的 `HELIUS_API_KEY`。公開設定只放環境變數名稱，不放 key，也不放帶 key 的 URL。
 - 未知的 Token-2022 extension 不會被當成完整。離線 Solana 簽名看不到。缺歷史不是「沒有授權」，也不是安全。
+
+W6 審查補充：
+- 增量掃描原本永遠不帶 `until`（條件同時要求 cursor 是 32 bytes 地址和 64 bytes 簽名，永遠不成立），每輪重走全部歷史；已修正為只要 cursor 是簽名就當 `until`。不會漏事件，但活躍錢包原本會一直撞頁數上限而標 partial。
+- W2 transport 的 POST 原本沒有送 `content-type: application/json`。EVM 公開節點接受，但 Solana RPC 回 415，所以 live 讀取全部會失敗（誠實地標 error，不是空）。已補上；GET 不受影響。
+- 2026-10-09 審查者在 box 上的唯讀 smoke（公開 Solana RPC、不用 key、只查公開的 wSOL 與 USDC mint，結果未寫入設定）：getGenesisHash 與設定相符；mint 讀取能解析 decimals 與 mint/freeze authority；公開節點對部分方法回 429/403 時結果是 partial，cursor 不前進；沒有 HELIUS_API_KEY 時是 blocked／credential_missing；sendTransaction、simulateTransaction、requestAirdrop 在 transport 前被拒。這不是 live_pass，probe 仍是 untested。
