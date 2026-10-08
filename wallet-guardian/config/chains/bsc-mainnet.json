@@ -1,0 +1,39 @@
+{
+  "network": "bsc-mainnet",
+  "display_name": "BNB Smart Chain",
+  "family": "evm",
+  "tier": 0,
+  "evm_chain_id": 56,
+  "native_asset": {
+    "symbol": "BNB",
+    "decimals": 18,
+    "identity": "evm-native:56"
+  },
+  "identity": {
+    "method": "eth_chainId",
+    "evm_chain_id": 56,
+    "expected_value": "0x38",
+    "status": "documented"
+  },
+  "finality_policy": "BNB Smart Chain 用 BEP-126 fast finality。官方 dataseed 的 latest 不是 Ethereum 意義的 finalized。確認數只是政策門檻。",
+  "sources": [
+    {
+      "url": "https://github.com/ethereum-lists/chains/blob/master/_data/chains/eip155-56.json",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://github.com/ethereum-lists/chains",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://docs.bnbchain.org/bnb-smart-chain/developers/json_rpc/json-rpc-endpoint/",
+      "kind": "official_docs",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "既有 run-once 仍只讀這條鏈的官方 RPC，但本登錄的 enabled 是 false，不代表那條舊路徑被關掉，也不代表本包重新 live 驗證。原生符號 BNB，18 位小數。"
+}

@@ -1,0 +1,29 @@
+{
+  "network": "cosmos-hub",
+  "display_name": "Cosmos Hub",
+  "family": "cosmos",
+  "tier": 3,
+  "evm_chain_id": null,
+  "native_asset": {
+    "symbol": "ATOM",
+    "decimals": 6,
+    "identity": "cosmos-native:uatom"
+  },
+  "identity": {
+    "method": "chain-id from node_info",
+    "evm_chain_id": null,
+    "expected_value": "cosmoshub-4",
+    "status": "documented"
+  },
+  "finality_policy": "Cosmos Hub 的區塊提交不是 IBC 封包完成。只識別 cosmoshub-4，不能一次掃完整個 Cosmos 鏈族。",
+  "sources": [
+    {
+      "url": "https://github.com/cosmos/chain-registry",
+      "kind": "chain_registry",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "Cosmos 是鏈族，不是一條鏈。原生最小單位 uatom，6 位小數，符號 ATOM。chain-id cosmoshub-4 是 documented，本包沒有呼叫節點。不能從 Osmosis 或其他主權鏈推導同一個使用者。enabled 維持 false。"
+}

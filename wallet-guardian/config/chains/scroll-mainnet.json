@@ -1,0 +1,34 @@
+{
+  "network": "scroll-mainnet",
+  "display_name": "Scroll",
+  "family": "evm",
+  "tier": 1,
+  "evm_chain_id": 534352,
+  "native_asset": {
+    "symbol": "ETH",
+    "decimals": 18,
+    "identity": "evm-native:534352"
+  },
+  "identity": {
+    "method": "eth_chainId",
+    "evm_chain_id": 534352,
+    "expected_value": "0x82750",
+    "status": "documented"
+  },
+  "finality_policy": "Scroll 的 L2 執行與 L1 最終化分開。不套用固定 12 個執行層確認。",
+  "sources": [
+    {
+      "url": "https://github.com/ethereum-lists/chains/blob/master/_data/chains/eip155-534352.json",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://github.com/ethereum-lists/chains",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "T1。鏈 ID 534352 為 documented，不是 live 驗證。不要假設一定有 Etherscan 地址端點。enabled 維持 false。"
+}

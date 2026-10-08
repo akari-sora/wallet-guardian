@@ -1,0 +1,29 @@
+{
+  "network": "ton-mainnet",
+  "display_name": "TON",
+  "family": "ton",
+  "tier": 2,
+  "evm_chain_id": null,
+  "native_asset": {
+    "symbol": "TON",
+    "decimals": 9,
+    "identity": "ton-native:TON"
+  },
+  "identity": {
+    "method": "zero_state file hash",
+    "evm_chain_id": null,
+    "expected_value": null,
+    "status": "to_verify_by_probe"
+  },
+  "finality_policy": "TON 的 masterchain 最終化與 workchain 訊息完成分開。外部訊息入鏈不等於目的訊息成功，也不等於 Jetton 已收到。",
+  "sources": [
+    {
+      "url": "https://docs.ton.org/api/overview",
+      "kind": "official_docs",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "原生符號 TON，9 位小數。zero state 雜湊本包不確定，expected_value 是 null，identity.status 是 to_verify_by_probe。顯示用的友善地址別名不是另一個錢包身份。不能從 EVM 地址換算。enabled 維持 false。"
+}

@@ -1,0 +1,34 @@
+{
+  "network": "blast-mainnet",
+  "display_name": "Blast",
+  "family": "evm",
+  "tier": 2,
+  "evm_chain_id": 81457,
+  "native_asset": {
+    "symbol": "ETH",
+    "decimals": 18,
+    "identity": "evm-native:81457"
+  },
+  "identity": {
+    "method": "eth_chainId",
+    "evm_chain_id": 81457,
+    "expected_value": "0x13e31",
+    "status": "documented"
+  },
+  "finality_policy": "Blast 是 OP Stack 變體。L2 確認與 L1 最終化分開。原生餘額變動可能包含 rebase 收益，不能單靠餘額差當成轉帳。",
+  "sources": [
+    {
+      "url": "https://github.com/ethereum-lists/chains/blob/master/_data/chains/eip155-81457.json",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://github.com/ethereum-lists/chains",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "T2，低優先，不阻擋核心版。鏈 ID 81457 為 documented。本包未 live 驗證，enabled 維持 false。"
+}

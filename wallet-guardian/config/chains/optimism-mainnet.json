@@ -1,0 +1,39 @@
+{
+  "network": "optimism-mainnet",
+  "display_name": "OP Mainnet",
+  "family": "evm",
+  "tier": 0,
+  "evm_chain_id": 10,
+  "native_asset": {
+    "symbol": "ETH",
+    "decimals": 18,
+    "identity": "evm-native:10"
+  },
+  "identity": {
+    "method": "eth_chainId",
+    "evm_chain_id": 10,
+    "expected_value": "0xa",
+    "status": "documented"
+  },
+  "finality_policy": "OP Mainnet 屬於 OP Stack。sequencer、safe、finalized 三層分開，不套用固定 12 個執行層確認。",
+  "sources": [
+    {
+      "url": "https://github.com/ethereum-lists/chains/blob/master/_data/chains/eip155-10.json",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://github.com/ethereum-lists/chains",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://docs.optimism.io/",
+      "kind": "official_docs",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "鏈 ID 10。本包未 live 驗證，enabled 維持 false。"
+}

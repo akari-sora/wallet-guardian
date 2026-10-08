@@ -1,0 +1,34 @@
+{
+  "network": "sonic-mainnet",
+  "display_name": "Sonic",
+  "family": "evm",
+  "tier": 1,
+  "evm_chain_id": 146,
+  "native_asset": {
+    "symbol": "S",
+    "decimals": 18,
+    "identity": "evm-native:146"
+  },
+  "identity": {
+    "method": "eth_chainId",
+    "evm_chain_id": 146,
+    "expected_value": "0x92",
+    "status": "documented"
+  },
+  "finality_policy": "Sonic 用自己的共識最終性，不套用 Ethereum 的 12 個執行層確認。",
+  "sources": [
+    {
+      "url": "https://github.com/ethereum-lists/chains/blob/master/_data/chains/eip155-146.json",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://github.com/ethereum-lists/chains",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "T1。原生符號是 S。鏈 ID 146 為 documented，不是 live 驗證。enabled 維持 false。"
+}
