@@ -52,6 +52,8 @@ def build_parser() -> argparse.ArgumentParser:
     selected.add_argument("--config")
     selected.add_argument("--mcm-config")
     run.add_argument("--no-send", action="store_true")
+    run.add_argument("--news-input", default=None, help="caller-supplied RSS, Atom, or structured news; not fetched")
+    run.add_argument("--price-input", default=None, help="caller-supplied price quotes; not fetched")
 
     sub.add_parser("snapshot", parents=[common])
     sub.add_parser("reconcile", parents=[common])
@@ -370,6 +372,8 @@ def _mcm_run(
             clock=time.time if clock is None else clock,
             no_send=bool(args.no_send),
             sender=sender,
+            news_input=_optional_bytes(getattr(args, "news_input", None)),
+            price_input=_optional_bytes(getattr(args, "price_input", None)),
         )
     finally:
         database.close()
@@ -441,6 +445,15 @@ def _mcm_plan(args: argparse.Namespace) -> tuple[dict, int]:
     plan = monitor_plan(public, private)
     plan["live_verified"] = False
     return plan, 0
+
+
+def _optional_bytes(path: str | None) -> bytes | None:
+    if not path:
+        return None
+    try:
+        return Path(path).read_bytes()
+    except OSError as exc:
+        raise GuardianError("input file is not readable") from exc
 
 
 def _chosen_backend(backend: Any) -> Any:

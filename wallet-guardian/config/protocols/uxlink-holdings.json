@@ -1,0 +1,50 @@
+{
+  "id": "uxlink_holdings",
+  "version": "1",
+  "networks": [
+    "arbitrum-one",
+    "bsc-mainnet",
+    "ethereum-mainnet"
+  ],
+  "contracts": {
+    "arbitrum-one": {
+      "token": {
+        "address": "0x1A6B3A62391ECcaaa992ade44cd4AFe6bEC8CfF1",
+        "source_url": "https://docs.uxlink.io/layer/announcement/notice",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "deprecated_legacy; migration_eligibility unknown; claimability unknown; price_mapping separate_from_new_token; symbol_check auxiliary_only"
+      }
+    },
+    "bsc-mainnet": {
+      "token": {
+        "address": "0x1A6B3A62391ECcaaa992ade44cd4AFe6bEC8CfF1",
+        "source_url": "https://docs.uxlink.io/layer/announcement/notice",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "deprecated_legacy; migration_eligibility unknown; claimability unknown; price_mapping separate_from_new_token; symbol_check auxiliary_only. Same address string as Arbitrum, different asset identity."
+      }
+    },
+    "ethereum-mainnet": {
+      "token": {
+        "address": "0x3991B07b2951a4300Da8c76e7d2c7eddE861Fef3",
+        "source_url": "https://docs.uxlink.io/layer/announcement/uxlink-supply-distribution",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "documented_new_token; claimability not_assessed; symbol_check auxiliary_only. Price is not applied to the legacy token."
+      }
+    }
+  },
+  "required_sources": [
+    "evm_rpc"
+  ],
+  "view_methods": [
+    "balanceOf(address)",
+    "decimals()",
+    "symbol()"
+  ],
+  "capabilities": [
+    "positions"
+  ],
+  "notes": "UXLINK token identities. The legacy token on Arbitrum One and BNB Chain shares an address string and remains two identities. symbol() is auxiliary_only. Mantle stays documentation-only. No user accounts. Not verified on-chain by this package."
+}

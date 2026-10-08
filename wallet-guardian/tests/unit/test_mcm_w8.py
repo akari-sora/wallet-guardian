@@ -244,7 +244,14 @@ def run(plugin_id: str, transport, network: str, wallet: str = OWNER, **kwargs):
 
 def test_mcm_w8_01_plugin_readonly_rejects_code_loading_and_reads_views():
     assert isinstance(PLUGIN_REGISTRY, MappingProxyType)
-    assert set(PLUGIN_REGISTRY) == {"aave_v3", "erc4626", "lista_slisbnb", "solana_stake"}
+    assert set(PLUGIN_REGISTRY) == {
+        "aave_v3",
+        "erc4626",
+        "kinza",
+        "lista_slisbnb",
+        "solana_stake",
+        "uxlink_holdings",
+    }
 
     with pytest.raises(ManifestError) as unknown:
         load_manifest({"id": "guardian.protocols.not_a_plugin"})
@@ -279,7 +286,14 @@ def test_mcm_w8_01_plugin_readonly_rejects_code_loading_and_reads_views():
     assert "mcm_w8_no_such_module" not in sys.modules
 
     manifests = load_protocol_dir()
-    assert set(manifests) == {"aave_v3", "erc4626", "lista_slisbnb", "solana_stake"}
+    assert set(manifests) == {
+        "aave_v3",
+        "erc4626",
+        "kinza",
+        "lista_slisbnb",
+        "solana_stake",
+        "uxlink_holdings",
+    }
     legacy = json.loads((ROOT / "config" / "protocols" / "lista-bsc.json").read_text(encoding="utf-8"))
     assert "id" not in legacy
     assert legacy["protocol_id"] == "lista-slisbnb"

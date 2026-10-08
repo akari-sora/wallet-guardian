@@ -7,7 +7,7 @@ HTTP backend. This module does not sign, encode, or broadcast a transaction.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -27,11 +27,14 @@ from guardian.configuration import (
 from guardian.coverage import CoverageObservation, build_coverage, resolve_support
 from guardian.delivery import deliver, load_handoff
 from guardian.events import ChainEvent
+from guardian.errors import GuardianError
 from guardian.monitoring import CapabilityCycle
 from guardian.network_registry import load_registry
+from guardian.news.exposure import WalletExposure, exposure_alert, link_exposure, load_caller_incidents
 from guardian.protocols.models import unknown_position
 from guardian.protocols.registry import PLUGIN_REGISTRY
 from guardian.protocols.runner import run_plugin
+from guardian.protocols.uxlink import AssetManifestError, CallerQuote, parse_price_input, public_leg
 from guardian.rules import AlertPolicy, Candidate
 from guardian.sources.budget import BudgetBook, BudgetExhausted
 from guardian.sources.capabilities import ROOT, load_source_capabilities
@@ -52,8 +55,11 @@ _PLUGIN_IDS = {
     "erc4626-registered": "erc4626",
     "lista-slisbnb": "lista_slisbnb",
     "lista_slisbnb": "lista_slisbnb",
+    "kinza": "kinza",
     "solana-stake": "solana_stake",
     "solana_stake": "solana_stake",
+    "uxlink-holdings": "uxlink_holdings",
+    "uxlink_holdings": "uxlink_holdings",
 }
 
 
@@ -107,6 +113,8 @@ def run_capability_pipeline(
     clock: Clock,
     no_send: bool = True,
     sender: Any = None,
+    news_input: bytes | None = None,
+    price_input: bytes | None = None,
 ) -> RunReport:
     """Read configured wallets and commit one capability cycle."""
     started_at = clock()
@@ -131,6 +139,7 @@ def run_capability_pipeline(
     seen = _seen(database, tenant)
     stored_cursors = _stored_cursors(database, tenant)
     position_prior = _load_position_state(database, tenant)
+    approval_state = _load_approval_state(database, tenant)
     previous_native = _previous_native(database, tenant)
     events: list[ChainEvent] = []
     seen_transfers: set[tuple[str, ...]] = set()
@@ -138,6 +147,14 @@ def run_capability_pipeline(
     held_cursors: set[tuple[str, str, str]] = set()
     position_state: dict[tuple[str, str], list[dict[str, Any]]] = {}
     position_summaries: list[dict[str, Any]] = []
+    position_rows: list[Any] = []
+    position_labels: dict[str, list[dict[str, Any]]] = {}
+    news_book = None
+    news_reason = "news_not_supplied"
+    if news_input is not None:
+        news_book, news_reason = load_caller_incidents(news_input)
+    quotes = _price_quotes(price_input)
+    news_coverage = _news_observation(news_input is not None, news_reason)
     for account, network in enabled:
         entry = registry[network]
         family = entry.get("family")
@@ -152,6 +169,7 @@ def run_capability_pipeline(
                 explicit_cursors=explicit_cursors,
                 held_cursors=held_cursors,
                 started=started,
+                active_approvals=approval_state,
             )
         elif family == "solana":
             _read_solana(
@@ -163,19 +181,35 @@ def run_capability_pipeline(
         _read_positions(
             public_config, private_inputs, transport, account, network, entry, clock,
             observations, candidates, position_prior, position_state, position_summaries, tenant, started,
+            position_rows=position_rows,
+            position_labels=position_labels,
+            quotes=quotes,
         )
+        observations[(account.wallet_id, network, "exposure_news")] = news_coverage
         _fill_gaps(public_config, private_inputs, catalog, account.wallet_id, network, observations)
     rows = build_coverage(enabled_pairs(enabled), observations, catalog, registry, started)
     required = _required_map(enabled, rows, observations, position_summaries, public_config, private_inputs, registry)
     decisions = policy.apply(candidates, baseline_scopes=baseline)
-    alerts = [item.as_dict() for item in decisions if item.alert]
+    alerts = []
+    for item in decisions:
+        if not item.alert:
+            continue
+        payload = item.as_dict()
+        labels = position_labels.get(item.identity)
+        if labels:
+            payload["labels"] = labels
+        alerts.append(payload)
+    if news_book is not None:
+        active_approvals = _active_from_state(approval_state, enabled)
+        for notice in link_exposure(news_book.incidents, _wallet_exposures(position_rows, active_approvals)):
+            alerts.append(exposure_alert(tenant, notice, _notice_network(notice.wallet_id, position_rows, active_approvals)))
     cursors = _merge_cursors(observations, explicit_cursors, held_cursors)
     cycle = CapabilityCycle(database, tenant)
     finished_cycle = cycle.finish(
         incoming=_incoming(native_reads, registry),
         results=_result_map(native_reads, registry),
         events=events,
-        capability_rows=_storage_rows(rows, position_state),
+        capability_rows=_storage_rows(rows, position_state, approval_state),
         cursors=cursors,
         alerts=alerts,
     )
@@ -203,6 +237,13 @@ def run_capability_pipeline(
     for item in decisions:
         if item.valuation_unknown and item.identity not in unknown:
             unknown.append(item.identity)
+    for summary in position_summaries:
+        for leg in summary.get("legs") or []:
+            if not isinstance(leg, dict) or leg.get("valuation") != "valuation_unknown":
+                continue
+            identity = leg.get("identity")
+            if isinstance(identity, str) and identity not in unknown:
+                unknown.append(identity)
     run_id = f"mcm-{int(started_at)}-{uuid4().hex[:8]}"
     report = RunReport(
         run_id=run_id,
@@ -313,10 +354,84 @@ def _resolve(host: str) -> list[str]:
     return _default_resolve(name)
 
 
+def _price_quotes(price_input: bytes | None) -> tuple[CallerQuote, ...]:
+    if price_input is None:
+        return ()
+    try:
+        return parse_price_input(price_input)
+    except AssetManifestError as exc:
+        raise GuardianError("price input is not readable") from exc
+
+
+def _news_observation(supplied: bool, reason: str) -> CoverageObservation:
+    """Caller news is a partial input. A missing file stays an explicit gap."""
+    if not supplied:
+        return CoverageObservation(
+            category="partial",
+            pagination_complete=False,
+            gap_detection_complete=False,
+            declared="not_supplied",
+            reason_codes=("news_not_supplied",),
+            trust="unverified",
+            price_quality="unknown",
+        )
+    if reason:
+        return CoverageObservation(
+            category="error",
+            pagination_complete=False,
+            gap_detection_complete=False,
+            declared="caller_supplied",
+            sources=("caller_supplied",),
+            reason_codes=("caller_supplied", reason),
+            trust="unverified",
+            price_quality="unknown",
+        )
+    return CoverageObservation(
+        category="partial",
+        pagination_complete=False,
+        gap_detection_complete=False,
+        declared="caller_supplied",
+        sources=("caller_supplied",),
+        reason_codes=("caller_supplied", "not_fetched"),
+        trust="unverified",
+        price_quality="unknown",
+    )
+
+
+def _wallet_exposures(observations: Sequence[Any], approvals: Sequence[Mapping[str, Any]]) -> tuple[WalletExposure, ...]:
+    by_wallet: dict[str, list[Any]] = {}
+    for item in observations:
+        by_wallet.setdefault(item.wallet_id, []).append(item)
+    approval_by: dict[str, list[Mapping[str, Any]]] = {}
+    for row in approvals:
+        wallet_id = row.get("wallet_id")
+        if isinstance(wallet_id, str):
+            approval_by.setdefault(wallet_id, []).append(row)
+    wallets = []
+    for wallet_id in sorted(set(by_wallet) | set(approval_by)):
+        wallets.append(WalletExposure(
+            wallet_id,
+            positions=tuple(by_wallet.get(wallet_id, ())),
+            approvals=tuple(approval_by.get(wallet_id, ())),
+        ))
+    return tuple(wallets)
+
+
+def _notice_network(wallet_id: str, observations: Sequence[Any], approvals: Sequence[Mapping[str, Any]]) -> str:
+    found = [item.network for item in observations if item.wallet_id == wallet_id and isinstance(item.network, str)]
+    found.extend(
+        row["network"] for row in approvals
+        if row.get("wallet_id") == wallet_id and isinstance(row.get("network"), str)
+    )
+    if not found:
+        return "unspecified"
+    return sorted(set(found))[0]
+
+
 def _read_evm(
     public_config, private_inputs, transport, account, network, entry, observations, native_reads,
     seen, baseline, candidates, tenant, *, stored_cursors, previous_native, events, seen_transfers,
-    explicit_cursors, held_cursors, started,
+    explicit_cursors, held_cursors, started, active_approvals,
 ) -> None:
     wallet_id = account.wallet_id
     source_id = _family_source(public_config, private_inputs, network, "evm_rpc")
@@ -352,6 +467,7 @@ def _read_evm(
     _read_approvals(
         transport, source_id, address, wallet_id, network, head, approval_cursor, chain_id,
         observations, seen, baseline, candidates, tenant, events, explicit_cursors, held_cursors, started,
+        active_approvals,
     )
     external_rows = _history_external(
         public_config, private_inputs, transport, wallet_id, network, address, head, chain_id,
@@ -856,6 +972,7 @@ def _read_token_logs(
 def _read_approvals(
     transport, source_id, address, wallet_id, network, head, stored, chain_id,
     observations, seen, baseline, candidates, tenant, events, explicit_cursors, held_cursors, started,
+    active_approvals,
 ) -> None:
     if head is None:
         start, end = 0, LOG_RANGE_MAX
@@ -898,6 +1015,28 @@ def _read_approvals(
     for capability in _PERMISSION_CAPABILITIES:
         _advance_cursor(explicit_cursors, held_cursors, wallet_id, network, capability, head if head is not None else ranges[-1][1])
     seen_rows: set[tuple[Any, ...]] = set()
+    # active_approvals is the persisted approval state keyed by (wallet, network).
+    # Rows read this run update it: active adds, any other status removes. A failed
+    # read returns earlier and keeps the stored state untouched.
+    merged = {
+        (str(item.get("token")), str(item.get("spender"))): dict(item)
+        for item in active_approvals.get((wallet_id, network), [])
+        if isinstance(item, dict)
+    }
+    for scan in scans:
+        for row in scan.rows:
+            pair = (str(row.token).lower(), str(row.spender).lower())
+            if row.status == "active":
+                merged[pair] = {
+                    "network": network,
+                    "spender": pair[1],
+                    "status": "active",
+                    "token": pair[0],
+                    "wallet_id": wallet_id,
+                }
+            else:
+                merged.pop(pair, None)
+    active_approvals[(wallet_id, network)] = [merged[key] for key in sorted(merged)]
     for scan in scans:
         for row in scan.rows:
             if row.status != "active":
@@ -1138,7 +1277,8 @@ def _remember_event(events: list[ChainEvent], **kwargs: Any) -> None:
 
 def _read_positions(
     public_config, private_inputs, transport, account, network, entry, clock, observations, candidates,
-    position_prior, position_state, position_summaries, tenant, started,
+    position_prior, position_state, position_summaries, tenant, started, *,
+    position_rows, position_labels, quotes,
 ) -> None:
     del started
     family = entry.get("family")
@@ -1177,8 +1317,11 @@ def _read_positions(
                 )
         health = "unknown" if observation.status == "unknown" else "complete_in_declared_scope"
         reason = observation.reason_codes[0] if observation.reason_codes else ""
+        legs = [public_leg(leg, quotes) for leg in observation.legs]
+        position_rows.append(observation)
         position_summaries.append({
             "health": health,
+            "legs": legs,
             "network": network,
             "plugin_id": plugin_id,
             "public_id": public_id,
@@ -1197,15 +1340,19 @@ def _read_positions(
             stored = _position_record(plugin_id, observation)
         position_state.setdefault((wallet_id, network), []).append(stored)
         if change:
+            identity = f"position:{plugin_id}:{change}:{_position_fingerprint(observation)}"
             candidates.append(Candidate(
                 tenant_id=tenant,
                 wallet_id=wallet_id,
                 network=network,
                 capability="positions",
-                identity=f"position:{plugin_id}:{change}:{_position_fingerprint(observation)}",
+                identity=identity,
                 kind="position",
                 explicit_risk=True,
             ))
+            labeled = [leg for leg in legs if leg.get("labels")]
+            if labeled:
+                position_labels[identity] = labeled
         merged_reasons.extend(observation.reason_codes)
         any_unknown = any_unknown or observation.status == "unknown"
     if (wallet_id, network) in position_state:
@@ -1239,7 +1386,7 @@ def _position_fingerprint(observation) -> str:
         if key in {"collateral_base", "debt_base", "health_factor"}:
             parts.append(f"{key}={value}")
     for leg in observation.legs:
-        parts.append(f"{leg.kind}:{leg.identity}:{leg.raw_amount}")
+        parts.append(f"{leg.kind}={leg.identity}={leg.raw_amount}")
     return "|".join(parts)
 
 
@@ -1311,6 +1458,24 @@ def _decimal_or_none(value: Any) -> Decimal | None:
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
+
+
+def _load_approval_state(database: Database, tenant: str) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    """Active approvals persisted by earlier runs, keyed by (wallet, network)."""
+    found: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in database.capability_state_for(tenant):
+        if row["capability"] != "permissions.erc20":
+            continue
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        state = payload.get("active_approvals")
+        if isinstance(state, list):
+            found[(row["wallet_id"], row["network"])] = [item for item in state if isinstance(item, dict)]
+    return found
+
+
+def _active_from_state(state: Mapping[tuple[str, str], list[dict[str, Any]]], enabled) -> list[dict[str, Any]]:
+    pairs = {(account.wallet_id, network) for account, network in enabled}
+    return [item for key in sorted(state) if key in pairs for item in state[key]]
 
 
 def _load_position_state(database: Database, tenant: str) -> dict[tuple[str, str, str], dict[str, Any]]:
@@ -1395,7 +1560,11 @@ def _health_from_observation(observation: CoverageObservation | None) -> str:
     return "unknown"
 
 
-def _storage_rows(rows: list[dict[str, Any]], position_state: Mapping[tuple[str, str], list[dict[str, Any]]]) -> list[dict[str, Any]]:
+def _storage_rows(
+    rows: list[dict[str, Any]],
+    position_state: Mapping[tuple[str, str], list[dict[str, Any]]],
+    approval_state: Mapping[tuple[str, str], list[dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
     stored = []
     for row in rows:
         scope = row.get("scope") if isinstance(row.get("scope"), dict) else {}
@@ -1403,6 +1572,8 @@ def _storage_rows(rows: list[dict[str, Any]], position_state: Mapping[tuple[str,
         key = (row["wallet_id"], row["network"])
         if row["capability"] == "positions" and key in position_state:
             payload["position_state"] = position_state[key]
+        if row["capability"] == "permissions.erc20" and approval_state is not None and key in approval_state:
+            payload["active_approvals"] = approval_state[key]
         stored.append({
             "capability": row["capability"],
             "cursor": scope.get("cursor"),
