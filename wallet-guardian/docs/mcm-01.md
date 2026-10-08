@@ -298,3 +298,29 @@ W6 審查補充：
 - 增量掃描原本永遠不帶 `until`（條件同時要求 cursor 是 32 bytes 地址和 64 bytes 簽名，永遠不成立），每輪重走全部歷史；已修正為只要 cursor 是簽名就當 `until`。不會漏事件，但活躍錢包原本會一直撞頁數上限而標 partial。
 - W2 transport 的 POST 原本沒有送 `content-type: application/json`。EVM 公開節點接受，但 Solana RPC 回 415，所以 live 讀取全部會失敗（誠實地標 error，不是空）。已補上；GET 不受影響。
 - 2026-10-09 審查者在 box 上的唯讀 smoke（公開 Solana RPC、不用 key、只查公開的 wSOL 與 USDC mint，結果未寫入設定）：getGenesisHash 與設定相符；mint 讀取能解析 decimals 與 mint/freeze authority；公開節點對部分方法回 429/403 時結果是 partial，cursor 不前進；沒有 HELIUS_API_KEY 時是 blocked／credential_missing；sendTransaction、simulateTransaction、requestAirdrop 在 transport 前被拒。這不是 live_pass，probe 仍是 untested。
+
+## W7 實作狀態
+
+W7 在這個分支加上行情與風險標籤的程式庫。只靠合成 fixture。沒有任何來源被 live 驗證。`run-once`、`SnapshotCycle`、Lista 與 CLI 的行為沒有改。鏈登錄的 `enabled` 仍是 false，`status` 仍是 `planned_not_live_verified`。`config/source-capabilities/` 沒有改，沒有 `live_pass`。W2 的 path allowlist 沒有改。前面各節說「還沒有風險解碼」是那個工作包當時的狀態；這一包加上 `guardian.pricing` 與 `guardian.risk`，沒有接到排程或快照。
+
+現在有的東西：
+
+- `guardian.pricing` 的價格鍵是 `(network_id, 資產身份)`。身份是該鏈的原生身份（例如 `solana-native:SOL`）或正規化後的合約／mint。symbol 與 name 只供顯示，不用來查價，也不能借用別的合約的價格。同一符號的另一個合約沒有價格。不把穩定幣寫成 1 USD。CoinGecko 只走既有 transport 的 GET：原生資產是 `/api/v3/simple/price`（`ids`、`vs_currencies=usd`、`include_last_updated_at=true`），合約是 `/api/v3/simple/token_price/{platform}`（`contract_addresses`，同樣的計價參數）。不傳 `symbols` 或 `names`。八條 T0 的 platform id 與 native coin id 在 `config/risk-sources.json`，每筆有來源 URL、retrieved `2026-10-09`、status `documented`。Arbitrum、Base、OP Mainnet 的 gas 資產用 coin id `ethereum`。Polygon 用 `polygon-ecosystem-token`。Avalanche 的 platform id 是 `avalanche`，coin id 是 `avalanche-2`。這些 id 是文件上的對照，不是 live 核對。
+- 可選的 `COINGECKO_API_KEY` 只放在 query `x_cg_demo_api_key`。沒有 key 不是錯誤，仍可查。不用 `x_cg_pro_api_key`。repr 與錯誤文字不包含 key。提供者的 JSON 數字在邊界用 `Decimal(str(value))` 轉一次。鏈上金額維持整數。`value_usd` 是 `Decimal(raw) * price / 10**decimals`。缺價格、null、回應裡沒有這個合約、429、401、403、壞掉的內容、預算用盡，價格是 None，valuation 是 `valuation_unknown`，不會變成 0，也不會變成 1 USD。`last_updated_at` 比 `max_age_seconds`（預設 3600）更舊是 `stale`；缺時間或未來時間是 `unknown`。年齡等於上限仍是 `available`。過期價格可以帶著年齡顯示，但 `threshold_decision` 是 `valuation_unknown`，不觸發也不壓掉美元門檻。門檻是至少 1000 USD：999.99 是 `below`，1000 是 `above`。浮點輸入是 `valuation_unknown`。呼叫端或提供者標了 `low_liquidity`／`unverified` 的價格只供顯示，不觸發美元警報。
+- `guardian.risk.goplus` 的支援表按函式分開：`token_security`、`address_security`、`approval_security`、`solana_token_security`。每一個都有 GoPlus 文件 URL、retrieved `2026-10-09`、status `documented, not live verified`。表上沒有的函式／鏈是 `unsupported`，不發請求。Solana token security 的路徑是 `/api/v1/solana/token_security`，和 EVM 的 address security（`/api/v1/address_security/{address}`）不是同一個函式。回應要 `code` 是整數 1 而且 result 裡有查詢的那個合約或地址。`code` 不是 1（含字串 `"1"`、布林 true、0）、缺 result、429、401、403、壞掉的內容、預算用盡，是 `unknown`，不是 safe。字串旗標只認 `"0"` 和 `"1"`。`"0"` 是這個函式沒標，不是安全。整數 0／1 不是字串旗標，狀態是 `unknown`。GoPlus 的授權要放在 header，這個 transport 沒有 header。設了 `GOPLUS_API_KEY` 時回報 `credential_transport_unsupported`，key 不送出、不進 repr；無 key 的讀取仍會進行，credential 狀態是 `keyless`。
+- `guardian.risk.ofac` 只吃呼叫端給的本機 SDN XML（bytes 或路徑），不下載。內文出現 `<!DOCTYPE` 或 `<!ENTITY`（大小寫不拘）就在解析前拒絕，reason 是 `dtd_or_entity_rejected`，識別碼是空的。UTF-16 BOM 是 `unparseable`。用 `xml.etree.ElementTree` 取出 `Digital Currency Address - <TICKER>`，帶 entry uid、ticker，以及表頭的發布日期與版本（`publshInformation`／`Publish_Date`，也接受 `publishInformation`）。比對前先按鏈族正規化：EVM 用小寫 hex 比較、顯示用 checksum；Solana 與 BTC legacy 的 base58 區分大小寫；bech32 用小寫。不做前綴、後綴或模糊比對。ETH 對到 `config/chains` 裡每一條 EVM（T0 加上 linea、zksync-era、scroll、mantle、sonic、unichain、hyperevm、blast、opbnb）。SOL 只對 solana-mainnet。XBT 與 BTC 只對 bitcoin-mainnet。TRX 只對 tron-mainnet。護照等其他 idType 忽略。兩個版本的差會留下新增與刪除；刪除的狀態是 `delisted`，證據是兩個版本，不會默默丟掉。版本缺、相同，或清單沒解析成功，差集是不可比，不會假造一筆撤回。清單缺失或解析失敗，制裁狀態是 `unknown`，不是 no hit。發布日比 `max_age_days`（7）更舊：命中仍是 `hit` 並且 `stale` 為 true，避免把制裁藏掉；未命中是 `stale`，不是 `no_hit`。年齡等於上限仍算當前。沒有日期或未來日期是 `unknown`。
+- `guardian.risk.chainabuse` 不呼叫 transport。有 key 是 `credential_transport_unsupported`，沒有 key 是 `credential_missing`。`reports` 是 None，`requested` 是 false，`safe` 是 false。不會回傳空的報告清單，也不會把地址說成沒有報告。社群報告標籤只來自呼叫端提供的證據。
+- `guardian.risk.labels` 的種類順序是 `official_sanction`（OFAC 精確命中）大於 `official_exact`（其他有文件的官方名單）大於 `community_report` 大於 `structural`（GoPlus 字串旗標 `"1"`、授權或權限結構）大於 `heuristic`（地址投毒）。每一筆帶 source、function、名單版本／日期、retrieved_at、evidence ref、命中的識別碼。較高的種類不會清掉較低的。摘要列出最高種類和全部標籤。沒有標籤時狀態是 `no_hit_in_checked_sources`，同時列出查過的來源，以及 unknown、unsupported、blocked、stale 的來源。不會寫成 clean 或 safe。某個來源後來失敗，先前的標籤留著並標 stale，不會被清成沒有命中。投毒：發送者與已知對手的 40 hex 前 4 與後 4 相同、地址不同，而且金額是 0 或呼叫端標了 dust，才在發送者上標 heuristic `poisoning_suspect`。受害接收者與真正的對手不標惡意。自己轉給自己、只有前綴相同、或大額轉帳，不標。這筆 dust 的顯示價格即使門檻是 `above`，也不觸發美元警報（`valuation_unknown`）。這些標籤不是法律結論，也不是制裁認定。
+
+還沒接上的東西：
+
+- 沒有 live 來源驗證。fixture 通過不是 CoinGecko、GoPlus 或 OFAC 檔案通過。沒有 `live_pass`。鏈登錄的 `enabled` 仍是 false。`config/source-capabilities/` 沒有改，probe 仍是 untested。
+- 這包沒有接到 `run-once`、`SnapshotCycle`、coverage 列或 CLI。既有的 OFAC CSV `screen_ofac` 沒有改。DeBank 沒有做。
+- 真的要查價時，操作者自己提供 `COINGECKO_API_URL`，以及選用的 `COINGECKO_API_KEY`。GoPlus 用 `GOPLUS_API_URL`；`GOPLUS_API_KEY` 在這個 transport 上送不出去。OFAC 名單由操作者放在本機，本包不下載。Chainabuse 的 header 憑證同樣送不出去，所以不會發出報告查詢。公開設定只放環境變數名稱，不放 key，也不放帶 key 的 URL。
+- 缺價格不是 0，也不是 1 USD。過期價格不驅動美元門檻。旗標 `"0"` 不是安全。沒查到、不支援、被擋住、名單過舊，都不是清白。
+
+W7 審查補充：
+
+- 本包只新增 `pricing/`、`risk/`、`config/risk-sources.json`、`tests/fixtures/risk/`、`tests/unit/test_mcm_w7.py`，並在這份文件加這一節。沒有改 transport、policy、action-client、CI 或鏈登錄。
+- 測試全程離線：socket 與 `httpx.Client` 被擋下，來源是 `*.example.invalid`，SDN XML 是合成的（假 uid、`0x000…0abc` 這類地址、假名字）。沒有真實的制裁地址，也沒有真實的代幣合約。
+- Polygon 的 `polygon-ecosystem-token` 與 Avalanche 的 `avalanche-2` 來自公開文件對照，retrieved 是 2026-10-09，沒有對 live API 核對。GoPlus 的鏈 id 表同樣是文件對照，不是 live 核對。
