@@ -461,6 +461,9 @@ def _desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Desk:
     monkeypatch.setenv("MONITOR_ACCOUNTS_FILE", str(accounts_path))
     monkeypatch.setenv("MONITOR_SECRET_PROFILE", str(secret_path))
     monkeypatch.setenv("MONITOR_STATE_DIR", str(state))
+    # Ambient machine keys must not leak into the desk: the profile intentionally omits them.
+    for name in ("ETHERSCAN_API_KEY", "GOPLUS_API_KEY", "CHAINABUSE_API_KEY", "HELIUS_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
     return Desk(config, state, evm_address, sol_address, FixtureRpc())
 
 
