@@ -481,7 +481,20 @@ L1 那段「沒有抓新聞。抓取留給 L2。」說的是當時的狀態。W8
 - feed 失敗是 `fetch_error`。超過預算是 `budget_exhausted`。沒開抓取是 `news_not_supplied`。全部 feed 都失敗時 quality 是 error，不是 empty。
 - `exposure_news` 在來源能力目錄裡仍是 unsupported，所以即使抓取成功，quality 也不會是 `complete_in_declared_scope`。這不是 live pass。
 
-狀態寫在既有 DB 的 `capability_state`：capability 是 `exposure_news`，payload 只有 `news_fetch`（每個 feed 的 etag、last_modified、last_ok_at、fingerprints，以及 incident 與 content hash）。這列不是錢包，也不帶 coverage 宣告。不寫入 `private/`。
+能通知的 incident（reviewer 修正）：
+
+- 只有兩種 incident 會拿去連錢包：發布時間在最近 72 小時內的（包含之前存下的，所以 304 時新曝險的錢包仍會收到），或在已經成功抓過的 feed 中、這一輪新出現或內容改版的。
+- 某個 feed 第一次成功抓取是安靜的基準：較舊或沒有日期的項目只存起來，不通知。開啟 `news.fetch` 時不會把整個 feed 的歷史（審查者當天看到 Aave 30、Kinza 10、Solana 25 則）一次推給每個曝險錢包。
+- 之後才開始曝險的錢包只會收到最近 72 小時內的新聞，不會收到舊的。
+- 存下的 incident 最多 300 則（依發布時間保留較新的），每則最多 10 個來源參照，狀態列有上限。
+
+狀態寫在既有 DB 的 `capability_state`：capability 是 `exposure_news`，wallet_id 是 `news-feeds`、network 是 `news`。錢包 id 一律是 UUID，所以不會跟監控中的錢包撞在一起；`compare-legacy` 的網路清單也會略過這一列。payload 只有 `news_fetch`（每個 feed 的 etag、last_modified、last_ok_at、fingerprints，以及 incident 與 content hash）。這列不是錢包，也不帶 coverage 宣告。不寫入 `private/`。
+
+Live smoke（reviewer，2026-10-09，只對三個公開 feed 做 GET，請求裡沒有錢包或私人資料）：
+
+- 在 win_desktop 上走真正的 `fetch_allowlisted_news`，經過 ReadOnlyTransport 與 HttpxBackend。三個 feed 都是 `ok`，共 58 則 incident；只有 Solana 回 ETag。
+- 在 box 上，三個 feed 都是 `fetch_error` / `private_endpoint`。原因是那台機器的 DNS 對所有主機都回 198.18.0.1（測試保留段，代理用的假 IP），被 SSRF 釘選照規則擋下。這是環境限制，不是程式錯誤。L3 要在真實 DNS 的主機上跑。
+- 這不是 live pass，`live_verified` 仍是 false。
 
 沒有改 `action-client`、送出語意或 `.gitlab-ci.yml`。沒有新增 Python 依賴。
 

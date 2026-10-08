@@ -21,6 +21,7 @@ from guardian.chains.evm.accounting import TRANSFER_TOPIC, pad_address
 from guardian.chains.evm.permissions import ERC20_APPROVAL_TOPIC
 from guardian.cli import main
 from guardian.news.catalog import ALLOWLISTED_FEED_URLS
+from guardian.comparison import _mcm_events
 from guardian.news.fetch import NEWS_STATE_CAPABILITY, NEWS_STATE_WALLET
 from guardian.protocols.pins import KINZA_POOLS, KINZA_PROVIDERS, UXLINK_LEGACY_TOKEN
 from guardian.sources.capabilities import NEWS_USER_AGENT
@@ -620,6 +621,59 @@ def test_mcm_live_l2_05_no_feed_gap_not_no_news(
     assert all("no news" not in " ".join(row["reason_codes"]) for row in failed_rows)
     assert _news_state(failed)["incidents"] == []
     assert all(item["status"] == "fetch_error" for item in _news_state(failed)["feeds"].values())
+
+
+def test_mcm_live_l2_04_first_fetch_is_quiet_baseline_for_old_items(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """MCM-LIVE-L2-04. Enabling fetch does not replay a feed's history; a later new item notifies once."""
+    network = "bsc-mainnet"
+    approved = _wallet(1)
+    desk = _desk(tmp_path, monkeypatch, [_account(approved, _addr(1), (network,))], ["kinza"], fetch=True)
+    _install_kinza(desk.backend, network)
+    old_items = [(f"Old Kinza note {n}", f"https://kinzafinance.medium.com/old-{n}") for n in range(30)]
+    history = _rss_many(old_items, "Sun, 01 Jan 2023 00:00:00 GMT")
+    newer = _rss_many(old_items + [("New Kinza note", "https://kinzafinance.medium.com/new-1")], "Sun, 01 Jan 2023 00:00:00 GMT")
+    down = RawResponse(503, {}, b"")
+    _queue(
+        desk.backend,
+        _feeds(_EMPTY, down, _EMPTY),
+        _feeds(_EMPTY, down, _EMPTY),
+        _feeds(_EMPTY, RawResponse(200, {}, history), _EMPTY),
+        _feeds(_EMPTY, RawResponse(200, {}, newer), _EMPTY),
+        _feeds(_EMPTY, RawResponse(200, {}, newer), _EMPTY),
+    )
+    _cli(capsys, desk, _argv(desk))
+    desk.backend.head = 130
+    desk.backend.logs = [_approval_log(network, TOKEN, _addr(1), KINZA_POOLS[network], _tx(41), 125, 1)]
+    _cli(capsys, desk, _argv(desk))
+    desk.backend.head = 1000
+    _cli(capsys, desk, _argv(desk))
+    assert len(_news_state(desk)["incidents"]) == 30
+    assert not _of_kind(_outbox(desk), "exposure")
+    desk.backend.head = 1100
+    _cli(capsys, desk, _argv(desk))
+    notices = _of_kind(_outbox(desk), "exposure")
+    assert len(notices) == 1
+    assert notices[0]["payload"]["wallet_id"] == approved
+    assert notices[0]["payload"]["via"] == "approval"
+    desk.backend.head = 1200
+    _cli(capsys, desk, _argv(desk))
+    assert len(_of_kind(_outbox(desk), "exposure")) == 1
+    database = Database(desk.state / "monitor.sqlite")
+    try:
+        assert _mcm_events(database, desk.tenant)[1] == {network}
+    finally:
+        database.close()
+
+
+def _rss_many(items: list[tuple[str, str]], published: str) -> bytes:
+    entries = "".join(
+        f"<item><title>{title}</title><link>{link}</link><pubDate>{published}</pubDate>"
+        f"<description>{title}.</description></item>"
+        for title, link in items
+    )
+    return f'<?xml version="1.0"?><rss version="2.0"><channel>{entries}</channel></rss>'.encode("utf-8")
 
 
 def _rss(title: str, link: str, body: str) -> bytes:

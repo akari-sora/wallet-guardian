@@ -239,7 +239,10 @@ def run_capability_pipeline(
         active_approvals = _active_from_state(approval_state, enabled)
         wallets = _wallet_exposures(position_rows, active_approvals)
         if fetched is not None:
-            for notice in link_exposure(fetched.book.incidents, wallets):
+            # Only incidents that are new or revised in this fetch can notify; a
+            # feed's first fetch is a quiet baseline apart from recent items.
+            fresh = [item for item in fetched.book.incidents if item.incident_id in fetched.linkable]
+            for notice in link_exposure(fresh, wallets):
                 alerts.append(_fetched_alert(tenant, notice, position_rows, active_approvals, fetched))
         if news_book is not None:
             for notice in link_exposure(news_book.incidents, wallets):

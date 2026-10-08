@@ -24,13 +24,23 @@ from guardian.sources.transport import EndpointRegistry, ReadOnlyTransport, Regi
 from guardian.storage import Database
 
 NEWS_GETS_PER_RUN = 8
-NEWS_STATE_WALLET = "00000000-0000-4000-8000-000000000001"
-NEWS_STATE_NETWORK = "ethereum-mainnet"
+# The feed state is not a wallet. Wallet ids are UUIDs, so this key cannot
+# collide with a monitored wallet, and "news" is not a chain network.
+NEWS_STATE_WALLET = "news-feeds"
+NEWS_STATE_NETWORK = "news"
 NEWS_STATE_CAPABILITY = "exposure_news"
 _ACCEPT = "application/rss+xml, application/atom+xml, application/xml, text/xml"
 _BUDGET = "news-feeds"
 _KEPT = ("etag", "fingerprints", "last_modified", "last_ok_at")
 _FRESH = frozenset({"empty", "not_modified", "ok"})
+# Linkable incidents: published within this window (stored ones included, so a
+# 304 still serves a newly exposed wallet), or new/revised in this fetch when the
+# feed already had a successful fetch. A feed's first fetch is a quiet baseline
+# for older or undated items, so enabling fetch cannot replay a feed's history.
+_BASELINE_WINDOW_SECONDS = 72 * 3600
+# Stored incidents are capped, newest first, so the state row stays bounded.
+_MAX_INCIDENTS = 300
+_MAX_REFS = 10
 
 Clock = Callable[[], float]
 
@@ -52,6 +62,7 @@ class FetchReport:
     content_hashes: dict[str, str]
     state: dict[str, Any]
     fetchable: frozenset[str]
+    linkable: frozenset[str] = frozenset()
 
 
 def fetch_allowlisted_news(
@@ -70,11 +81,12 @@ def fetch_allowlisted_news(
     previous = _load_state(database, tenant)
     book, hashes = _restore(previous)
     updated: set[str] = set()
+    linkable: set[str] = set()
     prior_feeds = previous.get("feeds") if isinstance(previous.get("feeds"), dict) else {}
     stored: dict[str, Any] = {}
     results: list[FeedResult] = []
     if not pairs:
-        return _report(book, (), updated, hashes, stored, sources)
+        return _report(book, (), updated, hashes, stored, sources, linkable)
     registry = _registry(pairs)
     budgets = BudgetBook.from_document(
         {
@@ -148,7 +160,11 @@ def fetch_allowlisted_news(
             stored[feed.url] = _failed(prior, source.source_id, reason)
             results.append(FeedResult(source.source_id, feed.url, "fetch_error", reason, protocols))
             continue
-        _absorb(book, hashes, updated, parsed.items)
+        baseline = "fingerprints" not in prior
+        for incident_id in _absorb(book, hashes, updated, parsed.items):
+            incident = next(item for item in book.incidents if item.incident_id == incident_id)
+            if not baseline or _recent(incident.published_at, clock()):
+                linkable.add(incident_id)
         stored[feed.url] = {
             "etag": _validator(result.headers.get("etag")),
             "fingerprints": [_fingerprint(item) for item in parsed.items],
@@ -160,7 +176,11 @@ def fetch_allowlisted_news(
         }
         status = "ok" if parsed.items else "empty"
         results.append(FeedResult(source.source_id, feed.url, status, "", protocols))
-    return _report(book, tuple(results), updated, hashes, stored, sources)
+    moment = clock()
+    for incident in book.incidents:
+        if _recent(incident.published_at, moment):
+            linkable.add(incident.incident_id)
+    return _report(book, tuple(results), updated, hashes, stored, sources, linkable)
 
 
 def news_state_row(state: Mapping[str, Any], now: str) -> dict[str, Any]:
@@ -186,6 +206,7 @@ def _report(
     hashes: dict[str, str],
     stored: dict[str, Any],
     sources: Mapping[str, NewsSource],
+    linkable: set[str] | None = None,
 ) -> FetchReport:
     fetchable = frozenset(
         protocol
@@ -197,8 +218,9 @@ def _report(
         book=book,
         feeds=feeds,
         updated_ids=frozenset(updated),
+        linkable=frozenset(linkable or ()),
         content_hashes=dict(hashes),
-        state={"feeds": stored, "incidents": [_dump(incident, hashes.get(incident.incident_id, "")) for incident in book.incidents]},
+        state={"feeds": stored, "incidents": [_dump(incident, hashes.get(incident.incident_id, "")) for incident in _bounded(book.incidents)]},
         fetchable=fetchable,
     )
 
@@ -274,7 +296,9 @@ def _validator(value: Any) -> str | None:
     return text
 
 
-def _absorb(book: IncidentBook, hashes: dict[str, str], updated: set[str], items: tuple[NewsItem, ...]) -> None:
+def _absorb(book: IncidentBook, hashes: dict[str, str], updated: set[str], items: tuple[NewsItem, ...]) -> list[str]:
+    """Absorb items. Returns the incident ids that are new or changed in this fetch."""
+    changed: list[str] = []
     for item in items:
         digest = _item_hash(item)
         match = book._find(item)
@@ -282,10 +306,32 @@ def _absorb(book: IncidentBook, hashes: dict[str, str], updated: set[str], items
             continue
         known = match is not None
         incident = book.add(item)
+        incident.source_refs[:] = incident.source_refs[-_MAX_REFS:]
         previous = hashes.get(incident.incident_id)
         hashes[incident.incident_id] = digest
         if known or (previous is not None and previous != digest):
             updated.add(incident.incident_id)
+        if incident.incident_id not in changed:
+            changed.append(incident.incident_id)
+    return changed
+
+
+def _recent(published: Any, now: float) -> bool:
+    if not isinstance(published, datetime):
+        return False
+    return published.timestamp() >= now - _BASELINE_WINDOW_SECONDS
+
+
+def _bounded(incidents: list[Incident]) -> list[Incident]:
+    if len(incidents) <= _MAX_INCIDENTS:
+        return list(incidents)
+    ranked = sorted(
+        incidents,
+        key=lambda item: item.published_at.timestamp() if isinstance(item.published_at, datetime) else float("-inf"),
+        reverse=True,
+    )
+    keep = {item.incident_id for item in ranked[:_MAX_INCIDENTS]}
+    return [item for item in incidents if item.incident_id in keep]
 
 
 def _restore(state: Mapping[str, Any]) -> tuple[IncidentBook, dict[str, str]]:

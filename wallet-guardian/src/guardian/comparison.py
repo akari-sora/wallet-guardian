@@ -273,7 +273,11 @@ def _mcm_events(database: Database, tenant: str) -> tuple[list[dict[str, str]], 
             row["reason"] = "missing_event_identity"
         row["key"] = _event_key(row)
         rows.append(row)
+    from guardian.news.fetch import NEWS_STATE_WALLET
+
     for state in database.capability_state_for(tenant):
+        if state.get("wallet_id") == NEWS_STATE_WALLET:
+            continue  # news feed state is not a monitored network
         network = state.get("network")
         if isinstance(network, str):
             networks.add(network)
