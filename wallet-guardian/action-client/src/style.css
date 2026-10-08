@@ -223,3 +223,45 @@ pre {
   font-size: 0.75rem;
   overflow-wrap: anywhere;
 }
+
+/* WALLET-CONNECT-01 W-B: WalletConnect pairing panel (QR + jump links). */
+.wallet-option-wc .wallet-name::before {
+  content: "⧉ ";
+  color: var(--muted);
+}
+
+.wc-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  border-radius: 8px;
+}
+
+.wc-qr {
+  display: block;
+  max-width: min(100%, 280px);
+  height: auto;
+  margin: 8px 0;
+  background: #fff;
+  image-rendering: pixelated;
+}
+
+.wc-qr[width="0"] {
+  display: none;
+}
+
+.wc-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wc-link {
+  display: inline-block;
+  padding: 8px 12px;
+  border: 1px solid var(--ok);
+  border-radius: 6px;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}

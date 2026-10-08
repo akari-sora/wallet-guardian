@@ -23,6 +23,8 @@ import { acceptLoginChallenge } from "./siwe-gate.mjs";
 import { fetchTrustedRpc, TRUSTED_LISTA } from "./trusted-lista.mjs";
 import { createAbandonSignal, encodePersonalSignMessage, guardedRequest, signEncodingFor } from "./wallets/injected.mjs";
 import { createWalletRegistry, sourceLabel } from "./wallets/registry.mjs";
+import { SOURCE_WALLETCONNECT, walletConnectConfig } from "./wallets/walletconnect-config.mjs";
+import { createWalletConnectConnection, reasonText as walletConnectReasonText } from "./wallets/walletconnect.mjs";
 
 const TASK_VERSION = "guardian.task.v1";
 const PLAN_VERSION = "guardian.action_plan.v1";
@@ -266,6 +268,141 @@ function walletCandidates(): WalletCandidate[] {
   return registry.list() as unknown as WalletCandidate[];
 }
 
+// WALLET-CONNECT-01 W-B. Offered only when both public build settings are present (fail closed).
+// It is never an implicit choice: the SDK loads and the relay is contacted only after the user picks
+// WalletConnect and presses login. The candidate has the same shape as an injected wallet, so
+// selection, switching, guardedRequest() and the request policy are shared with W-A.
+type WalletConnectStatus = {
+  state: string;
+  address: string | null;
+  reason: string | null;
+  message: string | null;
+  uri: string | null;
+  links: { id: string; label: string; href: string; kind: string; newTab: boolean }[];
+  drawQr: ((canvas: unknown, uri: string) => boolean) | null;
+  clearQr: ((canvas: unknown) => void) | null;
+  extraMethods: string[];
+};
+
+const WC_CONFIG = walletConnectConfig({
+  enabled: import.meta.env.VITE_WALLETCONNECT_ENABLED,
+  projectId: import.meta.env.VITE_REOWN_PROJECT_ID,
+});
+
+function browserStorage(): Storage | null {
+  try {
+    return window.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const walletConnect = import.meta.env.VITE_WALLETCONNECT_ENABLED === "true" && WC_CONFIG.enabled && WC_CONFIG.projectId
+  ? createWalletConnectConnection({
+    projectId: WC_CONFIG.projectId,
+    origin: window.location.origin,
+    rpcUrl: TRUSTED_LISTA.rpcUrl,
+    loadSdk: () => import("./wallets/walletconnect-sdk.mjs"),
+    onStatus: (status: WalletConnectStatus) => renderWalletConnectPanel(status),
+    flagStorage: browserStorage(),
+  })
+  : null;
+const wcCandidate = walletConnect ? (walletConnect.candidate as unknown as WalletCandidate) : null;
+
+function isWalletConnect(candidate: WalletCandidate | null): boolean {
+  return candidate != null && candidate.source === SOURCE_WALLETCONNECT;
+}
+
+let wcPanel: {
+  root: HTMLElement;
+  text: HTMLElement;
+  qr: HTMLCanvasElement;
+  links: HTMLElement;
+  cancel: HTMLButtonElement;
+  disconnect: HTMLButtonElement;
+} | null = null;
+
+function walletConnectPanel(): typeof wcPanel {
+  if (wcPanel || !walletConnect) return wcPanel;
+  const picker = document.querySelector<HTMLElement>("#wallet-picker");
+  if (!picker) return null;
+  const root = document.createElement("section");
+  root.id = "wc-panel";
+  root.className = "wc-panel";
+  root.hidden = true;
+  const text = document.createElement("p");
+  text.className = "status wc-status";
+  const qr = document.createElement("canvas");
+  qr.className = "wc-qr";
+  qr.width = 0;
+  qr.height = 0;
+  if (typeof qr.setAttribute === "function") qr.setAttribute("aria-label", "WalletConnect 連線 QR code（只用於唯讀登入）");
+  const links = document.createElement("div");
+  links.className = "wc-links";
+  const note = document.createElement("p");
+  note.className = "lock-note";
+  note.textContent = "桌機：用手機錢包 App 掃描 QR。手機：按錢包按鈕跳到錢包 App，確認後切回這個分頁；不用掃自己的 QR。連線邀請 5 分鐘內有效，只核准 BNB Smart Chain 的 personal_sign，不送出交易。";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.textContent = "取消 WalletConnect 連線";
+  cancel.addEventListener("click", () => walletConnect?.cancel());
+  const disconnect = document.createElement("button");
+  disconnect.type = "button";
+  disconnect.textContent = "中斷 WalletConnect";
+  disconnect.addEventListener("click", () => {
+    void walletConnect?.disconnect();
+  });
+  const row = document.createElement("div");
+  row.className = "row";
+  row.append(cancel, disconnect);
+  root.append(text, qr, links, note, row);
+  picker.append(root);
+  wcPanel = { root, text, qr, links, cancel, disconnect };
+  return wcPanel;
+}
+
+function wipePairing(panel: NonNullable<typeof wcPanel>, clearQr: WalletConnectStatus["clearQr"]): void {
+  panel.links.replaceChildren();
+  if (clearQr) clearQr(panel.qr);
+  else {
+    panel.qr.width = 0;
+    panel.qr.height = 0;
+  }
+}
+
+// The pairing URI exists only in the QR canvas and the jump links while pairing. Any other state
+// removes both. It is never written to the banner, storage, the server or a log.
+function renderWalletConnectPanel(status: WalletConnectStatus): void {
+  const panel = walletConnectPanel();
+  if (!panel) return;
+  wipePairing(panel, status.clearQr);
+  panel.cancel.hidden = !(status.state === "loading" || status.state === "pairing");
+  panel.disconnect.hidden = !(status.state === "connected" || status.state === "signing");
+  panel.root.hidden = status.state === "idle" && !status.message;
+  if (status.state === "pairing" && status.uri) {
+    if (status.drawQr) status.drawQr(panel.qr, status.uri);
+    for (const link of status.links) {
+      const anchor = document.createElement("a");
+      anchor.className = `wc-link wc-link-${link.kind}`;
+      anchor.href = link.href;
+      anchor.rel = "noopener noreferrer";
+      anchor.referrerPolicy = "no-referrer";
+      if (link.newTab) anchor.target = "_blank";
+      anchor.textContent = link.label;
+      panel.links.append(anchor);
+    }
+    panel.text.textContent = "等待錢包核准 WalletConnect 連線（只要求 BNB Smart Chain 的 personal_sign）。";
+    return;
+  }
+  const extra = status.extraMethods.length > 0
+    ? `錢包另外核准了 ${status.extraMethods.length} 個方法；本頁不會使用，只用 personal_sign 簽固定登入訊息。`
+    : "";
+  if (status.state === "loading") panel.text.textContent = "正在載入 WalletConnect 並連線中繼（relay）…";
+  else if (status.state === "connected") panel.text.textContent = `WalletConnect 已連線：${status.address ?? ""}。這不是網站登入，也不是交易授權。${extra}`;
+  else if (status.state === "signing") panel.text.textContent = "已把固定登入訊息送到錢包 App。請在錢包確認；手機請切到錢包 App，確認後切回這個分頁。";
+  else panel.text.textContent = status.message ?? "WalletConnect 未連線。";
+}
+
 // W-A2: one connection for every wallet operation. An explicit selection wins. Otherwise the
 // provider already in use stays (another wallet's announcement is not a switch). Otherwise a
 // sole candidate is used. Several candidates and no selection means no wallet calls at all.
@@ -418,6 +555,7 @@ function watchWallet(): void {
 
 function bindResumeListeners(): void {
   const resume = () => {
+    walletConnect?.resume();
     if (registry.refresh()) renderWalletPicker();
     watchWallet();
     paintVerification(currentVerification());
@@ -843,7 +981,9 @@ async function queryCapability(chainId: number, generation: number): Promise<voi
     syncFlow();
     if (!canRedrawCapability(flow, stamp) || generation !== loadGeneration) return;
     observedCapability = "unknown";
-    banner.textContent = "批次能力查詢失敗。維持模式 A，不會送出交易。";
+    banner.textContent = isWalletConnect(connection)
+      ? "WalletConnect 連線只核准 personal_sign，不查詢批次能力（unknown）。維持模式 A，不會送出交易。"
+      : "批次能力查詢失敗。維持模式 A，不會送出交易。";
   }
   if (lastPlan && generation === loadGeneration) await renderPlan(lastPlan, lastTask, generation);
 }
@@ -1056,9 +1196,11 @@ async function login(): Promise<void> {
   if (authBusy) return;
   const connection = connectionForLogin();
   if (!connection) {
-    banner.textContent = walletCandidates().length > 1
-      ? "偵測到多個錢包。請先選擇要登入的錢包；選擇前不會向任何錢包索取帳戶。不會送出交易。"
-      : "目前找不到瀏覽器錢包，無法登入。頁面仍會接收晚到的錢包公告。不會送出交易。";
+    banner.textContent = walletCandidates().length > 1 || (walletCandidates().length === 1 && wcCandidate)
+      ? "偵測到多個錢包選項。請先選擇要登入的錢包；選擇前不會向任何錢包索取帳戶。不會送出交易。"
+      : wcCandidate
+        ? "目前找不到瀏覽器錢包。可選擇 WalletConnect，用手機錢包掃 QR 或跳轉錢包 App 登入。不會送出交易。"
+        : "目前找不到瀏覽器錢包，無法登入。頁面仍會接收晚到的錢包公告。不會送出交易。";
     renderWalletPicker();
     return;
   }
@@ -1083,6 +1225,9 @@ async function login(): Promise<void> {
     if (csrfToken && revokePending) {
       if (!(await revokeServerSession("provider_switch"))) throw new Error("舊登入撤銷未確認。");
       if (!current() || beginLogin(flow) == null) return;
+    }
+    if (isWalletConnect(connection)) {
+      banner.textContent = "正在建立 WalletConnect 連線。請用手機錢包掃 QR，或在手機上按錢包按鈕。只會要求唯讀登入簽名，不會送出交易。";
     }
     const accounts = await walletCall(connection, "eth_requestAccounts", undefined, { userAction: true, selected: true });
     if (!current()) return;
@@ -1121,6 +1266,9 @@ async function login(): Promise<void> {
     // W-A4: only the fixed SIWE message, only to the selected provider. The transport encoding
     // may differ per adapter; the signed bytes may not. A refusal is final (no eth_sign fallback).
     const payload = encodePersonalSignMessage(rebuilt, signEncodingFor(connection));
+    if (isWalletConnect(connection)) {
+      banner.textContent = "已把固定登入訊息送到錢包 App。請在錢包確認；手機請切到錢包 App，確認後切回這個分頁。不會送出交易。";
+    }
     const signature = await walletCall(connection, "personal_sign", [payload, address], {
       userAction: true, approvedMessage: rebuilt, address,
     });
@@ -1146,9 +1294,16 @@ async function login(): Promise<void> {
     }
   } catch (error) {
     if (current()) {
+      // Duck-typed (not instanceof) so the check does not depend on the realm the facade module came from.
+      const wcError = typeof error === "object" && error !== null && (error as { name?: unknown }).name === "WalletConnectError"
+        ? error as { reason?: unknown }
+        : null;
+      const wcReason = wcError ? (typeof wcError.reason === "string" ? wcError.reason : "rejected") : null;
       banner.textContent = error instanceof Error && error.message === "舊登入撤銷未確認。"
         ? "已切換錢包，但舊登入的伺服器撤銷未確認，所以沒有用新錢包登入。請重試登入或登出；不會送出交易。"
-        : "登入未完成；既有登入不會因此獲得新權限。可重試或登出，不會送出交易。";
+        : wcReason
+          ? `${walletConnectReasonText(wcReason)} 登入未完成；既有登入不會因此獲得新權限。不會送出交易。`
+          : "登入未完成；既有登入不會因此獲得新權限。可重試或登出，不會送出交易。";
     }
   } finally {
     endLogin(flow);
@@ -1179,11 +1334,15 @@ async function selectWallet(candidate: WalletCandidate): Promise<void> {
     return;
   }
   selectedCandidate = candidate;
+  // W-B: leaving WalletConnect ends its pairing and session; nothing falls back to it later.
+  if (walletConnect && isWalletConnect(previous) && !isWalletConnect(candidate)) void walletConnect.disconnect();
   if (!previous && !authBusy) {
     // First choice: nothing was connected yet. No account request happens here.
     watchWallet();
     renderWalletPicker();
-    banner.textContent = `已選擇「${candidate.name}」。登入只會送到這個錢包；尚未向它索取帳戶。不會送出交易。`;
+    banner.textContent = isWalletConnect(candidate)
+      ? "已選擇 WalletConnect。按登入後才會連線中繼並顯示 QR／錢包按鈕；尚未連線。不會送出交易。"
+      : `已選擇「${candidate.name}」。登入只會送到這個錢包；尚未向它索取帳戶。不會送出交易。`;
     return;
   }
   ++authGeneration;
@@ -1254,10 +1413,36 @@ function renderWalletPicker(): void {
       });
       list.append(button);
     }
+    if (wcCandidate) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "wallet-option wallet-option-wc";
+      const chosen = selectedCandidate != null && selectedCandidate.provider === wcCandidate.provider;
+      if (button.dataset) button.dataset.selected = chosen ? "true" : "false";
+      if (button.dataset) button.dataset.source = SOURCE_WALLETCONNECT;
+      if (typeof button.setAttribute === "function") button.setAttribute("aria-pressed", chosen ? "true" : "false");
+      const name = document.createElement("span");
+      name.className = "wallet-name";
+      name.textContent = wcCandidate.name;
+      const meta = document.createElement("small");
+      meta.className = "wallet-meta";
+      meta.textContent = walletConnect?.hadSession()
+        ? "WalletConnect v2（Reown）。上次已連線：按登入會先恢復連線，仍要你在錢包簽固定登入訊息，不會自動簽名。"
+        : "WalletConnect v2（Reown）：桌機掃 QR、手機跳轉幣安錢包等 App。按登入才會連線中繼（relay）。只用於唯讀登入。";
+      button.append(name, meta);
+      button.addEventListener("click", () => {
+        void selectWallet(wcCandidate);
+      });
+      list.append(button);
+    }
   }
   if (status) {
     status.textContent = candidates.length === 0
-      ? "尚未偵測到瀏覽器錢包。頁面會持續接收錢包公告；這不代表你沒有錢包。"
+      ? wcCandidate && !selectedCandidate
+        ? "尚未偵測到瀏覽器錢包（頁面會持續接收錢包公告）。可選擇 WalletConnect，用手機錢包登入。"
+        : selectedCandidate
+          ? `已選擇：${selectedCandidate.name}。連線與登入只送到這個錢包。`
+          : "尚未偵測到瀏覽器錢包。頁面會持續接收錢包公告；這不代表你沒有錢包。"
       : selectedCandidate
         ? `已選擇：${selectedCandidate.name}。連線與登入只送到這個錢包。錢包名稱與 rdns 是錢包自述，不是身分驗證。`
         : candidates.length === 1

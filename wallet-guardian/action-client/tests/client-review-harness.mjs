@@ -55,7 +55,7 @@ class Element {
   addEventListener(event, handler) { this.listeners.set(event, handler); }
 }
 
-export async function harness({ onFetch, onWallet, initialSession = session(), pathname = `/t/${REF}`, setupWindow, importOverrides = {} } = {}) {
+export async function harness({ onFetch, onWallet, initialSession = session(), pathname = `/t/${REF}`, setupWindow, importOverrides = {}, env = {} } = {}) {
   const sourceRoot = process.env.GUARDIAN_REVIEW_SOURCE_DIR
     ? resolve(process.env.GUARDIAN_REVIEW_SOURCE_DIR)
     : new URL('../src/', import.meta.url).pathname;
@@ -114,12 +114,19 @@ export async function harness({ onFetch, onWallet, initialSession = session(), p
     login, logout, cancelPrivateTask, loadPrivateTask, openPrivateTask, queryCapability, restoreSession, reverifyCurrent,
     selectWallet: typeof selectWallet === 'function' ? selectWallet : undefined,
     walletCandidates: typeof walletCandidates === 'function' ? walletCandidates : undefined,
+    walletConnect: typeof walletConnect === 'undefined' ? undefined : walletConnect,
+    wcCandidate: typeof wcCandidate === 'undefined' ? undefined : wcCandidate,
     getState: () => ({ loadGeneration, lastPlan, lastTask, csrfToken, privateRef, privateRevision, privateCancelAllowed, reread: currentVerification(),
       authBusy, sessionAddress,
       ...(typeof connectionEpoch === 'number' ? { connectionEpoch, selected: selectedCandidate, revokePending, lastRevocation } : {}) })
   };`;
   const transpiled = ts.transpileModule(
-    source.replace('import.meta.env.VITE_GUARDIAN_MAINNET_SEND', JSON.stringify('true')) + append,
+    // Build-time env (Vite replaces import.meta.env.VITE_*). MAINNET_SEND defaults to 'true' here so
+    // tests prove requestUserSend() still refuses even with the flag on. WalletConnect defaults off.
+    source.replace(/import\.meta\.env\.(VITE_[A-Z_]+)/g, (_m, key) => {
+      const values = { VITE_GUARDIAN_MAINNET_SEND: 'true', ...env };
+      return values[key] === undefined ? 'undefined' : JSON.stringify(values[key]);
+    }) + append,
     { compilerOptions: { target:ts.ScriptTarget.ES2022, module:ts.ModuleKind.CommonJS } },
   ).outputText;
   vm.runInContext(transpiled, context, { filename: 'review-actual-main.cjs', timeout:3000 });

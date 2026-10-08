@@ -10,5 +10,5 @@
     "types": []
   },
   "include": ["src"],
-  "exclude": ["src/server"]
+  "exclude": ["src/server", "src/wallets/walletconnect-sdk.mjs"]
 }

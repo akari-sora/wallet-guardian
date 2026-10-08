@@ -8,6 +8,7 @@
  */
 import { assertWalletRequest } from "./request-policy.mjs";
 import { SOURCE_BINANCE, SOURCE_EIP6963, SOURCE_INJECTED } from "./registry.mjs";
+import { SOURCE_WALLETCONNECT } from "./walletconnect-config.mjs";
 
 export const ENCODING_UTF8 = "utf8";
 export const ENCODING_HEX = "hex";
@@ -15,12 +16,15 @@ export const ENCODING_HEX = "hex";
 /**
  * Per-source personal_sign transport. All "utf8" (the plain message string, as the D1-LIVE-01
  * client sent it). "hex" exists for a provider that is shown on a real device to need it; it is
- * not enabled for any source without that evidence. rdns/name never select an encoding.
+ * not enabled for any injected source without that evidence. rdns/name never select an encoding.
+ * W-B: WalletConnect uses "hex": the WalletConnect/Reown Ethereum JSON-RPC reference defines the
+ * personal_sign message as DATA (0x-hex bytes). The signed bytes are the same UTF-8 bytes.
  */
 export const SIGN_ENCODING = Object.freeze({
   [SOURCE_EIP6963]: ENCODING_UTF8,
   [SOURCE_BINANCE]: ENCODING_UTF8,
   [SOURCE_INJECTED]: ENCODING_UTF8,
+  [SOURCE_WALLETCONNECT]: ENCODING_HEX,
 });
 
 export function signEncodingFor(candidate) {

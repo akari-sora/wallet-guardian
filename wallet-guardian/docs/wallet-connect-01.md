@@ -1,7 +1,7 @@
 # WALLET-CONNECT-01 W-A：EIP-6963＋幣安注入連線（唯讀登入）
 
 狀態：W-A 程式與離線／產物測試。真錢包路徑一律 **REAL_WALLET_PENDING**，由本人實測。
-W-B（WalletConnect v2／Reown）是之後的獨立 MR，本切片沒有任何 WalletConnect 依賴，也不連 Relay。
+W-B（WalletConnect v2／Reown）見本文件後段「W-B」；W-A 路徑本身沒有 WalletConnect 依賴，也不連 Relay。
 
 ## 範圍
 
@@ -57,8 +57,8 @@ W-B（WalletConnect v2／Reown）是之後的獨立 MR，本切片沒有任何 W
 - `request-policy.mjs` 預設拒絕；只允許 `eth_accounts`、`eth_chainId`、（已選＋使用者動作的）`eth_requestAccounts`、
   （使用者動作的）`wallet_getCapabilities`、以及 `personal_sign`——且只在訊息通過 `acceptLoginMessage` 固定讀取聲明、
   地址等於登入地址、送出 bytes 等於該訊息 UTF-8 bytes 時。交易送出／簽名、typed data、`eth_sign`、權限、委託、升級一律拒絕。
-- personal_sign 傳輸格式是 adapter 細節：`utf8`（原字串，D1-LIVE-01 行為）或 `hex`（`0x`＋UTF-8 hex）。目前所有來源都是 `utf8`；
-  `hex` 只在真機證明需要時才對特定來源啟用，rdns／名稱不能選擇編碼。拒簽就結束，不改用 `eth_sign` 或其他方法。
+- personal_sign 傳輸格式是 adapter 細節：`utf8`（原字串，D1-LIVE-01 行為）或 `hex`（`0x`＋UTF-8 hex）。注入來源都是 `utf8`；
+  WalletConnect（W-B）是 `hex`（Reown RPC 文件將 personal_sign 訊息定義為 DATA）。編碼只依連線來源決定，rdns／名稱不能選擇編碼。拒簽就結束，不改用 `eth_sign` 或其他方法。
 - rdns／uuid／名稱不是身分：不送到伺服器，不進 D1，不影響 ACL。
 
 ## 驗收對照（本 MR 新增，皆為離線／合成）
@@ -91,4 +91,126 @@ npm run build && npm run test:wallets:artifact   # 需要 Chrome（WG_CHROME）
 | S24 Ultra：幣安 App 內建 dApp 瀏覽器開 `/t/<ref>`，SIWE、查看、取消、登出 | REAL_WALLET_PENDING |
 | 每條路徑一次拒簽／取消，且沒有交易請求 | REAL_WALLET_PENDING |
 
-W-B 各列（WalletConnect QR、Chrome→幣安 App→Chrome、非幣安 WC 錢包）屬於 W-B，且需要本人建立的 Reown Project ID。
+W-B 各列見下方「W-B 真機驗收」。
+
+---
+
+# WALLET-CONNECT-01 W-B：WalletConnect v2（Reown）唯讀登入
+
+狀態：W-B 程式＋離線／合成測試＋建置產物測試。**沒有任何真錢包驗證**；真機各列皆 REAL_WALLET_PENDING。
+WalletConnect 只是第二種「連線」：同一個 `guardedRequest()`／`request-policy.mjs`（預設拒絕）、同一份固定 SIWE、同一個後端驗簽。
+送出仍硬關：`requestUserSend()` 無條件拒絕，`execution_authorized=false`，`VITE_GUARDIAN_MAINNET_SEND` 不設定。
+
+## 設定（公開建置設定，fail-closed）
+
+| 變數 | 說明 |
+| --- | --- |
+| `VITE_WALLETCONNECT_ENABLED` | 必須是字串 `true` |
+| `VITE_REOWN_PROJECT_ID` | Reown Project ID（32 位小寫 hex，公開 client 識別碼）。只由 env 注入，原始碼不寫死 |
+
+任一缺少或格式不符：選單不出現 WalletConnect、主 bundle 不含 SDK chunk、CSP 不放行 Relay／Verify。
+不使用 Reown 付費功能；`showQrModal=false`（不載入 AppKit，`@reown/appkit/core` 在 Vite 以 stub 取代）。
+
+## 模組
+
+| 檔案 | 用途 |
+| --- | --- |
+| `src/wallets/walletconnect-config.mjs` | 設定判斷、鎖定版本、鏈／方法常數、端點常數、版本化錢包跳轉設定、pairing URI 格式檢查 |
+| `src/wallets/walletconnect-session.mjs` | proposal／session 範圍計算：CAIP 帳戶、鏈、方法交集、到期 |
+| `src/wallets/walletconnect-sdk.mjs` | 唯一 import SDK 的模組（lazy chunk）：`ReadOnlyLoginProvider`、`providerOptions()`、QR 繪製（canvas） |
+| `src/wallets/walletconnect.mjs` | EIP-1193 facade：`eth_accounts`／`eth_chainId` 本地回答；`eth_requestAccounts` 才連線；只轉送 `personal_sign`；其他一律 4200 |
+| `src/csp.mjs` | CSP 單一來源；`vite.config.ts` 依建置設定產生 `dist/_headers` |
+| `src/main.ts` | 選單加 WalletConnect 選項；QR／跳轉面板；WC 專用提示；WC 永不隱含選取、永不 fallback |
+
+鎖定版本：`@walletconnect/ethereum-provider` **2.25.0**（精確版本，lockfile 已更新）；`qrcode-generator` 2.0.4。
+測試用 devDependencies：`@walletconnect/sign-client` 2.25.0（測試錢包）、`ws` 8.21.0（本機 mock relay）。
+
+## Proposal（WB-01）與與規格的差異
+
+送出設定：`chains=[56]`、`methods=["personal_sign"]`、`events=["chainChanged","accountsChanged"]`，
+`optionalChains=[]`、`optionalMethods=[]`、`optionalEvents=[]`，`rpcMap={56: 可信 BSC RPC}`，`telemetryEnabled=false`。
+
+**差異（需知悉）**：規格要求 required=`eip155:56`、`optionalNamespaces: {}`。SDK 2.25.0 的 sign-client 會把 required 一律搬到 optional，
+實際送出的 proposal 為 `requiredNamespaces: {}`、`optionalNamespaces: {eip155: {chains:["eip155:56"], methods:["personal_sign"], events:[...]}}`
+（WB-01 與 WC-ARTIFACT 皆擷取實際 proposal）。聯集範圍與契約完全相同；本頁在核准後自行強制：session 必須有 `eip155:56` 帳戶且核准 `personal_sign`，
+否則立即中斷並視為失敗（WB-02）。錢包多核准的方法／鏈只顯示提示，產品可用方法永遠是交集 `["personal_sign"]`，
+`wallet_switchEthereumChain` 在 provider 層是 no-op。
+
+## 網路與 CSP（W-B5）
+
+依鎖版 SDK 原始碼核對，dapp 端實際使用：
+
+| 端點 | 用途 | 放行 |
+| --- | --- | --- |
+| `wss://relay.walletconnect.org` | Relay（irn） | `connect-src` |
+| `https://verify.walletconnect.org/v3/attestation` | Verify 隱藏 iframe（proposal／request attestation） | `frame-src` |
+| `pulse.walletconnect.org` | 遙測 | 不放行（`telemetryEnabled=false`） |
+| `rpc.walletconnect.org` | Reown RPC | 不放行（`rpcMap` 指向可信 BSC RPC，且 facade 不轉送 RPC） |
+| `echo.walletconnect.com`、`api.web3modal.org`、explorer | 推播（錢包端）／AppKit／目錄 | 不放行、不載入 |
+
+WalletConnect 開啟時的 CSP：
+
+```
+default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;
+connect-src 'self' https://bsc-dataseed.bnbchain.org wss://relay.walletconnect.org;
+frame-src https://verify.walletconnect.org; manifest-src 'self'; base-uri 'none'; form-action 'none';
+frame-ancestors 'none'; object-src 'none'
+```
+
+關閉時去掉 Relay，`frame-src 'none'`。另有 `Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`。
+沒有萬用字元、沒有 `unsafe-eval`／`unsafe-inline`。`_headers` 只套用靜態頁，不套用 Pages Function 回應。
+
+## 流程與狀態
+
+- 選 WalletConnect 不會連線；按登入才 lazy 載入 SDK 並建立 pairing。只選注入錢包時 SDK 從不載入、Relay 從不連線。
+- Pairing URI 只存在於 QR canvas 與跳轉連結中，連線、取消、過期、失敗即清除；不進 banner、task、D1、Bot、log、遙測（SDK logger=silent）。
+  SDK 自身的 IndexedDB 保存 session／keychain，屬於「SDK 必要儲存」。
+- 期限：初始化 15 秒、取得 URI 20 秒、pairing 5 分鐘。重複按登入共用同一 pairing；取消／過期會清除未完成 pairing，晚到的 session 會被中斷，不會變成已連線。
+- 錢包端換帳戶、session 更新／刪除／到期：只更新錢包身分並讓重查失效，不自動登出、不自動重簽。
+- 重新整理：D1 session 由 cookie 恢復；WalletConnect session 只有在使用者再次按登入時才恢復（不重新 pairing、不自動簽名）。恢復 WC session ≠ 恢復 D1 登入。
+- 從 WalletConnect 切到注入錢包：中斷 WC session，並依 W-A3 撤銷網站 session。登出保留 WC session。
+- Relay／SDK 失敗：明確顯示 W-B 失敗，不改用注入錢包；W-A 照常可用。
+
+## 手機跳轉（W-B4）
+
+版本化設定 `WC_DEEP_LINKS.version = "2026-10-08.1"`，來源：WalletConnect Explorer 列表
+`8a0ee50d1f22f6651afcae7eb4253e52a3310b90af5daef78a8c4929a9bb99d4`（Binance Wallet；`mobile.universal` https://app.binance.com/cedefi，
+`mobile.native` bnc://app.binance.com/cedefi/）。連結只由此設定與 SDK 產生的 URI 組成，不取自 task、query 或 peer metadata：
+
+1. `https://app.binance.com/cedefi/wc?uri=<encoded>`（新分頁）
+2. `bnc://app.binance.com/cedefi/wc?uri=<encoded>`（備用）
+3. `wc:` 原始 URI（交給系統已安裝的任一 WC 錢包）
+
+跳轉失敗時 QR／重試仍在，不會假裝已連線。不跨瀏覽器搬 cookie／token。
+
+## 驗收對照（皆為離線／合成；沒有真錢包）
+
+| 測試 | 位置 |
+| --- | --- |
+| WB-01 actual-proposal | `tests/walletconnect-sdk.test.mjs`（真 SDK 2.25.0 ↔ mock relay ↔ sign-client 測試錢包）；`integration/walletconnect-artifact.test.mjs` 亦擷取 |
+| WB-02 session-scope | `tests/walletconnect-sdk.test.mjs` |
+| WB-03 pairing-lifecycle | `tests/walletconnect-sdk.test.mjs`、`tests/walletconnect-page.test.mjs` |
+| WB-04 update-and-restore | `tests/walletconnect-sdk.test.mjs`（含重新整理恢復、hex bytes＝UTF-8 訊息、後端還原地址）、`tests/walletconnect-page.test.mjs` |
+| WB-05 mobile-return | `tests/walletconnect-page.test.mjs`（跳轉連結、切背景返回、原任務、拒絕／未安裝後重試） |
+| WB-06 relay-isolation | `tests/walletconnect-sdk.test.mjs`（relay 斷線）、`tests/walletconnect-page.test.mjs`（SDK 失敗不 fallback、W-A 仍可登入） |
+| WC-ARTIFACT-01 no-send | `integration/walletconnect-artifact.test.mjs`：關／開兩種建置、注入與 WC 兩種連線、偽造任務＋強制點確認＝0 筆交易請求，固定 SIWE 由真實 handler 驗簽 |
+| WC-ARTIFACT-02 network-policy | 同上：實際回應 CSP、0 個 CSP 違規、未選 WC 不抓 SDK chunk 不連 Relay、只接觸 Relay＋Verify、URI 不留在 DOM／頁面儲存／API／console、project ID 只由 env 注入 |
+
+Relay 是程序內 mock（Playwright `routeWebSocket`），Verify iframe 以空白頁回應；不是 Reown 真服務，也不是真錢包 App。
+
+```bash
+cd action-client
+npm run test:wallets
+npm run build && npm run test:wallets:artifact   # 需要 Chrome（WG_CHROME）；W-B 產物測試自行建置兩種變體
+```
+
+## W-B 真機驗收（本人）
+
+Reown 後台 allowlist 已加入 `https://wallet-guardian-action-client.pages.dev`，生效最多可能需 6 小時；生效前真 Relay 可能回來源錯誤，這不代表程式錯誤。
+
+| 路徑 | 狀態 |
+| --- | --- |
+| 桌機：WalletConnect QR → 幣安 App，連線＋SIWE，桌機取得正確 session | REAL_WALLET_PENDING |
+| S24 Ultra：Chrome → 幣安 App → Chrome，同機跳轉返回原任務 | REAL_WALLET_PENDING |
+| WalletConnect → 一個非幣安錢包（證明通用 WC 路徑） | REAL_WALLET_PENDING |
+| 以上每條路徑一次拒簽／取消，且沒有交易請求 | REAL_WALLET_PENDING |
