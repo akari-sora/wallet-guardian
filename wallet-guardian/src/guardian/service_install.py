@@ -342,9 +342,15 @@ def _probe(
     result = _coerce(runner(["loginctl", "show-user", user, "--property=Linger", "--property=State"]))
     linger, manager = _parse_linger(result.stdout if result.returncode == 0 else "")
     if systemd_present is None:
-        systemd_present = shutil.which("systemctl") is not None
+        # The binary alone is not systemd: a container with systemctl installed and
+        # another PID 1 has no /run/systemd/system and cannot run any unit.
+        systemd_present = shutil.which("systemctl") is not None and Path("/run/systemd/system").is_dir()
     if cron_present is None:
-        cron_present = shutil.which("cron") is not None or shutil.which("crond") is not None
+        # The installer drives `crontab`; the daemon lives in sbin, which a user PATH often omits.
+        sbin = os.pathsep.join(["/usr/sbin", "/sbin", os.environ.get("PATH", "")])
+        cron_present = shutil.which("crontab") is not None and (
+            shutil.which("cron", path=sbin) is not None or shutil.which("crond", path=sbin) is not None
+        )
     return {
         "cron_present": bool(cron_present),
         "linger": linger,
