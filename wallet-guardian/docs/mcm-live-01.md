@@ -98,7 +98,7 @@ uv run --frozen guardian compare-legacy --mcm-config "$MCM_CONFIG" --legacy-stat
 - `news_gets`：新聞 GET 次數
 - `kinza_eth_calls`：打到已釘選 Kinza Pool 或 Provider 的 `eth_call`，另外計，不從 RPC 次數裡扣掉
 
-Kinza 讀取沒有快取。BSC 約 25 個準備金、Ethereum 約 15 個，每個準備金約 9 個 `eth_call`。shadow 預算要把這筆算進去。Pool 與 Provider 的公開地址見 `docs/mcm-01.md`；文件上的地址不是 safe list，也不是送出白名單。
+Kinza 的 Pool 與 Provider 身份、以及準備金清單，每一輪、每一個錢包都重讀。清單或實作變了就丟掉這一輪的中介資料。aToken 與借款的 `balanceOf`、`getUserAccountData` 不進快取，兩個錢包分開計。BSC 約 25 個準備金、Ethereum 約 15 個，每個準備金約 9 個 `eth_call`。shadow 的 `budget.json` 要含 `kinza_eth_calls`，也要併入 run-once 的 `budget`。Pool 與 Provider 的公開地址見 `docs/mcm-01.md`；文件上的地址不是 safe list，也不是送出白名單。細節見 `docs/mcm-live-01r.md`。
 
 ## 投毒備註與游標
 
