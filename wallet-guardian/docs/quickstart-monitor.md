@@ -52,11 +52,11 @@ guardian compare-legacy --mcm-config PATH --legacy-state PATH
 1. 公開 `delivery.mode` 是 `configured_sender`。
 2. `delivery.profile_env` 指到的私人檔在 repo 外面、POSIX 權限 `0600`，而且 JSON 裡有 `"single_sender_handoff": true`。
 3. 這次執行沒有帶 `--no-send`。
-4. 呼叫端注入一個 sender。
+4. 呼叫端注入一個 sender，或私人 profile 明確 opt-in 一個 Telegram 頻道（見 `docs/notifications.md`）。
 
-範例設定是 `outbox_only`，所以預設是關的。少任何一項，列留在 pending，狀態是 `send_disabled` 或 `sender_not_configured`。這包沒有 Telegram、Slack、email 或 webhook 用戶端。sender 頻道留到真正切換時再接。
+範例設定是 `outbox_only`，所以預設是關的。少任何一項，列留在 pending，狀態是 `send_disabled` 或 `sender_not_configured`。沒有 opt-in 就不會送。`--no-send` 優先於設定、opt-in 與注入的 sender。
 
-同一時間只有一個 sender 能拿租約。另一個程序看到 `lease_held` 就什麼都不送。已經標成 sent 的列，或舊例行已經通知過的交易，不會再送。sender 逾時或失敗時列留在 pending，並記下嘗試次數，稍後再試。
+同一時間只有一個 owner 能拿租約。另一個 owner 會被拒絕。已經標成 sent、`provider_accepted`、`unknown` 或 `failed_permanent` 的列不會自動重送。舊例行已經通知過的交易仍是 `suppressed_legacy`。注入的 sender 若在寫出前失敗，列留在 pending，並記下嘗試次數。Telegram 在請求寫出之後逾時是 `unknown`，見 `docs/notifications.md`。
 
 舊例行要等這份交接明確完成之後才停止送出。這包不會自己停排程，也不會在失敗時刪狀態。`execution.auto_disable_schedule` 是 false。
 

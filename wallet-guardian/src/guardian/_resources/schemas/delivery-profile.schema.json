@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "guardian.delivery-profile.v1",
+  "$comment": "Private delivery profile. The bot token is never stored here; token_env is only the environment variable name. Chat ids in examples must be synthetic.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "guardian.delivery-profile.v1"
+    },
+    "channel": {
+      "const": "telegram"
+    },
+    "opt_in": {
+      "type": "boolean"
+    },
+    "owner_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "chat_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^-?[0-9]{1,20}$"
+    },
+    "token_env": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{1,95}$"
+    },
+    "single_sender_handoff": {
+      "type": "boolean"
+    },
+    "legacy_shadow": {
+      "const": false
+    },
+    "event_watermark": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "channel",
+    "opt_in",
+    "owner_id",
+    "chat_id",
+    "token_env",
+    "single_sender_handoff",
+    "legacy_shadow"
+  ]
+}

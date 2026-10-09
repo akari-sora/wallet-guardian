@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from guardian.configuration import PublicConfig, PrivateInputs
+from guardian.delivery import CANARY_STATUS
 from guardian.errors import ConfigError
 from guardian.rules import dedup_key
 from guardian.storage import Database
@@ -118,7 +119,9 @@ def monitor_plan(public_config: PublicConfig, private_inputs: PrivateInputs) -> 
     recipient_profile_exists = _profile_exists(profile_env)
     return {
         "budgets": json.loads(json.dumps(document["budgets"])),
+        "canary": CANARY_STATUS,
         "delivery": {
+            "canary": CANARY_STATUS,
             "mode": delivery.get("mode"),
             "recipient_profile_exists": recipient_profile_exists,
         },

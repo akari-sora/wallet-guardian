@@ -194,6 +194,8 @@ def dispatch(
     sender: Any = None,
     clock: Callable[[], float] | None = None,
     egress_hooks: Any = None,
+    notification_backend: Any = None,
+    notification_resolve: Any = None,
 ) -> tuple[dict, int]:
     if args.command == "egress-doctor":
         return _egress_doctor(args, egress_hooks)
@@ -201,7 +203,7 @@ def dispatch(
         return doctor(), 0
     if args.command == "run-once":
         if getattr(args, "mcm_config", None):
-            return _mcm_run(args, backend, sender, clock)
+            return _mcm_run(args, backend, sender, clock, notification_backend, notification_resolve)
         result = run_once(Path(args.config), Path(args.db) if args.db else None)
         return result, 0 if result["status"] != "degraded" else 3
     if args.command == "self-check":
@@ -461,6 +463,8 @@ def _mcm_run(
     backend: Any,
     sender: Any,
     clock: Callable[[], float] | None,
+    notification_backend: Any = None,
+    notification_resolve: Any = None,
 ) -> tuple[dict, int]:
     public, private, database = _open_mcm(args.mcm_config)
     try:
@@ -475,6 +479,8 @@ def _mcm_run(
             sender=sender,
             news_input=_optional_bytes(getattr(args, "news_input", None)),
             price_input=_optional_bytes(getattr(args, "price_input", None)),
+            notification_backend=notification_backend,
+            notification_resolve=notification_resolve,
         )
     finally:
         database.close()
@@ -629,6 +635,8 @@ def main(
     sender: Any = None,
     clock: Callable[[], float] | None = None,
     egress_hooks: Any = None,
+    notification_backend: Any = None,
+    notification_resolve: Any = None,
 ) -> int:
     load_local_env()
     parser = build_parser()
@@ -638,7 +646,13 @@ def main(
         if args.command in {"run-once", "wallets"} and getattr(args, "config", None):
             load_config(Path(args.config))
         payload, code = dispatch(
-            args, backend=backend, sender=sender, clock=clock, egress_hooks=egress_hooks,
+            args,
+            backend=backend,
+            sender=sender,
+            clock=clock,
+            notification_backend=notification_backend,
+            notification_resolve=notification_resolve,
+            egress_hooks=egress_hooks,
         )
     except GuardianError as exc:
         payload = {"status": "error", "error_type": type(exc).__name__, "error": redact(str(exc))}
