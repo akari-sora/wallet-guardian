@@ -1,0 +1,25 @@
+[Unit]
+Description=Wallet Guardian MCM shadow round @VERSION@
+# Read-only monitor. This unit does not sign, broadcast, or fetch code.
+# It does not wait for an LLM chat to be idle.
+# Fixed installed version @VERSION@. Do not download main or update dependencies from this unit.
+# A timeout is not an on-time slot and it is not a zero result.
+
+[Service]
+Type=oneshot
+@USER_DIRECTIVE@
+Environment=GUARDIAN_INSTALLED_VERSION=@VERSION@
+Environment=GUARDIAN_CONFIG_DIR=@CONFIG_DIR@
+Environment=GUARDIAN_STATE_DIR=@STATE_DIR@
+ExecStart=@EXECUTABLE@ run-once --mcm-config @MCM_CONFIG@ --no-send
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@STATE_DIR@
+PrivateTmp=yes
+MemoryMax=512M
+CPUQuota=50%
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=@WANTED_BY@

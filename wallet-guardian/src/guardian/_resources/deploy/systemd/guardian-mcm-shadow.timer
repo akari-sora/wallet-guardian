@@ -1,0 +1,14 @@
+[Unit]
+Description=Wallet Guardian MCM shadow every 3 hours
+# Persistent is false. A later start after downtime fills data and does not mean every missed slot ran on time.
+# RandomizedDelaySec is 0 so the slot is not smeared.
+
+[Timer]
+OnCalendar=@ON_CALENDAR@
+RandomizedDelaySec=0
+Persistent=false
+AccuracySec=1s
+Unit=guardian-mcm-shadow.service
+
+[Install]
+WantedBy=timers.target

@@ -141,29 +141,12 @@ def execute_init(
 
 
 def install_service_plan(*, dry_run: bool, mcm_config: str | None) -> dict[str, Any]:
-    """Describe units that are not installed. This build never enables them."""
-    config = "<monitor.json>"
-    if isinstance(mcm_config, str) and mcm_config.strip():
-        config = mcm_config.strip()
-    return {
-        "dry_run": dry_run,
-        "error": "install-service is not implemented",
-        "installed": False,
-        "planned_units": [
-            {
-                "action": "print_only",
-                "exec": f"guardian run-once --mcm-config {config} --no-send",
-                "name": "guardian-monitor.service",
-            },
-            {
-                "action": "print_only",
-                "name": "guardian-monitor.timer",
-                "schedule": "disabled until a later package installs it",
-            },
-        ],
-        "sender_started": False,
-        "status": "not_implemented",
-    }
+    """Print the unattended plan. This entry never enables a unit."""
+    from guardian.service_install import execute_install_service
+
+    if not isinstance(dry_run, bool):
+        raise ConfigError("dry_run")
+    return execute_install_service(dry_run=True, apply=False, mcm_config=mcm_config)
 
 
 def _load_answers(path: str | None, prompt: Callable[[str], str]) -> dict[str, Any]:

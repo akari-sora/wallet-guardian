@@ -1,0 +1,25 @@
+[Unit]
+Description=Wallet Guardian legacy collector placeholder @VERSION@
+# Placeholder ExecStart for the operator's legacy collector command.
+# This unit does not wait for an LLM chat to be idle.
+# It is separate from the MCM shadow unit and from the watchdog unit.
+# Fixed installed version @VERSION@. Do not download main or update dependencies from this unit.
+
+[Service]
+Type=oneshot
+@USER_DIRECTIVE@
+Environment=GUARDIAN_INSTALLED_VERSION=@VERSION@
+Environment=GUARDIAN_CONFIG_DIR=@CONFIG_DIR@
+Environment=GUARDIAN_STATE_DIR=@STATE_DIR@
+ExecStart=@LEGACY_EXECUTABLE@
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@STATE_DIR@
+PrivateTmp=yes
+MemoryMax=512M
+CPUQuota=50%
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=@WANTED_BY@
