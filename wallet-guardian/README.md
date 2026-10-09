@@ -1,12 +1,49 @@
 # Wallet Guardian
 
-跨鏈錢包的唯讀監控，以及錢包瀏覽器裡的任務工作台。使用者可見文字預設繁體中文，時區 `Asia/Taipei`。
+Read-only multichain wallet monitor for one operator on a machine they control. It watches addresses you type, stores coverage locally, and leaves alerts in an outbox. It is not a hosted service. A tenant id is a label, not isolation between mutually untrusted customers.
 
-這不是投資建議。建置與測試也不等於獲准執行任何主網資產交易。
+It does not sign, does not build transactions, and does not broadcast. It never asks for a seed phrase or a wallet private key. API keys stay in your environment. Config files store env var names only (`endpoint_env`, `credential_env`). What leaves the machine is described before anything is written: wallet addresses go to the RPC or indexer hosts you enable; your hostname is not added to those requests; GoPlus and Chainabuse user-address lookups stay off. See [docs/security-model.md](docs/security-model.md) and [docs/threat-model.md](docs/threat-model.md).
 
-授權：AGPL-3.0-only（見 `LICENSE`）。
+You do not need the author's Grok session, Cloudflare, D1, a wallet login, or Node to run the monitor. The Action Client below is optional.
 
-多鏈監控套件 MCM-01 的範圍契約見 [docs/mcm-01.md](docs/mcm-01.md)。那是計畫，不是 live 驗證。
+This is not investment advice. Building and testing it is not permission to move mainnet assets.
+
+license: pending
+
+The MCM-01 scope contract is [docs/mcm-01.md](docs/mcm-01.md). That document is a plan, not a live result.
+
+## Quickstart
+
+Install a verified wheel and pinned constraints as in [docs/install.md](docs/install.md). Then, from a machine with the `guardian` command:
+
+```bash
+guardian init --from answers.json --yes
+guardian config validate --mcm-config monitor.json
+guardian run-once --mcm-config monitor.json --no-send
+guardian coverage --mcm-config monitor.json
+guardian install-service --dry-run
+```
+
+`answers.json` lists the addresses, chains, and plugins you choose. Use a synthetic address in examples, never a real watch address in this repo. `init` does not scan for other addresses, does not enable third-party user-address lookups, and does not start a sender. It prints which source would receive which data. Nothing is written until you pass `--yes` (or type `yes` at the prompt). A second run refuses to overwrite. `--force` backs up the config files first and does not touch the state database.
+
+`run-once --no-send` reads with your endpoints and writes the local outbox only. `coverage` shows each capability. A missing key is `credential_missing` with a hint, not a zero balance and not a complete history. `install-service --dry-run` prints planned unit names and exits non-zero. It does not install anything. You enable a schedule later, yourself.
+
+No-key and bring-your-own-key are the same files: credential values are never written. No-key means you leave the credential variables unset, so keyed indexers stay `credential_missing` while public RPC still runs. Bring-your-own-key means you export your own values under the names in the secret profile. The difference is described in [docs/api-keys.md](docs/api-keys.md).
+
+## Legacy commands
+
+The Lista / BNB Chain path is unchanged. Use `--config` for that file and `--mcm-config` for a profile from `init`. These commands still behave as before:
+
+```bash
+guardian doctor --json
+guardian run-once --config private/config.json --json
+guardian self-check --json
+guardian snapshot --json
+```
+
+## Backup, upgrade, uninstall
+
+Back up the state directory before an upgrade, install the new wheel with that release's constraints, and uninstall without deleting the XDG config and state directories unless you mean to. The steps are in [docs/install.md](docs/install.md).
 
 ## 現在做得到
 
@@ -132,4 +169,4 @@ BNB Chain 官方 RPC、Lista 官方文件上的 StakeManager proxy、Hyperliquid
 
 ## License
 
-Wallet Guardian is licensed under the GNU Affero General Public License v3.0 only (SPDX: AGPL-3.0-only). See [LICENSE](LICENSE). If you run a modified version as a network service, AGPL section 13 requires offering its source to that service's users.
+license: pending
