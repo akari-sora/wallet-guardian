@@ -695,6 +695,11 @@ def main(
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
+        if getattr(args, "mcm_config", None):
+            # Scheduled jobs have no shell profile: fill only the unset path variables from env-paths.json.
+            for key, value in _env_with_sibling_paths(args.mcm_config).items():
+                if key in _ENV_PATH_KEYS:
+                    os.environ.setdefault(key, value)
         # Touch config validation early for discover/run so a bad address fails closed.
         if args.command in {"run-once", "wallets"} and getattr(args, "config", None):
             load_config(Path(args.config))

@@ -536,7 +536,8 @@ def test_mcm_share_s3_08_scheduled_run_finds_private_paths_from_env_paths_file(
 ) -> None:
     """MCM-SHARE-S3-08. A cron/systemd job has no shell profile; init's env-paths.json supplies the path variables."""
     for key in ("MONITOR_ACCOUNTS_FILE", "MONITOR_DELIVERY_PROFILE", "MONITOR_SECRET_PROFILE", "MONITOR_STATE_DIR"):
-        monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv(key, "x")  # registers teardown: main() sets these variables process-wide
+        monkeypatch.delenv(key)
     cfg = tmp_path / "cfg"
     example = ROOT / "examples" / "answers.example.json"
     assert main(["init", "--dir", str(cfg), "--from", str(example), "--yes"]) == 0
@@ -547,6 +548,14 @@ def test_mcm_share_s3_08_scheduled_run_finds_private_paths_from_env_paths_file(
     out = capsys.readouterr().out
     assert code == 0, out
     assert "MONITOR_ACCOUNTS_FILE is not set" not in out
+    # run-once reads the same variables from the process environment (secret profile, delivery profile)
+    for key in ("MONITOR_ACCOUNTS_FILE", "MONITOR_DELIVERY_PROFILE", "MONITOR_SECRET_PROFILE", "MONITOR_STATE_DIR"):
+        monkeypatch.delenv(key, raising=False)
+    code = main(["run-once", "--mcm-config", str(cfg / "monitor.json"), "--no-send"])
+    out = capsys.readouterr().out
+    assert "is not set" not in out, out
+    for key in ("MONITOR_ACCOUNTS_FILE", "MONITOR_DELIVERY_PROFILE", "MONITOR_SECRET_PROFILE", "MONITOR_STATE_DIR"):
+        monkeypatch.delenv(key, raising=False)
     # the process environment still wins over the file
     other = tmp_path / "other-state"
     monkeypatch.setenv("MONITOR_STATE_DIR", str(other))
