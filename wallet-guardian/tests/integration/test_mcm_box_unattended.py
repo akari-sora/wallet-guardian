@@ -521,7 +521,7 @@ def test_mcm_share_s3_07_systemctl_binary_without_running_systemd_selects_cron(
     from guardian import service_install as si
 
     real_is_dir = Path.is_dir
-    monkeypatch.setattr(si.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(si.shutil, "which", lambda name, path=None: f"/usr/bin/{name}")
     monkeypatch.setattr(Path, "is_dir", lambda self: False if os.fspath(self) == "/run/systemd/system" else real_is_dir(self))
     facts = si._probe("monitor", lambda argv: CommandResult(1, "", ""), systemd_present=None, cron_present=None)
     assert facts["systemd_present"] is False and facts["cron_present"] is True
