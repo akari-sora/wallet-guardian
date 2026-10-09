@@ -47,3 +47,5 @@ evaluate(database, tenant, clock=clock, backend=backend, resolve=resolve, holdin
 ```
 
 `backend` must be a fixture backend. A live HTTP backend and any `sender` are refused before a read. `tests/integration/test_mcm_yld_promotions.py` is a parser and state integration suite, not a CLI acceptance suite. The `test_mcm_yld_01` through `test_mcm_yld_05` groups cover mapping, the noise series, terms, the caps, and the absence of live fetches and sends.
+
+Experimental offline fixture/parser component, disabled by default, with no scheduler, live ingestion or delivery. Extracted dates and terms are partial machine interpretations, not confirmation of eligibility, safety, completeness or current offer availability. Verify original issuer terms before acting.
