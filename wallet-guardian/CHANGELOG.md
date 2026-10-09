@@ -5,14 +5,34 @@ All notable changes to the Wallet Guardian monitor are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-PEP 440 version `0.4.0rc1` maps to the git tag name `v0.4.0-rc.1`.
+PEP 440 version `0.4.0rc2` maps to the git tag name `v0.4.0-rc.2`.
 Whether that tag is published, see GitLab releases. This changelog does not publish. The distribution name is `wallet-guardian-monitor`.
 
 ## [Unreleased]
 
+## [0.4.0rc2] - 2026-10-09
+
+Preview channel. `published` stays false for PyPI: nothing is uploaded to a package index. The monitor is read-only: it does not sign, build a transaction, or broadcast. Wheel: `wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl`.
+
+### Fixed and changed
+
+- User-facing preview copy: a CLI guide, command reference, scheduling, FAQ, Grok Bot notes, security and privacy, a contributing guide, and GitLab issue templates.
 - A 429 on `eth_chainId` is retried inside the round deadline and a successful identity is reused for that run; the example NodeReal source shares the `nodereal-key` budget so one key is not burst across hosts.
 - Indexer catch-up starts at the lookback origin, uses one span per explorer, and stops at `bootstrap_request_cap` so a later round can resume. Plan refusals and successful DNS answers are cached.
 - Transfer-log directions split on the same ranges, 429 waits honor Retry-After inside the round deadline, and eth_getLogs counts toward `bootstrap_request_cap` so a no-key bootstrap stays bounded.
+- Docs: the install page names the rc.2 wheel and tag; stale statements flagged by the external review (wheel name, tag text, signing boundary) are corrected. News-feed health, local OFAC screening and legacy compare classification are wired into `run-once`; a stale or unreadable feed is reported, never "no risk".
+
+### Known limitations / not claimed
+
+- The 72-hour formal shadow (24 successive windows) is not complete. Evidence for rc.2 is the full local gate at the release SHA, not a GitLab CI pass.
+- The monitor is a preview for the named chains in `docs/coverage-matrix.md`; it does not claim to cover all chains and is not claimed to be production ready.
+- Free-tier keys limit coverage. A rate-limited or key-less read is partial, `credential_missing`, or `identity_unreadable` with its cause, never a zero balance.
+- Telegram canary stays `NOT_RUN`; delivery defaults to off.
+- Whether git tag `v0.4.0-rc.2` is published, see GitLab releases. rc.1 is `v0.4.0-rc.1` and is unchanged.
+
+### Release blockers for stable
+
+- The formal 24-window shadow, which has not been run; live gaps recorded in `docs/coverage-matrix.md`; Telegram canary; a CI pass; a human decision to publish.
 
 ## [0.4.0rc1] - 2026-10-09
 
