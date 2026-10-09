@@ -35,6 +35,46 @@ These are the facts this matrix is allowed to treat as live probes. They were no
 - Hyperliquid info and the earlier Lista read are described in `docs/coverage.md`. This preview did not re-run them.
 - A formal shadow of 24 successive windows has not been run. The DNS-over-HTTPS resolver is implemented. On the reviewed SNI-proxy host, formal qualification is BLOCKED_EGRESS and the preview verdict may be OK; that preview verdict is not a coverage status. See `docs/host-network.md`. Telegram delivery is mock-only and the canary is NOT_RUN.
 
+## Verified probes, 2026-10-09 (MCM-SHARE-02)
+
+Each row below was run on 2026-10-09 (Taipei) from the Linux box with public test addresses only: a well-known public EVM address for balance and history, a public Solana staker address and a public Solana exchange address. No monitored address, key, or keyed URL is recorded. "RPC" probes are raw JSON-RPC calls (`eth_getBalance`, `getBalance`) to the named public endpoint. "CLI" means `guardian run-once --mcm-config … --no-send` on a throwaway state directory with DNS-over-HTTPS resolver mode (this host's system resolver returns 198.18.0.1, which the monitor refuses by design). These rows add to, and where they differ they supersede, the older tables on this page, whose rows were not re-probed. They are not a `live_pass`, and a read that works once is not a promise.
+
+| network / source | capability | path | status | evidence (2026-10-09) |
+| --- | --- | --- | --- | --- |
+| ethereum, bsc, arbitrum-one, base, optimism, polygon-pos, avalanche-c | balances.native | keyless public RPC | partial | RPC `eth_getBalance` returned a value on publicnode (eth, bsc, op), arb1.arbitrum.io, base.gateway.tenderly.co, polygon.gateway.tenderly.co, api.avax.network. Not run through the EVM CLI for every chain (see CLI row). |
+| ethereum, arbitrum-one, polygon-pos | history.native_external | Etherscan V2 free key | ok | `txlist` returned rows for chain ids 1, 42161, 137. Fixtures exist. |
+| bsc, base, optimism, avalanche-c | history.native_external | Etherscan V2 free key | blocked | "Free API access is not supported for this chain" for chain ids 56, 8453, 10, 43114. |
+| ethereum, arbitrum-one, optimism | history.native_external | Blockscout PRO free key | partial | `txlist` HTTP 200 for chain ids 1, 42161, 10. The example monitor routes PRO only for Base and Optimism, so Ethereum and Arbitrum PRO are an unused spare path. |
+| base, polygon-pos | history.native_external | Blockscout PRO free key | blocked | HTTP 402 "requires one of the following plans". |
+| bsc, avalanche-c | history.native_external | Blockscout PRO | blocked | HTTP 404 "Network not supported". |
+| ethereum | history.native_external | keyless eth.blockscout.com | partial | HTTP 200 with rows from the Linux host. |
+| arbitrum-one, polygon-pos, base | history.native_external | keyless Blockscout | blocked | HTTP 403 Cloudflare "Just a moment" from the Linux host (host-specific; Base was 200 from the operator PC earlier). |
+| optimism | history.native_external | keyless optimism.blockscout.com | blocked | HTTP 301 to explorer.optimism.io. The redirect target answers HTTP 200 with the same API, so the documented default is now `https://explorer.optimism.io`. The old "HTTP 200 from the Linux host" note above is stale. |
+| bsc | history.native_external | NodeReal | credential_missing | No NodeReal key exists on this box, so the keyed path was not re-probed today. The bare endpoint without key answers 404. The earlier recorded NodeReal probe is the only evidence. |
+| solana-mainnet | balances.native, balances.fungible, history | CLI, public RPC | partial | CLI run on a public staker address: `getBalance`, `getTokenAccountsByOwner`, `getSignaturesForAddress` all answered; native balance complete in declared scope; fungible/history rows `partial` (`gap_detection_incomplete`, `token2022_unknown_extension`). On a very active exchange address the token read returned `response_too_large` (error, not zero). |
+| solana-mainnet | positions.stake | CLI, public RPC | partial | Before this change the CLI always returned `stake_accounts_not_provided`. Now the wallet address is queried as staker and withdrawer (`getProgramAccounts`, offsets 12 and 44): the public staker address showed 4 stake accounts, observed. Offline CLI tests cover both offsets, a no-stake wallet, and a failed read (unknown, never an empty stake). `partial` because only one public address was probed and `getProgramAccounts` may be refused by other RPC providers. |
+| solana-mainnet | parsed events | Helius | credential_missing | No key; not probed. |
+| address risk | address_risk | GoPlus | credential_missing | The CLI reports `credential_missing` and `third_party_denied`. A direct keyless GET of the GoPlus address-security endpoint returned HTTP 200 for a public address, but the adapter requires a key and consent, so nothing is claimed. |
+| sanctions | sanctions | OFAC SDN | not_verified | The public SDN.XML downloads (HTTP 206/200). The CLI sanctions row stays `not_queried` even with `OFAC_SLS_FEED` set: screening is not wired into run-once. No wallet is "screened". |
+| prices | prices.usd | CoinGecko public | partial | Direct keyless GET HTTP 200. Not verified through the CLI valuation path. |
+
+### News feeds fetched and parsed (keyless GET, then `parse_feed`)
+
+| feed | HTTP | size | parse | newest item |
+| --- | --- | --- | --- | --- |
+| governance.aave.com latest.rss | 200 | 296 KB | ok, 30 items | 2026-10-08 |
+| medium.com/feed/@kinzafinance | 200 | 61 KB | ok, 10 items | 2025-08-08 (stale feed) |
+| status.solana.com history.rss | 200 | 26 KB | ok, 25 items | 2024-02-06 (status history is sparse) |
+| api.paragraph.com/blogs/rss/@blog.lista.org (Lista blog RSS, added) | 200 | 252 KiB | ok, 20 items | 2026-10-01 |
+| UXLINK | blog.uxlink.io/feed redirects to a Medium identity stub; docs notice page is HTML | n/a | not a feed | no feed: honest gap, manual only |
+
+Not added: Bitcoin Core `rss.xml` (593 KB) is refused by the parser's item cap. Every allowlisted URL is https RSS and is listed in `ALLOWLISTED_FEED_URLS`; tests assert the catalog and the allowlist match and that an HTML redirect stub is not a feed. No other protocol (Kinza apart from Medium, UXLINK, Lista beyond the blog) has automatic news.
+
+### What is still not verified
+- The EVM CLI path through a real `run-once` is recorded in the next paragraph; chains not named there were not run end to end today.
+- Alchemy Base, Helius, NodeReal (keyed), GoPlus (keyed), and any chain beyond the eight above have no probe today.
+- The ruling from the independent review (`gpt/reply-all-chains.md`) suggests Bitcoin, TRON, Hyperliquid and Lido as next additions. Anything that did not merge appears below only if it did.
+
 ## Chain × capability
 
 | network | capability | no-key path | no-key status | keyed path | keyed status | status |
@@ -161,7 +201,7 @@ Keyless sources that the routes still name:
 - The formal 24-window shadow has not been run. `tools/mcm_shadow_round.py` does not start that count. This preview does not claim fitness for production use.
 - Telegram canary status is NOT_RUN. The sender tests use a mock. See `docs/notifications.md`.
 - On the reviewed host that routes by Server Name Indication, formal egress qualification is BLOCKED_EGRESS. A preview verdict of OK on that host is not proof. See `docs/host-network.md`.
-- Solana public-address verification has not been done.
+- Solana: a public-address CLI check was done on 2026-10-09 (see the verified section); it is partial, not a live pass.
 - Kinza live verification has not been done.
 - ERC-4626 without configured vaults stays unknown / vaults_not_configured and is not required.
 - Alchemy Transfers on Base has offline fixtures and no recorded live probe.
