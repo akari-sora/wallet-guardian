@@ -111,3 +111,7 @@ It does not enable linger, write `/etc/systemd`, install a crontab, open a port,
 ## Cron fallback keeps your other jobs
 
 `install-service --apply` in cron mode reads the current table (`crontab -l`) and adds or replaces only the block between `# BEGIN wallet-guardian-monitor` and `# END wallet-guardian-monitor`. Every other line stays as it was. Remove the block by deleting those marked lines (`crontab -l`, edit, `crontab FILE`).
+
+## What a scheduled job can see
+
+A cron or systemd job has no shell profile. `guardian init` writes `env-paths.json` next to `monitor.json`; the CLI reads the four path variables (`MONITOR_ACCOUNTS_FILE`, `MONITOR_DELIVERY_PROFILE`, `MONITOR_SECRET_PROFILE`, `MONITOR_STATE_DIR`) from it when they are not already set. It holds paths only. API keys still have to reach the job through the private `.env.local` that `load_local_env` reads, or through the unit's own environment. A job without them reports `credential_missing`, not an empty wallet.

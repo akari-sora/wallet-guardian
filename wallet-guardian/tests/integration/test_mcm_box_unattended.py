@@ -529,3 +529,27 @@ def test_mcm_share_s3_07_systemctl_binary_without_running_systemd_selects_cron(
         linger=False, user_manager=False, systemd_present=facts["systemd_present"], cron_present=facts["cron_present"]
     )
     assert choice["schedule_mode"] == "cron" and choice["cron_fallback"] is True
+
+
+def test_mcm_share_s3_08_scheduled_run_finds_private_paths_from_env_paths_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """MCM-SHARE-S3-08. A cron/systemd job has no shell profile; init's env-paths.json supplies the path variables."""
+    for key in ("MONITOR_ACCOUNTS_FILE", "MONITOR_DELIVERY_PROFILE", "MONITOR_SECRET_PROFILE", "MONITOR_STATE_DIR"):
+        monkeypatch.delenv(key, raising=False)
+    cfg = tmp_path / "cfg"
+    example = ROOT / "examples" / "answers.example.json"
+    assert main(["init", "--dir", str(cfg), "--from", str(example), "--yes"]) == 0
+    capsys.readouterr()
+    monkeypatch.setenv("GUARDIAN_CONFIG_DIR", str(cfg))
+    monkeypatch.setenv("GUARDIAN_STATE_DIR", str(tmp_path / "state"))
+    code = main(["watchdog", "--mcm-config", str(cfg / "monitor.json")])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert "MONITOR_ACCOUNTS_FILE is not set" not in out
+    # the process environment still wins over the file
+    other = tmp_path / "other-state"
+    monkeypatch.setenv("MONITOR_STATE_DIR", str(other))
+    assert main(["watchdog", "--mcm-config", str(cfg / "monitor.json")]) == 0
+    capsys.readouterr()
+    assert other.exists()

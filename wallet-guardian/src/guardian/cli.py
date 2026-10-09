@@ -434,9 +434,37 @@ def _egress_doctor(args: argparse.Namespace, hooks: Any) -> tuple[dict, int]:
     )
 
 
+_ENV_PATH_KEYS = (
+    "MONITOR_ACCOUNTS_FILE",
+    "MONITOR_DELIVERY_PROFILE",
+    "MONITOR_SECRET_PROFILE",
+    "MONITOR_STATE_DIR",
+)
+
+
+def _env_with_sibling_paths(path: str) -> dict[str, str]:
+    """Process env plus the path variables `guardian init` wrote next to the monitor file.
+
+    A scheduled job has no shell profile. `env-paths.json` holds only paths, never secrets. The process
+    environment wins, and only the four path variables are taken from the file.
+    """
+    env = dict(os.environ)
+    sibling = Path(path).expanduser().resolve().parent / "env-paths.json"
+    try:
+        loaded = json.loads(sibling.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return env
+    if isinstance(loaded, dict):
+        for key in _ENV_PATH_KEYS:
+            value = loaded.get(key)
+            if key not in env and isinstance(value, str) and value:
+                env[key] = value
+    return env
+
+
 def _open_mcm(path: str):
     public = load_public_config(path)
-    private = resolve_private_inputs(public, os.environ)
+    private = resolve_private_inputs(public, _env_with_sibling_paths(path))
     database = Database(private.state_dir / "monitor.sqlite")
     return public, private, database
 
