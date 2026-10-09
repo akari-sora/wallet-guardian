@@ -2,6 +2,8 @@
 
 Date of this preview: 2026-10-09. License: AGPL-3.0-only (see `LICENSE`).
 
+The installable distribution is `wallet-guardian-monitor` (wheel `wallet_guardian_monitor-0.4.0rc1-py3-none-any.whl`). Whether git tag `v0.4.0-rc.1` is published, see GitLab releases. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`). `--no-send` forbids sends. The canary is NOT_RUN. How the monitor differs from the optional Action Client is stated once in `docs/threat-model.md`.
+
 This matrix is the preview claim for chain × capability. It is derived from `config/source-capabilities/*.json`, `config/chains`, `examples/monitor.json`, `src/guardian/sources/`, `src/guardian/protocols/`, `docs/api-keys.md`, `docs/mcm-01/network-tiers.plan.json`, and `docs/coverage.md`. The live probes below are recorded facts. This document does not re-run them. No monitored address, API key, or keyed URL appears here.
 
 ## How to read
@@ -33,7 +35,7 @@ These are the facts this matrix is allowed to treat as live probes. They were no
 - Kinza on BSC runs from offline CLI fixtures. No live verification is claimed. ERC-4626 with no configured vaults is unknown / vaults_not_configured and is not required. Solana is offline fixtures only.
 - Avalanche deep native history is expansion_pending.
 - Hyperliquid info and the earlier Lista read are described in `docs/coverage.md`. This preview did not re-run them.
-- A formal shadow of 24 successive windows has not been run. The DNS-over-HTTPS resolver is implemented. On the reviewed SNI-proxy host, formal qualification is BLOCKED_EGRESS and the preview verdict may be OK; that preview verdict is not a coverage status. See `docs/host-network.md`. Telegram delivery is mock-only and the canary is NOT_RUN.
+- A formal shadow of 24 successive windows has not been run. The DNS-over-HTTPS resolver is implemented. On the reviewed SNI-proxy host, formal qualification is BLOCKED_EGRESS and the preview verdict may be OK; that preview verdict is not a coverage status. See `docs/host-network.md`. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`). The canary is NOT_RUN. `--no-send` forbids sends.
 
 ## Verified probes, 2026-10-09 (MCM-SHARE-02)
 
@@ -55,7 +57,7 @@ Each row below was run on 2026-10-09 (Taipei) from the Linux box with public tes
 | solana-mainnet | positions.stake | CLI, public RPC | partial | Before this change the CLI always returned `stake_accounts_not_provided`. Now the wallet address is queried as staker and withdrawer (`getProgramAccounts`, offsets 12 and 44): the public staker address showed 4 stake accounts, observed. Offline CLI tests cover both offsets, a no-stake wallet, and a failed read (unknown, never an empty stake). `partial` because only one public address was probed and `getProgramAccounts` may be refused by other RPC providers. |
 | solana-mainnet | parsed events | Helius | credential_missing | No key; not probed. |
 | address risk | address_risk | GoPlus | credential_missing | The CLI reports `credential_missing` and `third_party_denied`. A direct keyless GET of the GoPlus address-security endpoint returned HTTP 200 for a public address, but the adapter requires a key and consent, so nothing is claimed. |
-| sanctions | sanctions | OFAC SDN | not_verified | The public SDN.XML downloads (HTTP 206/200). The CLI sanctions row stays `not_queried` even with `OFAC_SLS_FEED` set: screening is not wired into run-once. No wallet is "screened". |
+| sanctions | sanctions | OFAC SDN | not_verified | `OFAC_SLS_FEED` may be a local `file://` SDN XML or an HTTPS URL. run-once exact-matches monitored addresses and counterparties locally. Unset stays `feed_not_supplied`. A list older than 7 days is `partial` with `feed_stale`. A malformed list is an error, not zero. The row records source id, fetch time, publish date, validity, and the count checked, never the list body. Setting the variable does not mark a wallet screened. A live publisher download is not claimed here. |
 | prices | prices.usd | CoinGecko public | partial | Direct keyless GET HTTP 200. Not verified through the CLI valuation path. |
 
 ### News feeds fetched and parsed (keyless GET, then `parse_feed`)

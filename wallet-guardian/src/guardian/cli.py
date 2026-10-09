@@ -137,6 +137,12 @@ def build_parser() -> argparse.ArgumentParser:
     compared.add_argument("--slot-end", default=None)
     compared.add_argument("--legacy-max-age-seconds", type=int, default=12600)
 
+    news = sub.add_parser("news")
+    news_sub = news.add_subparsers(dest="news_command", required=True)
+    health = news_sub.add_parser("health", parents=[common])
+    health.add_argument("--mcm-config", required=True)
+    health.add_argument("--offline", action="store_true", help="read stored feed health and do not fetch")
+
     capture = sub.add_parser("legacy-capture")
     capture_sub = capture.add_subparsers(dest="capture_command", required=True)
     begin = capture_sub.add_parser("begin")
@@ -288,6 +294,10 @@ def dispatch(
         return _mcm_export(args)
     if args.command == "compare-legacy":
         return _mcm_compare(args)
+    if args.command == "news":
+        if getattr(args, "news_command", None) != "health":
+            raise GuardianError("unknown news command")
+        return _mcm_news_health(args)
     if args.command == "legacy-capture":
         return _legacy_capture(args)
     if args.command == "watchdog":
@@ -555,6 +565,24 @@ def _mcm_export(args: argparse.Namespace) -> tuple[dict, int]:
     public, private, database = _open_mcm(args.mcm_config)
     database.close()
     return safe_export(public, private.accounts), 0
+
+
+def _mcm_news_health(args: argparse.Namespace) -> tuple[dict, int]:
+    """Read stored feed health. This command does not fetch, even without --offline."""
+    from guardian.news.health import stored_feed_health
+
+    _public, private, database = _open_mcm(args.mcm_config)
+    try:
+        feeds = stored_feed_health(database, private.accounts.tenant_id)
+    finally:
+        database.close()
+    return {
+        "feeds": feeds,
+        "live_pass": False,
+        "live_verified": False,
+        "offline": True,
+        "status": "ok",
+    }, 0
 
 
 def _mcm_compare(args: argparse.Namespace) -> tuple[dict, int]:

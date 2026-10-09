@@ -276,10 +276,10 @@ def _quality(
     extra = [code for code in observation.reason_codes if code not in {"not_queried", "not_applicable", "not_observable"}]
     if observation.category == "error":
         return "error", _unique(["read_error", *extra]), observation.last_success_at
-    if support not in _APPLICABLE:
-        return "unknown", _unique(["unsupported", *extra]), observation.last_success_at
     if observation.category == "stale":
         return "stale", _unique(["stale", *extra]), observation.last_success_at
+    if support not in _APPLICABLE:
+        return "unknown", _unique(["unsupported", *extra]), observation.last_success_at
     reasons = _incomplete_reasons(observation)
     if observation.category == "partial":
         if not reasons:

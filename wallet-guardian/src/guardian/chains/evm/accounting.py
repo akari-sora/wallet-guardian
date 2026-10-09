@@ -60,6 +60,7 @@ class TokenMovement:
     decimals: int | None
     source_ids: tuple[str, ...]
     flags: tuple[str, ...] = ()
+    counterparty: str = ""
 
     @property
     def display_amount(self) -> str | None:
@@ -269,7 +270,7 @@ def _parse_transfer(
         direction = _direction(sender, receiver, wallet)
         if direction == "unknown":
             return []
-        return [_movement(tx_id, log_index, 0, "erc20", direction, token, None, str(amount), _decimals(token, decimals), sources)]
+        return [_movement(tx_id, log_index, 0, "erc20", direction, token, None, str(amount), _decimals(token, decimals), sources, _counterparty(sender, receiver, wallet, direction))]
     if len(topics) == 4:
         sender = _topic_address(topics[1])
         receiver = _topic_address(topics[2])
@@ -279,7 +280,7 @@ def _parse_transfer(
         direction = _direction(sender, receiver, wallet)
         if direction == "unknown":
             return []
-        return [_movement(tx_id, log_index, 0, "erc721", direction, token, str(token_id), "1", None, sources)]
+        return [_movement(tx_id, log_index, 0, "erc721", direction, token, str(token_id), "1", None, sources, _counterparty(sender, receiver, wallet, direction))]
     return [_unknown(tx_id, log_index, token, sources)]
 
 
@@ -303,7 +304,8 @@ def _parse_single(
     if direction == "unknown":
         return []
     token_id, amount = words
-    return [_movement(tx_id, log_index, 0, "erc1155", direction, token, str(token_id), str(amount), None, sources)]
+    party = _counterparty(sender, receiver, wallet, direction)
+    return [_movement(tx_id, log_index, 0, "erc1155", direction, token, str(token_id), str(amount), None, sources, party)]
 
 
 def _parse_batch(
@@ -327,8 +329,9 @@ def _parse_batch(
         return []
     if not pairs:
         return []
+    party = _counterparty(sender, receiver, wallet, direction)
     return [
-        _movement(tx_id, log_index, index, "erc1155", direction, token, str(token_id), str(amount), None, sources)
+        _movement(tx_id, log_index, index, "erc1155", direction, token, str(token_id), str(amount), None, sources, party)
         for index, (token_id, amount) in enumerate(pairs)
     ]
 
@@ -344,8 +347,23 @@ def _movement(
     raw_amount: str | None,
     decimals: int | None,
     sources: tuple[str, ...],
+    counterparty: str = "",
 ) -> TokenMovement:
-    return TokenMovement(tx_id, log_index, sub_index, kind, direction, token, token_id, raw_amount, decimals, sources, ())
+    return TokenMovement(
+        tx_id, log_index, sub_index, kind, direction, token, token_id, raw_amount, decimals, sources, (), counterparty,
+    )
+
+
+def _counterparty(sender: str, receiver: str, wallet: str, direction: str) -> str:
+    if direction in {"in", "mint"}:
+        party = sender
+    elif direction in {"out", "burn"}:
+        party = receiver
+    else:
+        party = ""
+    if party in {"", wallet, ZERO_ADDRESS}:
+        return ""
+    return party
 
 
 def _unknown(tx_id: str, log_index: int, token: str, sources: tuple[str, ...]) -> TokenMovement:

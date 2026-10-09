@@ -2,7 +2,11 @@
 
 This note is the threat model for the read-only monitor as a single-operator, self-hosted program. It is not a pentest report and it is not a promise that every provider is honest. 授權：AGPL-3.0-only（見 `LICENSE`）。
 
-The Action Client, SIWE, WalletConnect, Pages Functions, and D1 are out of scope here. They are an optional subsystem and are not required to run the monitor.
+The installable distribution is `wallet-guardian-monitor`. The import package and the CLI stay `guardian`. The wheel file name is `wallet_guardian_monitor-0.4.0rc1-py3-none-any.whl`. Whether git tag `v0.4.0-rc.1` is published, see GitLab releases.
+
+<a id="monitor-does-not-sign"></a>
+
+The monitor never signs, never builds a transaction, and never broadcasts. The optional Action Client can make a SIWE login signature. That signature is a login, not a transaction signature, and it is not part of the monitor. This is the only place that difference is stated. WalletConnect, Pages Functions, and D1 are the same optional subsystem and are not required to run the monitor.
 
 ## Assets
 
@@ -10,7 +14,7 @@ The Action Client, SIWE, WalletConnect, Pages Functions, and D1 are out of scope
 - Endpoint URLs and API keys, which live in the environment or in the secret profile after the operator puts them there. Init writes only the variable names.
 - Local state: `monitor.sqlite` (snapshots, cursors, outbox, coverage), plus any evidence or doctor output under the state directory.
 - The data-sharing consent record and the choice of chains, plugins, and sources.
-- The operator's ability to keep the monitor read-only: no signing key, no broadcast path, no installed sender unless they later turn one on outside this package.
+- The operator's ability to keep the monitor read-only: no signing key and no broadcast path. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`). `--no-send` forbids sends.
 
 ## Actors
 
@@ -18,7 +22,7 @@ The Action Client, SIWE, WalletConnect, Pages Functions, and D1 are out of scope
 - Other local users and backup tools on the same machine, who can read files the mode bits allow.
 - Chain RPC operators and indexers the operator enables: public or self-hosted EVM RPC, Solana RPC, Etherscan, Blockscout, NodeReal, Helius, Esplora, TronGrid, TON Center, Sui, Aptos, and Cosmos REST hosts.
 - Risk and list publishers that are off by default: GoPlus, Chainabuse, and the OFAC list host. A later opt-in is a separate decision.
-- A notification recipient. This build has no Telegram, Slack, email, or webhook client. The outbox stays local while delivery mode is `outbox_only`.
+- A notification recipient. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`), and `--no-send` forbids sends. Slack, email, and webhook clients are not in this package. The outbox stays local while delivery mode is `outbox_only`.
 - The supply chain: the Python package, its pinned dependencies, and whatever host serves the wheel. Tests do not call the network.
 - The author of a plugin that already ships in this package. Plugins are local code selected by id. Init does not download or execute a plugin from the network.
 
@@ -42,9 +46,9 @@ Init's summary is the operator-facing list. The flows below match that summary.
 | NodeReal, Helius | Watch address. Helius puts `api-key` in the query when the call is made. | The key is missing, so the call is not made. |
 | Esplora, TON Center, Sui, Aptos, Cosmos REST | Nothing in this build. Those families are not queried yet. | Coverage stays unsupported, not zero. |
 | TronGrid | Nothing until a Tron adapter runs. A missing `TRON_PRO_API_KEY` would still block a later call. | Init does not send the address today. |
-| GoPlus, Chainabuse | Not enabled. No user-address query. | Stays off unless the operator edits the config later. |
-| OFAC list host | Not enabled. Naming `us-ofac-sdn` does not download the list. | No address is uploaded. A future fetch would download a public list and match locally. |
-| Notification channel | Nothing. Rows stay in the local outbox. | Mode is `outbox_only` and `install-service` does not start a sender. |
+| GoPlus, Chainabuse | Without `GOPLUS_API_KEY` or `GOPLUS_API_BASE`, the row is `credential_missing` and no request is made. | Stays uncalled unless the operator sets the key, the base, and consent. |
+| OFAC list host | `OFAC_SLS_FEED` may be a local `file://` SDN XML or an HTTPS URL. The match is local. | No address is uploaded. Unset stays `feed_not_supplied`. A stale or malformed list is not a clear screen. |
+| Notification channel | The Telegram sender exists and is opt-in. `--no-send` forbids sends. | Mode defaults to `outbox_only`. `install-service` does not start a sender. |
 
 The provider on the other end of an enabled call learns the watch address, the query shape, the client IP, and the time. That is the disclosure the summary asks the operator to accept.
 
@@ -72,7 +76,7 @@ Anyone who can read the state directory can read cursors, coverage, and unsent a
 
 ## Notification channel risks
 
-`outbox_only` means a row can sit on disk and is not handed to a network sender. A future sender would disclose alert contents (and possibly addresses) to whatever channel the operator configures. That channel can be logged, forwarded, or phished. This package does not implement that sender and `install-service` will not enable one. Flipping `delivery.mode` to `configured_sender` without a reviewed sender is a misconfiguration, not an install step.
+`outbox_only` means a row can sit on disk and is not handed to a network sender. The Telegram sender exists and is opt-in; delivery defaults to off, and `--no-send` forbids sends. Slack, email, and webhook clients are not in this package. A turned-on sender would disclose alert contents (and possibly addresses) to whatever channel the operator configures. That channel can be logged, forwarded, or phished. `install-service` will not enable a sender. Flipping `delivery.mode` to `configured_sender` without opting in is a misconfiguration, not an install step.
 
 A webhook URL, if one is ever configured, is an egress decision of its own and has to survive the same SSRF checks as any other URL. Init does not write a webhook.
 

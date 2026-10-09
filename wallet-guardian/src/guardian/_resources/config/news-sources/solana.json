@@ -14,5 +14,5 @@
       "max_bytes": 131072
     }
   ],
-  "notes": "The status RSS is an allowlisted public GET verified 2026-10-09 (application/rss+xml, weak ETag, about 26 KiB; cap 128 KiB). No API key. Not a live pass."
+  "notes": "The status RSS is an allowlisted public GET verified 2026-10-09 (application/rss+xml, weak ETag, about 26 KiB; cap 128 KiB). The newest item on that check was 2024-02-06, so this status history is stale. A stale feed is not a clear result and is not safe. No API key. Not a live pass."
 }

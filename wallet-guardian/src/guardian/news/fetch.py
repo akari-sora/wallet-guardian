@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from guardian.errors import GuardianError
 from guardian.news.catalog import ALLOWLISTED_FEED_URLS, NewsFeed, NewsSource, load_news_sources
 from guardian.news.feeds import NewsItem, parse_feed, parse_timestamp
+from guardian.news.health import build_feed_health, feed_type_for
 from guardian.news.incidents import Incident, IncidentBook, SourceRef
 from guardian.sources.budget import BudgetBook, BudgetExhausted
 from guardian.sources.capabilities import news_fetch_capability
@@ -31,7 +32,8 @@ NEWS_STATE_NETWORK = "news"
 NEWS_STATE_CAPABILITY = "exposure_news"
 _ACCEPT = "application/rss+xml, application/atom+xml, application/xml, text/xml"
 _BUDGET = "news-feeds"
-_KEPT = ("etag", "fingerprints", "last_modified", "last_ok_at")
+_KEPT = ("etag", "fingerprints", "last_modified", "last_ok_at", "last_item_at", "feed_type", "last_fetch_at", "parse_status")
+_PARSE_REASONS = frozenset({"unparseable", "malformed_item", "dtd_or_entity_rejected", "item_cap"})
 _FRESH = frozenset({"empty", "not_modified", "ok"})
 # Linkable incidents: published within this window (stored ones included, so a
 # 304 still serves a newly exposed wallet), or new/revised in this fetch when the
@@ -63,6 +65,7 @@ class FetchReport:
     state: dict[str, Any]
     fetchable: frozenset[str]
     linkable: frozenset[str] = frozenset()
+    health: tuple[dict[str, Any], ...] = ()
 
 
 def fetch_allowlisted_news(
@@ -106,12 +109,13 @@ def fetch_allowlisted_news(
         protocols = tuple(source.protocols)
         host = (urlsplit(feed.url).hostname or "").lower().rstrip(".")
         prior = _prior(prior_feeds.get(feed.url))
+        declared_type = feed_type_for(feed.kind)
         if feed.url not in ALLOWLISTED_FEED_URLS or host not in allowed_hosts or capability.http_method != "GET":
-            stored[feed.url] = _failed(prior, source.source_id, "host_not_allowlisted")
+            stored[feed.url] = _failed(prior, source.source_id, "host_not_allowlisted", now=now, feed_type=declared_type)
             results.append(FeedResult(source.source_id, feed.url, "fetch_error", "host_not_allowlisted", protocols))
             continue
         if capability.credential is not None:
-            stored[feed.url] = _failed(prior, source.source_id, "news_credential_forbidden")
+            stored[feed.url] = _failed(prior, source.source_id, "news_credential_forbidden", now=now, feed_type=declared_type)
             results.append(FeedResult(source.source_id, feed.url, "fetch_error", "news_credential_forbidden", protocols))
             continue
         try:
@@ -123,24 +127,27 @@ def fetch_allowlisted_news(
                 max_response_bytes=feed.max_bytes if isinstance(feed.max_bytes, int) else 1_048_576,
             )
         except BudgetExhausted:
-            stored[feed.url] = _failed(prior, source.source_id, "budget_exhausted")
+            stored[feed.url] = _failed(prior, source.source_id, "budget_exhausted", now=now, feed_type=declared_type)
             results.append(FeedResult(source.source_id, feed.url, "budget_exhausted", "budget_exhausted", protocols))
             continue
         except GuardianError as exc:
             reason = exc.reason if isinstance(getattr(exc, "reason", None), str) and exc.reason else "fetch_error"
-            stored[feed.url] = _failed(prior, source.source_id, reason)
+            stored[feed.url] = _failed(prior, source.source_id, reason, now=now, feed_type=declared_type)
             results.append(FeedResult(source.source_id, feed.url, "fetch_error", reason, protocols))
             continue
         if result.status == 304:
             if "fingerprints" not in prior:
-                stored[feed.url] = _failed(prior, source.source_id, "cache_missing")
+                stored[feed.url] = _failed(prior, source.source_id, "cache_missing", now=now, feed_type=declared_type)
                 results.append(FeedResult(source.source_id, feed.url, "fetch_error", "cache_missing", protocols))
                 continue
             record = dict(prior)
             record["status"] = "not_modified"
             record["reason"] = ""
             record["last_ok_at"] = now
+            record["last_fetch_at"] = now
             record["source_id"] = source.source_id
+            record["feed_type"] = prior.get("feed_type") or declared_type
+            record["parse_status"] = prior.get("parse_status") or "ok"
             etag = _validator(result.headers.get("etag"))
             modified = _validator(result.headers.get("last-modified"))
             if etag:
@@ -151,13 +158,14 @@ def fetch_allowlisted_news(
             results.append(FeedResult(source.source_id, feed.url, "not_modified", "", protocols))
             continue
         if result.status != 200 or not isinstance(result.body, (bytes, bytearray)):
-            stored[feed.url] = _failed(prior, source.source_id, "http_status")
+            stored[feed.url] = _failed(prior, source.source_id, "http_status", now=now, feed_type=declared_type)
             results.append(FeedResult(source.source_id, feed.url, "fetch_error", "http_status", protocols))
             continue
-        parsed = parse_feed(bytes(result.body), source_id=source.source_id, source_protocols=source.protocols)
+        body = bytes(result.body)
+        parsed = parse_feed(body, source_id=source.source_id, source_protocols=source.protocols)
         if not parsed.ok:
             reason = parsed.reason or "unparseable"
-            stored[feed.url] = _failed(prior, source.source_id, reason)
+            stored[feed.url] = _failed(prior, source.source_id, reason, now=now, feed_type=feed_type_for(feed.kind, body))
             results.append(FeedResult(source.source_id, feed.url, "fetch_error", reason, protocols))
             continue
         baseline = "fingerprints" not in prior
@@ -165,22 +173,26 @@ def fetch_allowlisted_news(
             incident = next(item for item in book.incidents if item.incident_id == incident_id)
             if not baseline or _recent(incident.published_at, clock()):
                 linkable.add(incident_id)
+        status = "ok" if parsed.items else "empty"
         stored[feed.url] = {
             "etag": _validator(result.headers.get("etag")),
+            "feed_type": feed_type_for(feed.kind, body),
             "fingerprints": [_fingerprint(item) for item in parsed.items],
+            "last_fetch_at": now,
+            "last_item_at": _newest_item(parsed.items),
             "last_modified": _validator(result.headers.get("last-modified")),
             "last_ok_at": now,
+            "parse_status": status,
             "reason": "",
             "source_id": source.source_id,
-            "status": "ok" if parsed.items else "empty",
+            "status": status,
         }
-        status = "ok" if parsed.items else "empty"
         results.append(FeedResult(source.source_id, feed.url, status, "", protocols))
     moment = clock()
     for incident in book.incidents:
         if _recent(incident.published_at, moment):
             linkable.add(incident.incident_id)
-    return _report(book, tuple(results), updated, hashes, stored, sources, linkable)
+    return _report(book, tuple(results), updated, hashes, stored, sources, linkable, now)
 
 
 def news_state_row(state: Mapping[str, Any], now: str) -> dict[str, Any]:
@@ -207,6 +219,7 @@ def _report(
     stored: dict[str, Any],
     sources: Mapping[str, NewsSource],
     linkable: set[str] | None = None,
+    now: str | None = None,
 ) -> FetchReport:
     fetchable = frozenset(
         protocol
@@ -214,14 +227,20 @@ def _report(
         if any(feed.fetch == "allowlisted_get" for feed in source.feeds)
         for protocol in source.protocols
     )
+    health = build_feed_health(sources, stored, now)
     return FetchReport(
         book=book,
         feeds=feeds,
         updated_ids=frozenset(updated),
         linkable=frozenset(linkable or ()),
         content_hashes=dict(hashes),
-        state={"feeds": stored, "incidents": [_dump(incident, hashes.get(incident.incident_id, "")) for incident in _bounded(book.incidents)]},
+        state={
+            "feeds": stored,
+            "health": health,
+            "incidents": [_dump(incident, hashes.get(incident.incident_id, "")) for incident in _bounded(book.incidents)],
+        },
         fetchable=fetchable,
+        health=tuple(health),
     )
 
 
@@ -268,12 +287,32 @@ def _prior(raw: Any) -> dict[str, Any]:
     return {key: raw[key] for key in _KEPT if key in raw}
 
 
-def _failed(prior: Mapping[str, Any], source_id: str, reason: str) -> dict[str, Any]:
+def _failed(
+    prior: Mapping[str, Any],
+    source_id: str,
+    reason: str,
+    *,
+    now: str = "",
+    feed_type: str = "rss",
+) -> dict[str, Any]:
     record = dict(prior)
     record["reason"] = reason
     record["source_id"] = source_id
     record["status"] = "budget_exhausted" if reason == "budget_exhausted" else "fetch_error"
+    record["feed_type"] = feed_type or prior.get("feed_type") or "rss"
+    record["last_fetch_at"] = now or prior.get("last_fetch_at")
+    record["parse_status"] = "parse_error" if reason in _PARSE_REASONS else "http_error"
+    if "last_item_at" not in record:
+        record["last_item_at"] = None
     return record
+
+
+def _newest_item(items: tuple[NewsItem, ...]) -> str | None:
+    dated = [item.published_at for item in items if item.published_at is not None]
+    if not dated:
+        return None
+    newest = max(dated)
+    return newest.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _conditional(prior: Mapping[str, Any]) -> dict[str, str]:

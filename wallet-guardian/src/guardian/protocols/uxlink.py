@@ -430,8 +430,12 @@ def _symbol_note(read: Any) -> str:
     if not read.ok or read.decoded is None or len(read.decoded) != 1:
         return "not_read"
     value = read.decoded[0]
-    if isinstance(value, str) and value == "UXLINK":
-        return "uxlink"
+    if isinstance(value, str):
+        from guardian.security.untrusted import note_untrusted_token
+
+        note_untrusted_token(value)
+        if value == "UXLINK":
+            return "uxlink"
     return "not_uxlink"
 
 

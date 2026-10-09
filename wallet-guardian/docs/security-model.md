@@ -1,6 +1,6 @@
 # Security model
 
-Wallet Guardian's monitor is a read-only program for one operator on a machine they control. It is not a hosted service and it does not isolate mutually untrusted customers. A `tenant_id` in the accounts file is a label for that operator's data. It is not a security boundary between customers.
+Wallet Guardian's monitor is a read-only program for one operator on a machine they control. The installable distribution is `wallet-guardian-monitor` (wheel `wallet_guardian_monitor-0.4.0rc1-py3-none-any.whl`). It is not a hosted service and it does not isolate mutually untrusted customers. A `tenant_id` in the accounts file is a label for that operator's data. It is not a security boundary between customers. Whether git tag `v0.4.0-rc.1` is published, see GitLab releases.
 
 授權：AGPL-3.0-only（見 `LICENSE`）。
 
@@ -8,7 +8,7 @@ Wallet Guardian's monitor is a read-only program for one operator on a machine t
 
 The monitor reads public chain data for addresses the operator typed, stores the result locally, and can leave alerts in an outbox. It does not sign, does not build a transaction, and does not broadcast. It does not ask for a seed phrase, a private key, or a keystore, and it has no path that would send one to a wallet.
 
-The Action Client (wallet login, SIWE, WalletConnect, Pages Functions, D1) is a separate optional subsystem. A new user does not need the author's Grok session, Cloudflare, D1, a wallet login, or Node to run the monitor.
+The Action Client (wallet login, WalletConnect, Pages Functions, D1) is a separate optional subsystem. See [docs/threat-model.md](threat-model.md#monitor-does-not-sign). A new user does not need the author's Grok session, Cloudflare, D1, a wallet login, or Node to run the monitor.
 
 ## Keys stay local
 
@@ -26,9 +26,9 @@ With the defaults from init:
 
 - The RPC host named by the operator receives the watch address in balance, log, and call reads once that endpoint variable is set.
 - A keyed indexer (Etherscan, Blockscout, NodeReal, Helius, TronGrid) receives the address only when that source is actually called. A missing key is not sent.
-- GoPlus and Chainabuse user-address lookups are not enabled. `privacy.third_party_wallet_queries` stays `deny_until_local_consent`.
-- The OFAC list is named as a sanctions list and is not downloaded until an OFAC source exists. Init does not add that source.
-- Delivery mode is `outbox_only`. No notification sender is configured and none is started. `single_sender_handoff` in the delivery profile is false.
+- GoPlus and Chainabuse user-address lookups are not called unless the operator sets the key and the base. Without `GOPLUS_API_KEY` or `GOPLUS_API_BASE`, the row is `credential_missing` and no request is made. `privacy.third_party_wallet_queries` stays `deny_until_local_consent`.
+- `OFAC_SLS_FEED` may name a local `file://` SDN XML file or an HTTPS URL. The monitor matches locally and does not upload a watch address. Unset coverage is `feed_not_supplied`. A list older than 7 days is partial (`feed_stale`). A malformed list is an error, not a miss. Init does not download a list by itself.
+- Delivery mode is `outbox_only`. The Telegram sender exists and is opt-in; `--no-send` forbids sends. `single_sender_handoff` in the delivery profile is false. Slack, email, and webhook clients are not in this package.
 - Init does not derive further addresses from a key, an xpub, or another chain's address. The accounts file contains only the addresses the operator entered.
 - `install-service` prints planned unit names and exits non-zero. It does not install a service. The operator enables scheduling later, on purpose.
 

@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 PEP 440 version `0.4.0rc1` maps to the git tag name `v0.4.0-rc.1`.
-This preview does not create that tag and does not publish.
+Whether that tag is published, see GitLab releases. This changelog does not publish. The distribution name is `wallet-guardian-monitor`.
 
 ## [Unreleased]
 
@@ -44,7 +44,7 @@ Preview channel. `published` stays false. The monitor is read-only: it does not 
 - Solana, Kinza, and Alchemy Transfers on Base have offline fixtures and no recorded live probe for those claims. The coverage matrix states the cell.
 - BSC external history has no keyless source. Avalanche deep native history is `expansion_pending`.
 - The unattended installer has never been applied on a real host. Host smoke and restart smoke are `NOT_RUN`.
-- No git tag is created here, and the manifest draft stays unpublished.
+- Whether git tag `v0.4.0-rc.1` is published, see GitLab releases. The manifest draft stays unpublished.
 
 ### Release blockers for stable
 
@@ -53,7 +53,7 @@ Preview channel. `published` stays false. The monitor is read-only: it does not 
 - Telegram canary, which is `NOT_RUN`.
 - Formal egress qualification on a host that actually delivers the pinned address. The reviewed SNI-proxy host stays `BLOCKED_EGRESS` for that qualification.
 - Live gaps recorded in `docs/coverage-matrix.md`, including Base host-specific keyless Blockscout, BSC external history without a key, Avalanche deep history, Solana public-address checks, and Kinza.
-- A human decision to create the tag `v0.4.0-rc.1` and to publish. This preview does neither.
+- A human decision to publish. Whether git tag `v0.4.0-rc.1` exists, see GitLab releases. How the monitor differs from the optional Action Client is stated in `docs/threat-model.md`. The Telegram sender exists and is opt-in; delivery defaults to off (`outbox_only`), and `--no-send` forbids sends.
 - Host smoke of the unattended units (install, reboot, missed-slot recording) on the actual host.
 
 ## [0.3.0] - 2026-10-07
