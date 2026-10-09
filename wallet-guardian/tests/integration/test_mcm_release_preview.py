@@ -236,8 +236,8 @@ def test_mcm_share_s8_03_manifest_draft_immutable(tmp_path: Path) -> None:
     tool = _load("mcm_share_s8_release_manifest", "release_manifest.py")
     dist = tmp_path / "dist"
     dist.mkdir()
-    wheel = dist / "guardian-0.4.0rc1-py3-none-any.whl"
-    sdist = dist / "guardian-0.4.0rc1.tar.gz"
+    wheel = dist / "wallet_guardian_monitor-0.4.0rc1-py3-none-any.whl"
+    sdist = dist / "wallet_guardian_monitor-0.4.0rc1.tar.gz"
     constraints = dist / "constraints.txt"
     wheel.write_bytes(b"synthetic-wheel-s8")
     sdist.write_bytes(b"synthetic-sdist-s8")
@@ -330,8 +330,8 @@ def test_mcm_share_s8_03_manifest_refuses_credentials(
     tool = _load("mcm_share_s8_release_manifest", "release_manifest.py")
     dist = tmp_path / "dist"
     dist.mkdir()
-    (dist / "guardian-0.4.0rc1-py3-none-any.whl").write_bytes(b"synthetic-wheel-s8")
-    (dist / "guardian-0.4.0rc1.tar.gz").write_bytes(b"synthetic-sdist-s8")
+    (dist / "wallet_guardian_monitor-0.4.0rc1-py3-none-any.whl").write_bytes(b"synthetic-wheel-s8")
+    (dist / "wallet_guardian_monitor-0.4.0rc1.tar.gz").write_bytes(b"synthetic-sdist-s8")
     (dist / "constraints.txt").write_bytes(b"httpx==0.28.1\n")
     output = tmp_path / "manifest.draft.json"
     monkeypatch.setenv("ETHERSCAN_API_KEY", "synthetic-secret-value")

@@ -12,6 +12,10 @@ This preview does not create that tag and does not publish.
 
 Preview channel. `published` stays false. The monitor is read-only: it does not sign, build a transaction, or broadcast.
 
+### Changed
+
+- The distribution name is `wallet-guardian-monitor` (wheel `wallet_guardian_monitor-0.4.0rc1-py3-none-any.whl`). The import package and the CLI stay `guardian`. A read-only PyPI lookup on 2026-10-09 returned 404 for that name, so it looked free at that time. It is not reserved and nothing was uploaded.
+
 ### Added
 
 - MCM-LIVE-01R: free-tier history catch-up to a fixed checkpoint, and no-key fallbacks. A missing key is `credential_missing` with a pointer in `docs/api-keys.md`. A plan refusal is cached and is not an empty wallet. See `docs/mcm-live-01r.md`.

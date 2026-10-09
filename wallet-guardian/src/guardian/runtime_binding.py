@@ -131,12 +131,12 @@ def _installed_pin_ok() -> bool:
         return False
     if pin.get("schema_version") != "guardian.runtime-pin.v1":
         return False
-    if pin.get("distribution") != "guardian":
+    if pin.get("distribution") != "wallet-guardian-monitor":
         return False
     if pin.get("version") != guardian.__version__:
         return False
     try:
-        dist = distribution("guardian")
+        dist = distribution("wallet-guardian-monitor")
     except PackageNotFoundError:
         return False
     guardian_file, kinza_file, kinza, registered = _identity()

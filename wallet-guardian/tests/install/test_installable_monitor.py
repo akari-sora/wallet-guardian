@@ -159,11 +159,11 @@ def _runtime_pins(lock_path: Path) -> dict[str, str]:
     packages = {item["name"]: item for item in document["package"]}
     seen: set[str] = set()
     seen_edges: set[tuple[str, tuple[str, ...]]] = set()
-    stack = [(_dep_name(item), _dep_extras(item)) for item in packages["guardian"].get("dependencies", [])]
+    stack = [(_dep_name(item), _dep_extras(item)) for item in packages["wallet-guardian-monitor"].get("dependencies", [])]
     while stack:
         name, extras = stack.pop()
         edge = (name, extras)
-        if name == "guardian" or edge in seen_edges:
+        if name == "wallet-guardian-monitor" or edge in seen_edges:
             continue
         seen_edges.add(edge)
         seen.add(name)
@@ -401,7 +401,7 @@ def test_mcm_share_s4_03_pinned_install_uv_pip(release_dist: Path) -> None:
     locked = _runtime_pins(ROOT / "uv.lock")
     assert pins == locked
     assert "pytest" not in pins
-    assert "guardian" not in pins
+    assert "wallet-guardian-monitor" not in pins
     for name in ("eth-abi", "eth-hash", "eth-utils", "httpx", "pycryptodome"):
         assert name in pins
 
@@ -432,7 +432,7 @@ def test_mcm_share_s4_03_pinned_install_uv_pip(release_dist: Path) -> None:
         )
         assert pip_installed.returncode == 0, pip_installed.stderr
         installed = _installed_versions(python, work)
-        assert installed["guardian"] == "0.4.0rc1"
+        assert installed["wallet-guardian-monitor"] == "0.4.0rc1"
         for name, version in pins.items():
             assert installed[name] == version
     finally:

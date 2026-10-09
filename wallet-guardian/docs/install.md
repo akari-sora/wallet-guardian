@@ -1,6 +1,6 @@
 # 安裝唯讀監控程式
 
-授權：AGPL-3.0-only。這個套件名稱是 `guardian`。不要從 PyPI 執行 `pip install guardian`：PyPI 上的同名套件不是這個專案，這個名稱也沒有被保留。
+授權：AGPL-3.0-only。發行套件名稱是 `wallet-guardian-monitor`；Python 匯入名稱與命令列仍是 `guardian`。這個預覽版沒有上傳到任何套件索引。不要執行 `pip install guardian` 或 `pip install wallet-guardian-monitor`：PyPI 上同名或相近的套件可能不是這個專案，名稱也沒有被保留。
 
 只安裝你從 GitLab release 下載、而且 SHA256 對過的 wheel。需要 Python 3.12 或更新的版本，以及 [uv](https://docs.astral.sh/uv/) 或 pip。Docker 不在這份說明裡。
 
@@ -37,7 +37,7 @@ python -c "import hashlib, pathlib; p=pathlib.Path('SHA256SUMS');
 
 ```bash
 uv venv --python 3.12
-uv pip install --python .venv/bin/python --constraints constraints.txt ./guardian-0.4.0rc1-py3-none-any.whl
+uv pip install --python .venv/bin/python --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc1-py3-none-any.whl
 ```
 
 Windows 的直譯器在 `.venv\Scripts\python.exe`。
@@ -45,14 +45,14 @@ Windows 的直譯器在 `.venv\Scripts\python.exe`。
 或安裝成工具（仍然要自己給 constraints；這不會讀 `uv.lock`）：
 
 ```bash
-uv tool install --constraints constraints.txt ./guardian-0.4.0rc1-py3-none-any.whl
+uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc1-py3-none-any.whl
 ```
 
 用 pip 時也要同一份 constraints，而且不要向 PyPI 要名為 `guardian` 的套件：
 
 ```bash
 python -m venv .venv
-.venv/bin/python -m pip install -c constraints.txt ./guardian-0.4.0rc1-py3-none-any.whl
+.venv/bin/python -m pip install -c constraints.txt ./wallet_guardian_monitor-0.4.0rc1-py3-none-any.whl
 ```
 
 wheel 本身仍要用 `SHA256SUMS` 先對過。這份 constraints 沒有雜湊，pip 會為了相依套件連到 PyPI，但版本必須和 constraints 裡的 `==` 一致。不要改成 `pip install guardian`。
@@ -99,7 +99,7 @@ cp -a "$XDG_STATE_HOME/guardian" "$XDG_STATE_HOME/guardian.backup-$(date -u +%Y%
 解除安裝：
 
 ```bash
-uv tool uninstall guardian
+uv tool uninstall wallet-guardian-monitor
 ```
 
 若是 venv，刪掉那個 venv 即可。XDG 裡的設定與狀態不會被解除安裝刪掉。確定不再需要時，自行刪除 `~/.config/guardian` 與 `~/.local/state/guardian`（或你覆寫的目錄）。
