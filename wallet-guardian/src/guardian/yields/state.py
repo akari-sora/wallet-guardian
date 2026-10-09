@@ -4,6 +4,10 @@ Nothing in this module opens a socket, constructs an HTTP client, follows an
 article link, or hands a candidate to a sender. The once-a-day gate and
 conditional validators are here so a fake clock can exercise them. They are not
 a scheduler, and ``enabled`` in the stored document stays false.
+
+``yield_change`` compares observed pool samples in one known unit. ``promotion_event``
+is the fixture-only announcement path. Announcement figures never enter the pool
+comparison, and neither candidate is written to the alert outbox.
 """
 
 from __future__ import annotations
@@ -58,6 +62,7 @@ _FIELDS = (
     ("reported_total", "reported_total_canonical", LABEL_TOTAL, "total"),
 )
 _OK = frozenset({"ok", "not_modified"})
+_KNOWN_UNITS = frozenset({"APY", "APR"})
 
 
 @dataclass(frozen=True)
@@ -165,6 +170,13 @@ def _apply(
     cooldown: dict[str, Any],
 ) -> tuple[dict[str, Any], tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
     identity, matches = match_record(parsed, mapping, holdings)
+    if parsed.source == "explicit_body":
+        record, candidates = _apply_promotion(
+            parsed, prior, identity, matches, observed_at, day, cooldown,
+        )
+        return record, matches, candidates
+    if parsed.source != "defillama_pools":
+        return _store_uncompared(parsed, prior, identity, observed_at, day), matches, ()
     step = _advance(prior, parsed, observed_at, day, policy)
     last_alert = _alert(prior)
     dedupe = _dedupe(prior)
@@ -213,6 +225,8 @@ def _advance(
     baseline = None if prior is None else prior.get("comparison_state", {}).get("previous_valid_sample")
     if not isinstance(baseline, dict):
         return _Step("baseline", current, None, (), None)
+    if not _same_known_unit(baseline.get("unit"), parsed.unit):
+        return _Step("baseline", current, None, (), None)
     changes = tuple(_diff(baseline, parsed, policy))
     if not changes:
         return _Step("not_material", current, None, (), None)
@@ -243,6 +257,133 @@ def _diff(baseline: Mapping[str, Any], parsed: ParsedRecord, policy: NoisePolicy
             "unit": parsed.unit,
         })
     return changes
+
+
+def _same_known_unit(previous: Any, current: str) -> bool:
+    """APY compares with APY, and APR with APR. Unknown or mixed units do not compare."""
+    return isinstance(previous, str) and previous in _KNOWN_UNITS and current == previous
+
+
+def _apply_promotion(
+    parsed: ParsedRecord,
+    prior: dict[str, Any] | None,
+    identity: Mapping[str, Any],
+    matches: tuple[dict[str, Any], ...],
+    observed_at: str,
+    day: str,
+    cooldown: dict[str, Any],
+) -> tuple[dict[str, Any], tuple[dict[str, Any], ...]]:
+    """Emit one promotion event per new announcement semantic. Do not compare yields."""
+    semantic = _promotion_semantic(parsed)
+    current = _snapshot(parsed, observed_at, day, semantic, None)
+    dedupe = _dedupe(prior)
+    held = [
+        match for match in matches
+        if match.get("eligibility") == "held_position" and match.get("wallet_id") and identity.get("pool_id")
+    ]
+    seen = dedupe.get("last_semantic") == semantic
+    emitted: list[dict[str, Any]] = []
+    if held and not seen:
+        for match in held:
+            slot = f"promo|{match['wallet_id']}|{parsed.record_id}|{day}"
+            if slot in cooldown["alerted_slots"]:
+                continue
+            candidate = _promotion_candidate(parsed, match, str(identity["pool_id"]), day, semantic)
+            cooldown["alerted_slots"][slot] = candidate["ref"]
+            emitted.append(candidate)
+        dedupe = {"last_semantic": semantic, "cooldown_day": day}
+        comparison = "baseline" if emitted else "duplicate"
+    elif seen:
+        comparison = "duplicate"
+        dedupe = {
+            "last_semantic": semantic,
+            "cooldown_day": dedupe.get("cooldown_day") if isinstance(dedupe.get("cooldown_day"), str) else day,
+        }
+    elif prior is None:
+        comparison = "baseline"
+    else:
+        comparison = "not_material"
+    step = _Step(comparison, current, None, (), semantic if emitted else None)
+    record = _record(parsed, identity, observed_at, step, comparison, _alert(prior), dedupe)
+    return record, tuple(emitted)
+
+
+def _store_uncompared(
+    parsed: ParsedRecord,
+    prior: dict[str, Any] | None,
+    identity: Mapping[str, Any],
+    observed_at: str,
+    day: str,
+) -> dict[str, Any]:
+    """Keep a non-pool document without turning it into a yield series."""
+    current = _snapshot(parsed, observed_at, day, None, None)
+    if prior is None:
+        step = _Step("baseline", current, None, (), None)
+        comparison = "baseline"
+    else:
+        previous = prior.get("comparison_state", {}).get("previous_valid_sample")
+        step = _Step("not_material", previous if isinstance(previous, dict) else current, None, (), None)
+        comparison = "not_material"
+    return _record(parsed, identity, observed_at, step, comparison, _alert(prior), _dedupe(prior))
+
+
+def _promotion_semantic(parsed: ParsedRecord) -> str:
+    payload = {
+        "base": canonical(parsed.base),
+        "campaign_id": parsed.campaign_id,
+        "conditions": parsed.conditions,
+        "deadlines": [dict(item) for item in parsed.deadlines],
+        "excerpt": parsed.excerpt,
+        "extraction_status": parsed.extraction_status,
+        "record_id": parsed.record_id,
+        "residual_conditions": parsed.residual_conditions,
+        "reward": canonical(parsed.reward),
+        "source": parsed.source,
+        "total": canonical(parsed.total),
+        "unit": parsed.unit,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _promotion_candidate(
+    parsed: ParsedRecord,
+    match: Mapping[str, Any],
+    pool_id: str,
+    day: str,
+    semantic: str,
+) -> dict[str, Any]:
+    material = "\x1f".join((
+        parsed.source, parsed.record_id, str(match["wallet_id"]), "promotion_event", semantic,
+    ))
+    dedup_key = hashlib.sha256(material.encode("utf-8")).hexdigest()
+    ref_material = "|".join((
+        parsed.source, parsed.record_id, str(match["wallet_id"]), day, "promotion_event", semantic,
+    ))
+    ref = "prm-" + hashlib.sha256(ref_material.encode("utf-8")).hexdigest()[:16]
+    return {
+        "kind": "promotion_event",
+        "wallet_id": match["wallet_id"],
+        "pool_id": pool_id,
+        "source": parsed.source,
+        "record_id": parsed.record_id,
+        "eligibility": "held_position",
+        "via": "position",
+        "day": day,
+        "ref": ref,
+        "dedup_key": dedup_key,
+        "semantic": semantic,
+        "unit": parsed.unit,
+        "apr_converted_to_apy": False,
+        "compounding_model": None,
+        "described_as_temporary": parsed.described_as_temporary,
+        "stated_base": canonical(parsed.base),
+        "stated_reward": canonical(parsed.reward),
+        "stated_total": canonical(parsed.total),
+        "extraction_status": parsed.extraction_status,
+        "residual_conditions": parsed.residual_conditions,
+        "read_coverage": parsed.read_coverage,
+    }
 
 
 def _direction(old: str | None, new: str | None, policy: NoisePolicy) -> str | None:

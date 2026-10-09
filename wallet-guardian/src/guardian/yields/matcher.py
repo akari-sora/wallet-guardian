@@ -3,7 +3,8 @@
 A DefiLlama pool id resolves only through the versioned mapping. The id itself
 need not be an address, and an address-shaped id is not looked up as a contract.
 A standing approval is permission exposure. It is not a deposit and it does not
-prove promotion eligibility. ``yield_change`` is not produced here; the comparison
+prove promotion eligibility. A hold needs the mapped protocol as well as the
+chain and a mapped contract. ``yield_change`` is not produced here; the comparison
 step emits that only for a held position.
 """
 
@@ -56,7 +57,9 @@ def _holders(parsed: ParsedRecord, pool: MappedPool, holdings: Holdings) -> tupl
     matches: list[dict[str, Any]] = []
     held: set[str] = set()
     for position in holdings.positions:
-        if not _position_holds(position.chain, position.contracts, position.raw_amount, pool):
+        if not _position_holds(
+            position.chain, position.protocol, position.contracts, position.raw_amount, pool,
+        ):
             continue
         held.add(position.wallet_id)
         matches.append(_decision(
@@ -88,8 +91,14 @@ def _holders(parsed: ParsedRecord, pool: MappedPool, holdings: Holdings) -> tupl
     return tuple(matches)
 
 
-def _position_holds(chain: str, contracts: tuple[str, ...], raw_amount: int, pool: MappedPool) -> bool:
-    if raw_amount <= 0 or chain != pool.chain:
+def _position_holds(
+    chain: str,
+    protocol: str,
+    contracts: tuple[str, ...],
+    raw_amount: int,
+    pool: MappedPool,
+) -> bool:
+    if raw_amount <= 0 or chain != pool.chain or protocol != pool.protocol:
         return False
     mapped = {item.address for item in pool.contracts}
     return any(address in mapped for address in contracts)

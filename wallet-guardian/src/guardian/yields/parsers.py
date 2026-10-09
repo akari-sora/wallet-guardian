@@ -3,7 +3,10 @@
 DefiLlama numbers stay in the unit the field name states. APR is not turned into
 APY. Binance catalog titles are not terms: catalog 93 is undocumented here, and
 article detail is not retrieved. A failed parse is a reason, not an empty success
-and not a zero yield.
+and not a zero yield. A gzip member must be complete, and bytes after that member
+are rejected. Depth and decoder failures return a reason. A negated or conflicting
+clause is not an affirmative term, and an eligibility limit this parser does not
+structure stays unknown.
 """
 
 from __future__ import annotations
@@ -43,6 +46,12 @@ _AMBIGUOUS = re.compile(
 )
 _MINIMUM = re.compile(r"\bminimum\s+([0-9]+(?:\.[0-9]+)?)\s+([A-Za-z]{2,12})\b", re.IGNORECASE)
 _LOCK = re.compile(r"\blocked\s+for\s+([0-9]+)\s+days\b", re.IGNORECASE)
+_NEGATION = re.compile(r"\b(?:not|no|never|without|cannot|can\s*not)\b|n['’]t\b", re.IGNORECASE)
+_UNPARSED_RESTRICTION = re.compile(
+    r"\b(?:kyc|know\s+your\s+customer|new[\s-]*users?|whitelists?|allowlists?|blacklists?|"
+    r"first[\s-]*time\s+users?|identity\s+verifications?)\b",
+    re.IGNORECASE,
+)
 _LINK = re.compile(r"https://[^\s\"'<>]+")
 _DATE_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
 
@@ -233,10 +242,15 @@ def bounded_json(data: bytes) -> tuple[Any | None, str]:
         text = raw.decode("utf-8-sig")
     except UnicodeError:
         return None, "unparseable"
+    depth_limit = _raw_nesting(text)
+    if depth_limit:
+        return None, depth_limit
     try:
         value = json.loads(text, parse_float=Decimal, parse_int=Decimal, parse_constant=_reject_constant)
     except _NonFinite as exc:
         return None, "nan" if exc.token == "NaN" else "non_finite"
+    except RecursionError:
+        return None, "nesting_limit"
     except json.JSONDecodeError:
         return None, "truncated" if text.lstrip()[:1] in "{[" else "unparseable"
     limit = _limits(value)
@@ -250,27 +264,69 @@ def _reject_constant(token: str) -> None:
 
 
 def _gunzip(raw: bytes, cap: int) -> tuple[bytes | None, str]:
+    """Inflate one complete gzip member. A missing trailer or a second member fails."""
     if len(raw) > cap:
         return None, "too_large"
     decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    chunks: list[bytes] = []
+    total = 0
     try:
-        out = decoder.decompress(raw, cap + 1)
-        if len(out) > cap:
-            return None, "too_large"
-        if decoder.unconsumed_tail:
-            extra = decoder.decompress(decoder.unconsumed_tail, 1)
-            if extra or decoder.unconsumed_tail:
-                return None, "too_large"
+        pending = raw
+        while pending:
+            piece = decoder.decompress(pending, cap + 1 - total)
+            pending = decoder.unconsumed_tail
+            if piece:
+                total += len(piece)
+                if total > cap:
+                    return None, "too_large"
+                chunks.append(piece)
+                continue
+            if pending:
+                return None, "unparseable"
+            break
         tail = decoder.flush()
     except zlib.error:
+        if chunks and not decoder.eof:
+            return None, "truncated"
         return None, "unparseable"
-    if tail and len(out) + len(tail) > cap:
-        return None, "too_large"
     if tail:
-        out += tail
-    if len(out) > cap:
+        total += len(tail)
+        if total > cap:
+            return None, "too_large"
+        chunks.append(tail)
+    if total > cap:
         return None, "too_large"
-    return out, ""
+    if not decoder.eof:
+        return None, "truncated"
+    if decoder.unused_data:
+        return None, "trailing_data"
+    return b"".join(chunks), ""
+
+
+def _raw_nesting(text: str) -> str:
+    """Reject deep documents before the recursive JSON decoder sees them."""
+    depth = 0
+    in_string = False
+    escape = False
+    for char in text:
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            depth += 1
+            if depth > MAX_DEPTH:
+                return "nesting_limit"
+        elif char in "}]":
+            if depth:
+                depth -= 1
+    return ""
 
 
 def _limits(value: Any) -> str:
@@ -390,7 +446,63 @@ def _epoch(number: int) -> str | None:
 
 
 def _terms_from_body(body: str) -> dict[str, Any]:
-    deadlines: list[dict[str, str]] = []
+    """Extract affirmative terms only. Negation, conflict, and leftover limits stay unknown."""
+    deadlines, deadline_dispute = _deadlines(body)
+    minimum, minimum_dispute = _accepted(_MINIMUM.finditer(body), body, _minimum_key)
+    lock, lock_dispute = _accepted(_LOCK.finditer(body), body, lambda match: match.group(1))
+    disputed = deadline_dispute or minimum_dispute or lock_dispute
+    ambiguous = _AMBIGUOUS.search(body) is not None
+    unparsed = _UNPARSED_RESTRICTION.search(body) is not None
+    end = next((item for item in deadlines if item["role"] == "end"), None)
+    extracted = end is not None or minimum is not None or lock is not None
+    if extracted:
+        extraction = "extracted"
+        condition_status = "extracted"
+        residual = "unknown" if ambiguous or disputed or unparsed else "none"
+    elif ambiguous:
+        extraction = "ambiguous"
+        condition_status = "ambiguous"
+        residual = "unknown"
+    else:
+        extraction = "unknown"
+        condition_status = "unknown"
+        residual = "unknown"
+    duration = end is not None or lock is not None
+    excerpt_source = end["quote"] if end is not None else _clip(body.strip())
+    excerpt = _quote(excerpt_source)
+    provenance: list[dict[str, str]] = []
+    if minimum is not None:
+        provenance.append(_field_quote("minimum_amount", minimum.group(0)))
+    if lock is not None:
+        provenance.append(_field_quote("lock_days", lock.group(0)))
+    for item in deadlines:
+        field = "deadline" if item["role"] == "end" else "start"
+        provenance.append(_field_quote(field, item["quote"]))
+    return {
+        "conditions": {
+            "status": condition_status,
+            "minimum_amount": canonical(Decimal(minimum.group(1))) if minimum else None,
+            "minimum_unit": minimum.group(2).upper() if minimum else None,
+            "lock_days": int(lock.group(1)) if lock else None,
+        },
+        "deadlines": tuple(deadlines),
+        "deadline_status": "extracted" if end is not None else "unknown",
+        "excerpt": excerpt,
+        "extraction_status": extraction,
+        "provenance": tuple(item for item in provenance if item["quote"]),
+        "residual_conditions": residual,
+        "article_detail": "not_applicable",
+        "catalog_status": "not_applicable",
+        "links_not_followed": _link_count(body),
+        "duration_stated": duration,
+        "described_as_temporary": duration and extracted,
+        "temporary_language": "publisher_stated_duration" if duration and extracted else "not_described_as_temporary",
+    }
+
+
+def _deadlines(body: str) -> tuple[list[dict[str, str]], bool]:
+    found: list[dict[str, str]] = []
+    disputed = False
     for match in _ISO.finditer(body):
         token = match.group(0)
         try:
@@ -410,54 +522,57 @@ def _terms_from_body(body: str) -> dict[str, Any]:
             role = "start"
         else:
             continue
+        role_at = max(0, match.start() - 48) + role_match.start()
+        if _negated(body, role_at) or _negated(body, match.start()):
+            disputed = True
+            continue
         quote = _clip(window[role_match.start():].strip())
-        deadlines.append({
+        found.append({
             "role": role,
             "original": token,
             "timezone": "Z" if token.endswith("Z") else token[-6:],
             "utc": utc,
             "quote": quote,
         })
-    minimum = _MINIMUM.search(body)
-    lock = _LOCK.search(body)
-    ambiguous = _AMBIGUOUS.search(body) is not None
-    end = next((item for item in deadlines if item["role"] == "end"), None)
-    extracted = end is not None or minimum is not None or lock is not None
-    if extracted:
-        extraction = "extracted"
-        condition_status = "extracted"
-        residual = "unknown" if ambiguous else "none"
-    elif ambiguous:
-        extraction = "ambiguous"
-        condition_status = "ambiguous"
-        residual = "unknown"
-    else:
-        extraction = "unknown"
-        condition_status = "unknown"
-        residual = "unknown"
-    duration = end is not None or lock is not None
-    excerpt_source = end["quote"] if end is not None else _clip(body.strip())
-    excerpt = _quote(excerpt_source)
-    return {
-        "conditions": {
-            "status": condition_status,
-            "minimum_amount": canonical(Decimal(minimum.group(1))) if minimum else None,
-            "minimum_unit": minimum.group(2).upper() if minimum else None,
-            "lock_days": int(lock.group(1)) if lock else None,
-        },
-        "deadlines": tuple(deadlines),
-        "deadline_status": "extracted" if end is not None else "unknown",
-        "excerpt": excerpt,
-        "extraction_status": extraction,
-        "provenance": ({"field": "body", "quote": excerpt, "source": "explicit_body"},),
-        "residual_conditions": residual,
-        "article_detail": "not_applicable",
-        "catalog_status": "not_applicable",
-        "links_not_followed": _link_count(body),
-        "duration_stated": duration,
-        "described_as_temporary": duration and extracted,
-        "temporary_language": "publisher_stated_duration" if duration and extracted else "not_described_as_temporary",
-    }
+    ends = [item for item in found if item["role"] == "end"]
+    if len({item["original"] for item in ends}) > 1:
+        found = [item for item in found if item["role"] != "end"]
+        disputed = True
+    return found, disputed
+
+
+def _accepted(
+    matches: Any,
+    body: str,
+    key,
+) -> tuple[re.Match[str] | None, bool]:
+    affirmative: list[re.Match[str]] = []
+    disputed = False
+    for match in matches:
+        if _negated(body, match.start()):
+            disputed = True
+            continue
+        affirmative.append(match)
+    values = {key(match) for match in affirmative}
+    if len(values) > 1 or (disputed and affirmative):
+        return None, True
+    if affirmative:
+        return affirmative[0], False
+    return None, disputed
+
+
+def _minimum_key(match: re.Match[str]) -> tuple[str, str]:
+    return match.group(1), match.group(2).upper()
+
+
+def _negated(text: str, start: int) -> bool:
+    window = text[max(0, start - 48):start]
+    clause = re.split(r"[.!;?\n]", window)[-1]
+    return _NEGATION.search(clause) is not None
+
+
+def _field_quote(field: str, text: str) -> dict[str, str]:
+    return {"field": field, "quote": _quote(text), "source": "explicit_body"}
 
 
 def _empty_terms(
