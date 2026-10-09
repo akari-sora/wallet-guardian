@@ -176,9 +176,9 @@ def evaluate_rounds(rounds: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def compare_valid_block(record: Mapping[str, Any]) -> list[str]:
-    """A recorded false compare_valid disqualifies. A missing field stays compatible."""
+    """compare_valid is required evidence: false or missing disqualifies (fail closed)."""
     if "compare_valid" not in record:
-        return []
+        return ["evidence_missing:compare_valid"]
     if record.get("compare_valid") is True:
         return []
     reason = record.get("compare_reason")

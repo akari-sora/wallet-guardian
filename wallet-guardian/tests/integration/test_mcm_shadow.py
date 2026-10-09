@@ -818,6 +818,7 @@ def _windows(
         end = begin + timedelta(hours=hours)
         rows.append({
             "baseline": False,
+            "compare_valid": True,
             "declared_gaps": [],
             "duplicates": 0,
             "finished_at": _stamp(end),

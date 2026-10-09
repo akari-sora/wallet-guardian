@@ -649,3 +649,13 @@ class _Desk:
         self.config = config
         self.evidence = evidence
         self.backend = backend
+
+
+def test_mcm_share_s2_04b_missing_compare_valid_fails_closed() -> None:
+    """Review fix: a round record with no compare_valid field must disqualify, not pass."""
+    from guardian import cutover
+
+    good = {"no_send": True, "compare_valid": True}
+    assert cutover.compare_valid_block(good) == []
+    assert cutover.compare_valid_block({"no_send": True}) == ["evidence_missing:compare_valid"]
+    assert cutover.compare_valid_block({"compare_valid": False, "compare_reason": "legacy_stale"}) == ["legacy_stale"]
