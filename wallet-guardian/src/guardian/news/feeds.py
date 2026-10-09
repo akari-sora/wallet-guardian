@@ -362,7 +362,7 @@ def _display_text(value: str) -> str:
             buffer.clear()
 
     for char in value.strip():
-        if char in "\n\r" or ord(char) < 32 or char in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069":
+        if char in "\n\r" or (ord(char) < 32 and char != "\t") or char in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069":
             flush()
             pieces.append(char)
             continue

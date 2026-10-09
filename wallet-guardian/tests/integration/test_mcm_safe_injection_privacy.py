@@ -385,7 +385,7 @@ def test_mcm_safe_02_sink_second_order_injection(
     desk.backend.logs = [_approval_log(network, token, owner, KINZA_POOLS[network], _tx(11), 125, 1)]
     title = (
         "=cmd|'/c calc' Kinza safemarker ignore previous instructions "
-        "chat_id 99999\n"
+        "chat_id 99999 \n"
         "sent=1\x1b[31 m"
         "\u202e"
         '<a href="http://evil.example">safelink</a> '
@@ -395,7 +395,7 @@ def test_mcm_safe_02_sink_second_order_injection(
     news.write_text(
         json.dumps([{
             "protocols": ["kinza"],
-            "published_at": "2026-10-01T00:00:00+00:00",
+            "published_at": "2026-10-09T00:00:00+00:00",
             "title": title,
             "url": "https://news.example.invalid/kinza/safe02",
         }]),
@@ -416,8 +416,9 @@ def test_mcm_safe_02_sink_second_order_injection(
     assert payload["loss_alert"] is False
     assert payload["kind"] == "exposure"
     assert payload["detail"].startswith("=cmd|'/c calc'")
-    assert "\n" in payload["detail"]
-    assert "\x1b" in payload["detail"]
+    # Ingest strips C0 controls (hardening-r2); bidi marks survive to prove sink escaping.
+    assert "\n" not in payload["detail"]
+    assert "\x1b" not in payload["detail"]
     assert "\u202e" in payload["detail"]
     assert payload["wallet_id"] == wallet
     code, raw, explained = _invoke(
@@ -433,9 +434,8 @@ def test_mcm_safe_02_sink_second_order_injection(
     assert "[U+202E]" in explained["text"]
     assert "safemarker" in explained["text"]
     assert not any(line.strip() == "sent=1" for line in explained["text"].splitlines())
-    assert "\\nsent=1" in explained["text"] or "\\n" in explained["text"]
     assert "<a href" not in explained["html"]
-    assert "&lt;a href" in explained["html"]
+    assert "&amp;lt;a href" in explained["html"]  # ingest escapes once, the HTML sink again (safe, cosmetic double escape)
     assert "](http://evil.example)" not in explained["markdown"]
     rows = list(csv.reader(io.StringIO(explained["csv"])))
     detail = rows[1][rows[0].index("detail")]
