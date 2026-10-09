@@ -226,9 +226,12 @@ def _outside_checkout() -> Path:
 
 
 def _child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
-    env = os.environ.copy()
-    for key in ("PYTHONPATH", "VIRTUAL_ENV", "PYTHONHOME"):
-        env.pop(key, None)
+    # Minimal environment: no operator settings or credentials are inherited.
+    env = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "LANG", "LC_ALL", "UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR") if key in os.environ}
+    if "UV_CACHE_DIR" not in env:
+        cache = subprocess.run(["uv", "cache", "dir"], text=True, capture_output=True, check=False).stdout.strip()
+        if cache:
+            env["UV_CACHE_DIR"] = cache
     env["UV_OFFLINE"] = "1"
     if extra:
         env.update(extra)
@@ -251,24 +254,6 @@ def _run(
         timeout=timeout,
         check=False,
     )
-    if (
-        result.returncode != 0
-        and command[:3] == ["uv", "pip", "install"]
-        and "--offline" in command
-        and "network was disabled" in result.stderr
-    ):
-        retry = [part for part in command if part != "--offline"]
-        online = dict(env if env is not None else _child_env())
-        online.pop("UV_OFFLINE", None)
-        return subprocess.run(
-            retry,
-            cwd=cwd,
-            env=online,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
     return result
 
 
@@ -309,7 +294,8 @@ def test_mcm_safe_04_clean_installed_cli() -> None:
             ["uv", "pip", "install", "--offline", "--python", str(python), "--constraints", str(constraints), str(wheel)],
             cwd=work,
         )
-        assert installed.returncode == 0, installed.stderr
+        # An offline install that cannot be satisfied is an unmet gate, never an online retry.
+        assert installed.returncode == 0, "SAFE-04 gate unmet (pre-stage dependencies in the uv cache): " + installed.stderr
         home = work / "home"
         private = work / "private"
         home.mkdir()

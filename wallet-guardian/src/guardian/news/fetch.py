@@ -183,11 +183,12 @@ def fetch_allowlisted_news(
             "last_modified": _validator(result.headers.get("last-modified")),
             "last_ok_at": now,
             "parse_status": status,
-            "reason": "",
+            "quarantined_items": parsed.quarantined,
+            "reason": f"quarantined_items_{parsed.quarantined}" if parsed.quarantined else "",
             "source_id": source.source_id,
             "status": status,
         }
-        results.append(FeedResult(source.source_id, feed.url, status, "", protocols))
+        results.append(FeedResult(source.source_id, feed.url, status, f"quarantined_items_{parsed.quarantined}" if parsed.quarantined else "", protocols))
     moment = clock()
     for incident in book.incidents:
         if _recent(incident.published_at, moment):

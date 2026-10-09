@@ -31,3 +31,12 @@ A malformed feed item is quarantined. A well-formed sibling in the same document
 | SAFE-03 | `test_mcm_safe_03_destination_privacy` |
 | SAFE-04 | `test_mcm_safe_04_clean_installed_cli` |
 | SAFE-05 | `test_mcm_safe_05_parser_bounds_and_zero_sends` |
+
+## Residual limits (stated, not hidden)
+
+- The HTML sink escapes text that ingest already escaped. This is safe and cosmetic.
+- The protocol matcher drops a title that has a token mixing digits and letters (for example "Aave v3 incident" can be missed). This is a false-negative limit, not only an attacker lever. It is recorded separately and not fixed here.
+- `privacy_boundary.py` is a policy table, not universal enforcement. Test destinations should come from registered sources, not hostname substrings.
+- Escaping and canary tests do not establish general prompt-injection immunity for any downstream language model.
+- Quarantined feed items are counted in the news state (`quarantined_items`) and the fetch result reason.
+- The clean-install test runs with a minimal environment and `UV_OFFLINE=1`. If dependencies are not pre-staged in the uv cache, the gate is unmet and the test fails. It never retries online.

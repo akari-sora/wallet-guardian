@@ -62,14 +62,17 @@ def canonicalize_url(url: str) -> str | None:
     """Lowercase the host, drop the fragment, and drop utm_* and ref query keys."""
     if not isinstance(url, str) or not url.strip():
         return None
-    parts = urlsplit(url.strip())
+    try:
+        parts = urlsplit(url.strip())
+        port = parts.port
+    except ValueError:
+        return None
     if parts.username or parts.password:
         return None
     scheme = parts.scheme.lower()
     if scheme not in {"http", "https"} or not parts.hostname:
         return None
     host = parts.hostname.lower().rstrip(".")
-    port = parts.port
     netloc = host if port is None else f"{host}:{port}"
     query = []
     for key, value in parse_qsl(parts.query, keep_blank_values=True):
@@ -96,7 +99,11 @@ def parse_feed(data: bytes, *, source_id: str, source_protocols: Sequence[str] =
         root = ET.fromstring(text)
     except ET.ParseError:
         return FeedParse(False, (), "unparseable")
+    if _local(root.tag) not in {"rss", "feed"}:
+        return FeedParse(False, (), "unparseable")
     elements = _entries(root)
+    if len(elements) > 100:
+        return FeedParse(False, (), "item_cap")
     items: list[NewsItem] = []
     quarantined = 0
     for element in elements:
@@ -121,6 +128,8 @@ def parse_structured(
     """Structured rows for manual X entries and fixtures. Text is not executed."""
     if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
         return FeedParse(False, (), "malformed_item")
+    if len(rows) > 100:
+        return FeedParse(False, (), "item_cap")
     items: list[NewsItem] = []
     quarantined = 0
     for row in rows:

@@ -49,7 +49,7 @@ def escape_plain(value: str) -> str:
             parts.append("\\t")
             continue
         code = ord(char)
-        if code < 32 or code == 127:
+        if code < 32 or 127 <= code <= 159:
             parts.append(f"[U+{code:04X}]")
             continue
         parts.append(char)
@@ -71,7 +71,7 @@ def escape_html(value: str) -> str:
 def escape_markdown(value: str) -> str:
     """Text for a Markdown sink. Link and image syntax stays literal."""
     text = escape_html(value)
-    return "".join("\\" + char if char in "[]()`!" else char for char in text)
+    return "".join("\\" + char if char in "\\[]()`!*_~|" else char for char in text)
 
 
 def escape_csv_cell(value: str) -> str:
@@ -79,7 +79,7 @@ def escape_csv_cell(value: str) -> str:
     text = escape_plain(value)
     if _ADDRESS.fullmatch(text) or _NUMBER.fullmatch(text):
         return text
-    if text[:1] in "=+-@":
+    if text and text[0] in "=+-@":
         text = "'" + text
     if any(char in text for char in '",\r\n'):
         text = '"' + text.replace('"', '""') + '"'
