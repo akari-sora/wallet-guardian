@@ -479,3 +479,35 @@ def _on_time(
         missed=missed,
         catch_up=catch_up,
     )
+
+
+def test_mcm_share_s3_06_cron_install_keeps_other_jobs_and_is_idempotent(tmp_path: Path) -> None:
+    """MCM-SHARE-S3-06. `crontab FILE` replaces the whole table; install must merge a marked block."""
+    from guardian import service_install as si
+
+    other = "CRON_TZ=Asia/Taipei\n0 10 * * * /usr/local/bin/someone-elses-job\n*/10 * * * * /opt/other/task\n"
+    block = "SHELL=/bin/sh\n5 */3 * * * /x/guardian run-once --mcm-config /c.json --no-send\n"
+    first = si._merge_cron(other, block)
+    assert first.startswith(other)
+    assert "/usr/local/bin/someone-elses-job" in first and "/opt/other/task" in first
+    assert first.count("# BEGIN wallet-guardian-monitor") == 1
+    assert "SHELL=/bin/sh" not in first
+    second = si._merge_cron(first, block.replace("5 */3", "7 */3"))
+    assert second.startswith(other)
+    assert second.count("# BEGIN wallet-guardian-monitor") == 1 and "7 */3" in second and "5 */3" not in second
+
+    table = {"now": other}
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str]) -> CommandResult:
+        calls.append(list(argv))
+        if argv[-1] == "-l":
+            return CommandResult(0, table["now"], "")
+        table["now"] = Path(argv[-1]).read_text(encoding="utf-8")
+        return CommandResult(0, "", "")
+
+    cron_file = tmp_path / si._CRON_NAME
+    cron_file.write_text(block, encoding="utf-8")
+    assert si._run_install("cron", "monitor", tmp_path, [si._CRON_NAME], runner) is False
+    assert table["now"].startswith(other) and "run-once" in table["now"]
+    assert calls[0][-1] == "-l"

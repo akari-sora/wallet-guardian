@@ -490,7 +490,14 @@ def _destination(mode: str, output_dir: str | None, user: str) -> Path:
 def _run_install(mode: str, user: str, destination: Path, selected: Sequence[str], runner: Runner) -> bool:
     if mode == "cron":
         cron_path = destination / _CRON_NAME
-        result = _coerce(runner(["crontab", "-u", user, os.fspath(cron_path)]))
+        # `crontab FILE` replaces the whole table. Merge a marked block into the
+        # existing table instead, so the operator's other jobs survive.
+        listed = _coerce(runner(["crontab", "-u", user, "-l"]))
+        existing = listed.stdout if listed.returncode == 0 else ""
+        merged = _merge_cron(existing, cron_path.read_text(encoding="utf-8"))
+        merged_path = cron_path.with_name(_CRON_NAME + ".merged")
+        merged_path.write_text(merged, encoding="utf-8", newline="\n")
+        result = _coerce(runner(["crontab", "-u", user, os.fspath(merged_path)]))
         return result.returncode != 0
     prefix = ["systemctl", "--user"] if mode == "systemd_user_timer" else ["systemctl"]
     commands = [prefix + ["daemon-reload"]]
@@ -502,6 +509,28 @@ def _run_install(mode: str, user: str, destination: Path, selected: Sequence[str
         if result.returncode != 0:
             return True
     return False
+
+
+_CRON_BEGIN = "# BEGIN wallet-guardian-monitor (managed block, do not edit)"
+_CRON_END = "# END wallet-guardian-monitor"
+
+
+def _merge_cron(existing: str, block: str) -> str:
+    """Existing crontab with any previous managed block replaced by ``block``. Other lines are kept verbatim."""
+    kept: list[str] = []
+    inside = False
+    for line in existing.splitlines():
+        if line == _CRON_BEGIN:
+            inside = True
+            continue
+        if line == _CRON_END:
+            inside = False
+            continue
+        if not inside:
+            kept.append(line)
+    body = [line for line in block.splitlines() if not line.startswith("SHELL=")]
+    out = kept + [_CRON_BEGIN, *body, _CRON_END]
+    return "\n".join(out) + "\n"
 
 
 def _recording(runner: Runner | None, recorded: list[list[str]], *, allow_systemctl: bool) -> Runner:
