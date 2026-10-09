@@ -107,3 +107,7 @@ If any one of those is missing, leave the Windows task enabled. A catch-up row i
 ## What this draft does not do
 
 It does not enable linger, write `/etc/systemd`, install a crontab, open a port, or send a notification. `sender_started` stays false. The same-host watchdog still cannot see a dead host. Qualification of 24 shadow windows is a separate record and is not granted by installing a timer.
+
+## Cron fallback keeps your other jobs
+
+`install-service --apply` in cron mode reads the current table (`crontab -l`) and adds or replaces only the block between `# BEGIN wallet-guardian-monitor` and `# END wallet-guardian-monitor`. Every other line stays as it was. Remove the block by deleting those marked lines (`crontab -l`, edit, `crontab FILE`).
