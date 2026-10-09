@@ -80,8 +80,12 @@ _APPROVAL_ALERTS = frozenset({"first_observed", "increased", "new"})
 _PLUGIN_IDS = {
     "aave-v3": "aave_v3",
     "aave_v3": "aave_v3",
+    "compound-v3": "compound_v3",
+    "compound_v3": "compound_v3",
     "erc4626": "erc4626",
+    "erc4626-pins": "erc4626_pins",
     "erc4626-registered": "erc4626",
+    "erc4626_pins": "erc4626_pins",
     "lista-slisbnb": "lista_slisbnb",
     "lista_slisbnb": "lista_slisbnb",
     "kinza": "kinza",

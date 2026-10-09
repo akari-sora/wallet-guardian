@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Iterator, Mapping, Sequence
 from uuid import uuid4
 
-from guardian.chains.evm.adapter import chain_id_operation, hex_quantity
+from guardian.chains.evm.adapter import chain_id_operation, evm_rpc, hex_quantity
 from guardian.chains.solana.adapter import (
     account_info_operation,
     genesis_hash_operation,
@@ -67,7 +67,34 @@ class PluginContext:
     def clock(self) -> int:
         return _SESSIONS[self.session_id].clock
 
-    def eth_call(self, network: str, to: str, signature: str, args: Sequence[Any]) -> ViewRead:
+    def evm_head(self, network: str) -> tuple[int, int] | None:
+        """Block number and timestamp at ``latest``. None when the head is unreadable.
+
+        Callers that then pass ``hex(number)`` into ``eth_call`` keep one observation
+        on that block. This method does not write.
+        """
+        session = _SESSIONS[self.session_id]
+        source_id = session.sources.get(network)
+        if not isinstance(source_id, str) or not source_id:
+            return None
+        read = _jsonrpc(session.transport, source_id, evm_rpc("eth_getBlockByNumber", ["latest", False]))
+        if not read.ok or not isinstance(read.result, dict):
+            return None
+        number = hex_quantity(read.result.get("number"))
+        timestamp = hex_quantity(read.result.get("timestamp"))
+        if number is None or timestamp is None:
+            return None
+        return number, timestamp
+
+    def eth_call(
+        self,
+        network: str,
+        to: str,
+        signature: str,
+        args: Sequence[Any],
+        *,
+        block: str | None = None,
+    ) -> ViewRead:
         """One allowlisted view. Anything else raises and does not touch the transport."""
         session = _SESSIONS[self.session_id]
         spec = session.specs.get(signature)
@@ -77,7 +104,7 @@ class PluginContext:
         if not source_id:
             return ViewRead(False, None, None, "missing_source")
         try:
-            operation = view_operation(signature, spec, to, args)
+            operation = view_operation(signature, spec, to, args, "latest" if block is None else block)
         except ValueError as exc:
             if str(exc) == "not_a_view_call":
                 raise

@@ -1,0 +1,63 @@
+{
+  "id": "erc4626_pins",
+  "version": "1",
+  "networks": [
+    "ethereum-mainnet"
+  ],
+  "contracts": {
+    "ethereum-mainnet": {
+      "sdai": {
+        "address": "0x83F20F44975D03b1b09e64809B757c47f942BEeA",
+        "source_url": "https://docs.spark.fi/dev/savings/sdai-token",
+        "retrieved": "2026-10-10",
+        "status": "documented",
+        "notes": "SavingsDai ERC-4626 read candidate. Expected share decimals 18. Implementation identity is SavingsDai at this address. asset() agreement is not a safety certificate."
+      },
+      "sdai_asset": {
+        "address": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+        "source_url": "https://github.com/makerdao/dss",
+        "retrieved": "2026-10-10",
+        "status": "documented",
+        "notes": "DAI, the expected sDAI underlying. Expected decimals 18. Not a safety certificate."
+      },
+      "steakhouse_usdc": {
+        "address": "0xBEEF01735c132Ada46AA9aA4c54623cAA92A64CB",
+        "source_url": "https://github.com/morpho-org/metamorpho",
+        "retrieved": "2026-10-10",
+        "status": "documented",
+        "notes": "Steakhouse USDC MetaMorpho vault read candidate. Expected share decimals 18. Implementation identity is MetaMorpho at this address. Vault exposure only; MORPHO() agreement is not a safety certificate and is not a look-through of Morpho Blue markets."
+      },
+      "steakhouse_asset": {
+        "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "source_url": "https://developers.circle.com/stablecoins/usdc-contract-addresses",
+        "retrieved": "2026-10-10",
+        "status": "documented",
+        "notes": "USDC, the expected Steakhouse USDC underlying. Expected decimals 6. Not a safety certificate."
+      },
+      "steakhouse_morpho": {
+        "address": "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb",
+        "source_url": "https://docs.morpho.org/get-started/resources/addresses/",
+        "retrieved": "2026-10-10",
+        "status": "documented",
+        "notes": "Morpho Blue contract named by MORPHO(). Identity check only. This package does not read Morpho Blue markets."
+      }
+    }
+  },
+  "required_sources": [
+    "evm_rpc"
+  ],
+  "view_methods": [
+    "MORPHO()",
+    "asset()",
+    "balanceOf(address)",
+    "convertToAssets(uint256)",
+    "decimals()",
+    "maxWithdraw(address)",
+    "name()",
+    "symbol()"
+  ],
+  "capabilities": [
+    "positions"
+  ],
+  "notes": "Opt-in ethereum-mainnet sDAI and Steakhouse USDC via plugins entry erc4626-pins. Not listed in examples/monitor.json. Caller-supplied erc4626 vaults stay on erc4626. Reads are eth_call only. convertToAssets rounds down and is not a withdrawal promise. Shares and the underlying quote are not both counted. offline fixtures. No user accounts."
+}

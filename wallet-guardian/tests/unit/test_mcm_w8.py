@@ -247,7 +247,9 @@ def test_mcm_w8_01_plugin_readonly_rejects_code_loading_and_reads_views():
     assert isinstance(PLUGIN_REGISTRY, MappingProxyType)
     assert set(PLUGIN_REGISTRY) == {
         "aave_v3",
+        "compound_v3",
         "erc4626",
+        "erc4626_pins",
         "kinza",
         "lido",
         "lista_slisbnb",
@@ -290,7 +292,9 @@ def test_mcm_w8_01_plugin_readonly_rejects_code_loading_and_reads_views():
     manifests = load_protocol_dir()
     assert set(manifests) == {
         "aave_v3",
+        "compound_v3",
         "erc4626",
+        "erc4626_pins",
         "kinza",
         "lido",
         "lista_slisbnb",
