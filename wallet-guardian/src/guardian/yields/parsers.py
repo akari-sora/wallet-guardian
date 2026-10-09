@@ -6,8 +6,11 @@ article detail is not retrieved. A failed parse is a reason, not an empty succes
 and not a zero yield. A gzip member must be complete, and bytes after that member
 are rejected. Depth and decoder failures return a reason. A negated or conflicting
 clause is not an affirmative term. Negation before or after a matched expression
-blocks that field. Free text stays residual unknown unless every clause matches
-the supported grammar.
+blocks that field. A deadline role counts only in the same clause as its
+timestamp, a publication time is not a deadline, and a disputed deadline clears
+the affirmative date. Free text stays residual unknown unless every clause matches
+the supported grammar. A date clause counts only when the timestamp is a real
+calendar time.
 """
 
 from __future__ import annotations
@@ -50,7 +53,8 @@ _LOCK = re.compile(r"\blocked\s+for\s+([0-9]+)\s+days\b", re.IGNORECASE)
 _NEGATION = re.compile(r"\b(?:not|no|never|without|cannot|can\s*not)\b|n['’]t\b", re.IGNORECASE)
 _CLAUSE_BOUNDARY = re.compile(r"[!;?\n]|\.(?=\s|$)")
 # Residual "none" means every clause matched one of these forms. Other eligibility
-# text is unknown; it is not filtered by a keyword list.
+# text is unknown; it is not filtered by a keyword list. A deadline form counts
+# only after its timestamp parses as a real calendar time.
 _MINIMUM_CLAUSE = re.compile(
     r"(?i)^(?:a\s+)?minimum\s+[0-9]+(?:\.[0-9]+)?\s+[A-Za-z]{2,12}(?:\s+locked\s+for\s+[0-9]+\s+days)?$"
 )
@@ -62,6 +66,7 @@ _DEADLINE_CLAUSE = re.compile(
 _LINK_CLAUSE = re.compile(r"(?i)^(?:see\s+)?https://\S+$")
 _LINK = re.compile(r"https://[^\s\"'<>]+")
 _DATE_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
+_PUBLICATION = re.compile(r"\b(?:published|publication)\b", re.IGNORECASE)
 
 
 class _NonFinite(Exception):
@@ -509,43 +514,56 @@ def _terms_from_body(body: str) -> dict[str, Any]:
 
 
 def _deadlines(body: str) -> tuple[list[dict[str, str]], bool]:
+    """Accept one supported deadline expression per role, inside its own clause.
+
+    The role word has to sit in the same clause as the timestamp. Text from an
+    earlier sentence, including the word "deadline" before a publication time,
+    does not label that timestamp. Negation before or after the timestamp disputes
+    that role, and any affirmative date for a disputed role is dropped.
+    """
     found: list[dict[str, str]] = []
-    disputed = False
+    disputed_roles: set[str] = set()
     for match in _ISO.finditer(body):
         token = match.group(0)
         try:
             utc = _as_utc(token)
         except ValueError:
             continue
-        window = body[max(0, match.start() - 48):match.end()]
-        role_match = None
-        for candidate in _ROLE.finditer(window):
-            role_match = candidate
-        if role_match is None:
+        left, right = _clause_bounds(body, match.start(), match.end())
+        before = body[left:match.start()]
+        after = body[match.end():right]
+        preceding = _last_role(before)
+        following = _roles_named(after)
+        if _negated(body, match.start(), match.end()) and (preceding is not None or following):
+            if preceding is not None:
+                named = _deadline_role(preceding.group(1))
+                if named is not None:
+                    disputed_roles.add(named)
+            disputed_roles.update(following)
             continue
-        word = role_match.group(1).lower()
-        if word in _END_WORDS:
-            role = "end"
-        elif word in _START_WORDS:
-            role = "start"
-        else:
+        if _PUBLICATION.search(body[left:right]) is not None:
             continue
-        if _negated(body, match.start(), match.end()):
-            disputed = True
+        if preceding is None:
             continue
-        quote = _clip(window[role_match.start():].strip())
+        role = _deadline_role(preceding.group(1))
+        if role is None:
+            continue
+        expression = body[left + preceding.start():match.end()].strip()
+        if not _supported_deadline(expression):
+            continue
         found.append({
             "role": role,
             "original": token,
             "timezone": "Z" if token.endswith("Z") else token[-6:],
             "utc": utc,
-            "quote": quote,
+            "quote": _clip(expression),
         })
-    ends = [item for item in found if item["role"] == "end"]
-    if len({item["original"] for item in ends}) > 1:
-        found = [item for item in found if item["role"] != "end"]
-        disputed = True
-    return found, disputed
+    for role in ("end", "start"):
+        chosen = [item for item in found if item["role"] == role]
+        if len({item["original"] for item in chosen}) > 1 or (role in disputed_roles and chosen):
+            found = [item for item in found if item["role"] != role]
+            disputed_roles.add(role)
+    return found, bool(disputed_roles)
 
 
 def _accepted(
@@ -583,10 +601,48 @@ def _complete_coverage(body: str) -> bool:
 
 
 def _supported_clause(clause: str) -> bool:
-    return any(
-        pattern.fullmatch(clause) is not None
-        for pattern in (_MINIMUM_CLAUSE, _LOCK_CLAUSE, _DEADLINE_CLAUSE, _LINK_CLAUSE)
-    )
+    if any(pattern.fullmatch(clause) is not None for pattern in (_MINIMUM_CLAUSE, _LOCK_CLAUSE, _LINK_CLAUSE)):
+        return True
+    return _supported_deadline(clause)
+
+
+def _supported_deadline(text: str) -> bool:
+    """True when the text is a deadline clause whose timestamp is a real calendar time."""
+    if _DEADLINE_CLAUSE.fullmatch(text) is None:
+        return False
+    found = _ISO.search(text)
+    if found is None:
+        return False
+    try:
+        _as_utc(found.group(0))
+    except ValueError:
+        return False
+    return True
+
+
+def _last_role(text: str) -> re.Match[str] | None:
+    found: re.Match[str] | None = None
+    for candidate in _ROLE.finditer(text):
+        found = candidate
+    return found
+
+
+def _roles_named(text: str) -> list[str]:
+    named: list[str] = []
+    for candidate in _ROLE.finditer(text):
+        role = _deadline_role(candidate.group(1))
+        if role is not None and role not in named:
+            named.append(role)
+    return named
+
+
+def _deadline_role(word: str) -> str | None:
+    lowered = word.lower()
+    if lowered in _END_WORDS:
+        return "end"
+    if lowered in _START_WORDS:
+        return "start"
+    return None
 
 
 def _negated(text: str, start: int, end: int) -> bool:
