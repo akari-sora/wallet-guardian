@@ -142,6 +142,49 @@
       "budget_group": "blockscout-optimism",
       "enabled": true,
       "method_credits": 20
+    },
+    "blockscout-pro": {
+      "adapter": "blockscout",
+      "endpoint_env": "BLOCKSCOUT_PRO_API_BASE",
+      "credential_env": "BLOCKSCOUT_API_KEY",
+      "budget_group": "blockscout-pro",
+      "enabled": true,
+      "method_credits": 20
+    },
+    "blockscout-eth-public": {
+      "adapter": "blockscout",
+      "endpoint_env": "BLOCKSCOUT_ETH_URL",
+      "budget_group": "blockscout-eth-public",
+      "enabled": true,
+      "method_credits": 20
+    },
+    "blockscout-base-public": {
+      "adapter": "blockscout",
+      "endpoint_env": "BLOCKSCOUT_BASE_PUBLIC_URL",
+      "budget_group": "blockscout-base-public",
+      "enabled": true,
+      "method_credits": 20
+    },
+    "blockscout-optimism-public": {
+      "adapter": "blockscout",
+      "endpoint_env": "BLOCKSCOUT_OPTIMISM_PUBLIC_URL",
+      "budget_group": "blockscout-optimism-public",
+      "enabled": true,
+      "method_credits": 20
+    },
+    "blockscout-arbitrum-public": {
+      "adapter": "blockscout",
+      "endpoint_env": "BLOCKSCOUT_ARBITRUM_URL",
+      "budget_group": "blockscout-arbitrum-public",
+      "enabled": true,
+      "method_credits": 20
+    },
+    "blockscout-polygon-public": {
+      "adapter": "blockscout",
+      "endpoint_env": "BLOCKSCOUT_POLYGON_URL",
+      "budget_group": "blockscout-polygon-public",
+      "enabled": true,
+      "method_credits": 20
     }
   },
   "routing": [
@@ -171,6 +214,7 @@
       "capability": "history.native_external",
       "source_ids": [
         "etherscan",
+        "blockscout-eth-public",
         "rpc-ethereum-mainnet"
       ]
     },
@@ -228,6 +272,7 @@
       "capability": "history.native_external",
       "source_ids": [
         "etherscan",
+        "blockscout-arbitrum-public",
         "rpc-arbitrum-one"
       ]
     },
@@ -256,6 +301,8 @@
       "network": "base-mainnet",
       "capability": "history.native_external",
       "source_ids": [
+        "blockscout-pro",
+        "blockscout-base-public",
         "blockscout-base"
       ]
     },
@@ -284,6 +331,8 @@
       "network": "optimism-mainnet",
       "capability": "history.native_external",
       "source_ids": [
+        "blockscout-pro",
+        "blockscout-optimism-public",
         "blockscout-optimism"
       ]
     },
@@ -313,6 +362,7 @@
       "capability": "history.native_external",
       "source_ids": [
         "etherscan",
+        "blockscout-polygon-public",
         "rpc-polygon-pos"
       ]
     },
@@ -467,6 +517,42 @@
       "retry_attempts": 3
     },
     "blockscout-optimism": {
+      "max_rps": 5,
+      "max_concurrency": 1,
+      "max_requests_per_day": 5000,
+      "retry_attempts": 3
+    },
+    "blockscout-pro": {
+      "max_rps": 5,
+      "max_concurrency": 1,
+      "max_requests_per_day": 5000,
+      "retry_attempts": 3
+    },
+    "blockscout-eth-public": {
+      "max_rps": 5,
+      "max_concurrency": 1,
+      "max_requests_per_day": 5000,
+      "retry_attempts": 3
+    },
+    "blockscout-base-public": {
+      "max_rps": 5,
+      "max_concurrency": 1,
+      "max_requests_per_day": 5000,
+      "retry_attempts": 3
+    },
+    "blockscout-optimism-public": {
+      "max_rps": 5,
+      "max_concurrency": 1,
+      "max_requests_per_day": 5000,
+      "retry_attempts": 3
+    },
+    "blockscout-arbitrum-public": {
+      "max_rps": 5,
+      "max_concurrency": 1,
+      "max_requests_per_day": 5000,
+      "retry_attempts": 3
+    },
+    "blockscout-polygon-public": {
       "max_rps": 5,
       "max_concurrency": 1,
       "max_requests_per_day": 5000,

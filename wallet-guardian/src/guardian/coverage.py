@@ -58,6 +58,7 @@ class CoverageObservation:
     price_quality: str | None = None
     evidence_refs: tuple[str, ...] = ()
     reason_codes: tuple[str, ...] = ()
+    credential_hint: str = ""
 
     def __post_init__(self) -> None:
         if self.category not in {"ok", "empty", "partial", "error", "stale"}:
@@ -234,7 +235,7 @@ def _row(
     if probe not in _PROBES:
         probe = "untested"
     scope, checkpoint = _scope(support, observation, entry, quality)
-    return {
+    row = {
         "schema_version": "guardian.coverage.v1",
         "wallet_id": wallet_id,
         "network": network,
@@ -256,6 +257,10 @@ def _row(
         "reason_codes": reasons,
         "evidence_refs": list(observation.evidence_refs) if observation is not None else [],
     }
+    hint = observation.credential_hint if observation is not None else ""
+    if hint and "credential_missing" in reasons:
+        row["credential_hint"] = hint
+    return row
 
 
 def _quality(

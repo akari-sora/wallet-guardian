@@ -624,6 +624,11 @@ def _object(text: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _lf_bytes(data: bytes) -> bytes:
+    """CRLF and lone CR become LF so Windows and Linux hash the same checkout."""
+    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def content_hash(root: Path) -> str:
     """Scope identity: file contents under src/guardian and config/, not a commit SHA.
 
@@ -640,7 +645,7 @@ def content_hash(root: Path) -> str:
                 continue
             digest.update(f"{top}/{path.relative_to(base).as_posix()}".encode("utf-8"))
             digest.update(b"\0")
-            digest.update(path.read_bytes())
+            digest.update(_lf_bytes(path.read_bytes()))
             digest.update(b"\0")
     return digest.hexdigest()
 

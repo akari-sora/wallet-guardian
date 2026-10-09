@@ -11,6 +11,12 @@ from collections import Counter
 from typing import Any, Mapping
 
 _REMAINING = ("x-credits-remaining", "x-ratelimit-remaining", "x-ratelimit-remaining-quota")
+_RATE_HEADERS = (
+    "x-credits-remaining",
+    "x-ratelimit-limit",
+    "x-ratelimit-remaining",
+    "x-ratelimit-remaining-quota",
+)
 _BLOCKSCOUT_CREDITS = 20
 
 
@@ -32,6 +38,7 @@ class CallLedger:
             "logical_methods": 0,
             "methods": Counter(),
             "pages": 0,
+            "rate_headers": {},
             "remaining_quota": None,
         })
         methods = _methods(operation)
@@ -48,6 +55,9 @@ class CallLedger:
             for key in _REMAINING:
                 if key in headers and headers[key] not in (None, ""):
                     entry["remaining_quota"] = str(headers[key])
+            for key in _RATE_HEADERS:
+                if key in headers and headers[key] not in (None, ""):
+                    entry["rate_headers"][key] = str(headers[key])
 
     def as_dict(self) -> dict[str, Any]:
         providers = {}
@@ -60,6 +70,7 @@ class CallLedger:
                 "logical_methods": entry["logical_methods"],
                 "methods": dict(sorted(entry["methods"].items())),
                 "pages": entry["pages"],
+                "rate_headers": dict(sorted(entry["rate_headers"].items())),
                 "remaining_quota": entry["remaining_quota"],
             }
         return {

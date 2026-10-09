@@ -377,6 +377,12 @@ def _source_status(document: dict[str, Any], profile: dict[str, str], environ: M
             status[source_id] = SourceStatus(source_id, source["adapter"], source["enabled"] is True, False, "not_required", None)
             continue
         present = _credential_present(credential, profile, environ)
+        if not present and source.get("adapter") == "coingecko":
+            # The public tier needs no key. A missing demo key is a lower limit, not a gap.
+            status[source_id] = SourceStatus(
+                source_id, source["adapter"], source["enabled"] is True, False, "keyless", None,
+            )
+            continue
         status[source_id] = SourceStatus(
             source_id,
             source["adapter"],

@@ -53,13 +53,19 @@ class BlockscoutClient:
         self.random = random or (lambda: 0.0)
         self._credential = credential if isinstance(credential, str) else ""
 
-    def operation(self, path: str, query: Mapping[str, str] | None = None) -> Operation:
+    def operation(
+        self,
+        path: str,
+        query: Mapping[str, str] | None = None,
+        headers: tuple[str, ...] | None = None,
+    ) -> Operation:
         return Operation(
             protocol="rest",
             adapter="blockscout",
             http_method="GET",
             path=path,
             query=dict(query) if query else None,
+            headers=headers,
         )
 
     def page_query(self, params: Mapping[str, Any]) -> dict[str, str]:
@@ -88,8 +94,14 @@ class BlockscoutClient:
         page_size: int = 1000,
         page_cap: int = 20,
         previous_cursor: str | None = None,
+        chain_id: int | None = None,
+        pro: bool = False,
     ) -> HistoryRead:
-        """Etherscan-compatible /api account pages. The key is a query value, not a log line."""
+        """Etherscan-compatible account pages.
+
+        PRO uses ``/v2/api`` and ``chain_id``. A key is ``Authorization: Bearer``,
+        never a query value. A keyless instance uses ``/api`` and no key.
+        """
         capability = {
             "txlist": "history.native_external",
             "txlistinternal": "history.native_internal",
@@ -100,6 +112,8 @@ class BlockscoutClient:
             return _kept(capability, previous_cursor, "unknown_action")
         if not isinstance(page_size, int) or isinstance(page_size, bool) or page_size < 1:
             return _kept(capability, previous_cursor, "bad_page")
+        if pro and (isinstance(chain_id, bool) or not isinstance(chain_id, int)):
+            return _kept(capability, previous_cursor, "chain_id_missing")
         items: list[Any] = []
         page = 1
         while page <= page_cap:
@@ -113,9 +127,14 @@ class BlockscoutClient:
                 "sort": "asc",
                 "startblock": str(start_block),
             }
+            path = "/api"
+            headers = None
+            if pro:
+                query["chain_id"] = str(chain_id)
+                path = "/v2/api"
             if self._credential:
-                query["apikey"] = self._credential
-            operation = self.operation("/api", query)
+                headers = ("authorization",)
+            operation = self.operation(path, query, headers)
             try:
                 result = read_with_retry(
                     lambda: self.transport.request(self.source_id, operation),
@@ -130,6 +149,9 @@ class BlockscoutClient:
                 return _kept(capability, previous_cursor, exc.reason)
             except Exception:
                 return _kept(capability, previous_cursor, "error")
+            refusal = _http_refusal(result)
+            if refusal:
+                return _refused(capability, previous_cursor, refusal)
             body = result.body
             if plan_not_supported(body):
                 return HistoryRead(
@@ -249,3 +271,49 @@ def _address_path(path: str) -> bool:
 
 def _kept(capability: str, previous: str | None, reason: str) -> HistoryRead:
     return HistoryRead(capability, (), False, False, (), previous, "error", False, reason, (reason,) if reason else (), "")
+
+
+def _refused(capability: str, previous: str | None, reason: str) -> HistoryRead:
+    return HistoryRead(
+        capability, (), False, False, (), previous, "error", True, reason, (reason,), "",
+    )
+
+
+def _http_refusal(result: Any) -> str:
+    """Map Blockscout PRO and Cloudflare failures. They are not an empty wallet."""
+    status = getattr(result, "status", 0)
+    if isinstance(status, bool) or not isinstance(status, int):
+        status = 0
+    text = _error_text(result)
+    if status == 402 or _featured(text) or _needs_key(text):
+        if _featured(text):
+            return "plan_not_supported"
+        return "credential_missing"
+    if status == 403 and _bot_challenge(text):
+        return "bot_challenge"
+    return ""
+
+
+def _error_text(result: Any) -> str:
+    parts = [str(getattr(result, "detail", "") or "")]
+    body = getattr(result, "body", None)
+    if isinstance(body, dict):
+        for key in ("error", "message", "result"):
+            value = body.get(key)
+            if isinstance(value, str):
+                parts.append(value)
+    elif isinstance(body, str):
+        parts.append(body)
+    return " ".join(parts).lower()
+
+
+def _featured(text: str) -> bool:
+    return "featured chain" in text and "plan" in text
+
+
+def _needs_key(text: str) -> bool:
+    return "proceed with api key" in text or "x402" in text
+
+
+def _bot_challenge(text: str) -> bool:
+    return "just a moment" in text

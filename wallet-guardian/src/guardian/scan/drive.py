@@ -20,9 +20,18 @@ from guardian.security.transport_policy import Operation
 from guardian.sources.blockscout import BlockscoutClient
 from guardian.sources.budget import BudgetExhausted
 from guardian.sources.etherscan import EtherscanClient
+from guardian.sources.key_guide import credential_hint
 from guardian.sources.nodereal import NodeRealClient
 
 _INDEXERS = frozenset({"blockscout", "etherscan_v2", "nodereal_transfers"})
+_SOURCE_REFUSALS = frozenset({
+    "bot_challenge",
+    "credential_missing",
+    "method_not_found",
+    "nodereal_chain_not_supported",
+    "plan_not_supported",
+    "unauthorized",
+})
 _INDEXER_METHOD = {
     "blockscout": "account/txlist",
     "etherscan_v2": "account/txlist",
@@ -246,10 +255,13 @@ def history_external(scan: ScanContext, private_inputs: Any, wallet_id: str, add
         return []
     refusal: str | None = None
     refusal_adapter: str | None = None
+    refusal_env: str | None = None
     for source_id in ids:
         source = scan.public_config.document["sources"].get(source_id, {})
         adapter = source.get("adapter")
         if adapter not in _INDEXERS:
+            continue
+        if not _endpoint_ready(scan, source_id):
             continue
         cached = None if plan_cache is None else plan_cache.reason(source_id, scan.network)
         if cached == "plan_not_supported":
@@ -257,9 +269,16 @@ def history_external(scan: ScanContext, private_inputs: Any, wallet_id: str, add
             refusal_adapter = str(adapter)
             continue
         status = private_inputs.source_status.get(source_id)
-        if isinstance(source.get("credential_env"), str) and (status is None or not status.credential_present):
-            refusal = "credential_missing"
-            refusal_adapter = str(adapter)
+        credential_name = source.get("credential_env") if isinstance(source.get("credential_env"), str) else None
+        missing_key = credential_name is not None and (status is None or not status.credential_present)
+        # PRO without a key still calls once so a 402 payment response becomes credential_missing,
+        # then the keyless instance is next. Other keyed sources do not call.
+        pro_without_key = missing_key and adapter == "blockscout" and credential_name == "BLOCKSCOUT_API_KEY"
+        if missing_key and not pro_without_key:
+            if refusal not in {"bot_challenge", "plan_not_supported"}:
+                refusal = "credential_missing"
+                refusal_adapter = str(adapter)
+                refusal_env = credential_name
             continue
         if scan.head is None:
             refusal = "head_unreadable"
@@ -272,9 +291,11 @@ def history_external(scan: ScanContext, private_inputs: Any, wallet_id: str, add
         if outcome.refusal:
             refusal = outcome.refusal
             refusal_adapter = str(adapter)
+            if outcome.refusal == "credential_missing":
+                refusal_env = credential_name
             continue
         return outcome.rows
-    _refuse_history(scan, wallet_id, refusal, refusal_adapter)
+    _refuse_history(scan, wallet_id, refusal, refusal_adapter, refusal_env)
     return []
 
 
@@ -401,10 +422,12 @@ def _run_indexer(scan, source_id, source, adapter, wallet_id, address, stored, p
         return native
     if adapter == "blockscout":
         client = _blockscout(scan, source_id, source)
-        native = _walk_pages(scan, chunks, origin, wallet_id, "history.native_external", source_id, True, lambda start, end: _safe_blockscout(client, "txlist", address, start, end, page_size, stored))
+        pro = _blockscout_pro(source)
+        chain_id = scan.chain_id if pro else None
+        native = _walk_pages(scan, chunks, origin, wallet_id, "history.native_external", source_id, True, lambda start, end: _safe_blockscout(client, "txlist", address, start, end, page_size, stored, chain_id, pro))
         if native.refusal:
             return native
-        token = _walk_pages(scan, chunks, origin, wallet_id, "history.fungible", source_id, False, lambda start, end: _safe_blockscout(client, "tokentx", address, start, end, page_size, stored), cursor=False)
+        token = _walk_pages(scan, chunks, origin, wallet_id, "history.fungible", source_id, False, lambda start, end: _safe_blockscout(client, "tokentx", address, start, end, page_size, stored, chain_id, pro), cursor=False)
         native.rows.extend(token.rows)
         return native
     return _Outcome(refusal="unsupported_source")
@@ -431,7 +454,7 @@ def _walk_pages(scan, chunks, origin, wallet_id, capability, source_id, native, 
         if read is None:
             hard = "read_error"
             break
-        if getattr(read, "blocked", False) and read.reason in {"plan_not_supported", "method_not_found", "unauthorized", "nodereal_chain_not_supported"}:
+        if getattr(read, "blocked", False) and read.reason in _SOURCE_REFUSALS:
             if leaves:
                 hard = read.reason
                 break
@@ -505,11 +528,17 @@ def _safe_history(client, chain_id, action, address, start, end, stored):
     )
 
 
-def _safe_blockscout(client, action, address, start, end, page_size, stored):
+def _safe_blockscout(client, action, address, start, end, page_size, stored, chain_id, pro: bool):
     return client.account_history(
         action=action, address=address, start_block=start, end_block=end, page_size=page_size,
         previous_cursor=None if stored is None else str(stored),
+        chain_id=chain_id if isinstance(chain_id, int) and not isinstance(chain_id, bool) else None,
+        pro=pro,
     )
+
+
+def _blockscout_pro(source) -> bool:
+    return source.get("credential_env") == "BLOCKSCOUT_API_KEY"
 
 
 def _etherscan(scan, source_id, source) -> EtherscanClient:
@@ -642,8 +671,9 @@ def _record_indexer(scan, source_id: str, adapter: str) -> None:
     })
 
 
-def _refuse_history(scan, wallet_id, refusal, adapter: str | None = None) -> None:
+def _refuse_history(scan, wallet_id, refusal, adapter: str | None = None, credential_env: str | None = None) -> None:
     reason = refusal or "unsupported_source"
+    hint = credential_hint(credential_env) if reason == "credential_missing" and credential_env else ""
     if reason == "credential_missing" and adapter == "blockscout":
         scan.observations[(wallet_id, scan.network, "history.native_external")] = CoverageObservation(
             category="partial",
@@ -653,6 +683,7 @@ def _refuse_history(scan, wallet_id, refusal, adapter: str | None = None) -> Non
             reason_codes=("credential_missing", "blocked"),
             trust="unverified",
             price_quality="not_applicable",
+            credential_hint=hint,
         )
         scan.hold(scan.held_cursors, wallet_id, scan.network, "history.native_external")
         return
@@ -667,7 +698,7 @@ def _refuse_history(scan, wallet_id, refusal, adapter: str | None = None) -> Non
             price_quality="not_applicable",
         )
     else:
-        scan.observations[(wallet_id, scan.network, "history.native_external")] = _blocked(reason)
+        scan.observations[(wallet_id, scan.network, "history.native_external")] = _blocked(reason, hint)
     scan.hold(scan.held_cursors, wallet_id, scan.network, "history.native_external")
 
 
@@ -688,7 +719,7 @@ def _block_caps(scan, wallet_id, reason) -> None:
         scan.hold(scan.held_cursors, wallet_id, scan.network, capability)
 
 
-def _blocked(reason: str) -> CoverageObservation:
+def _blocked(reason: str, hint: str = "") -> CoverageObservation:
     return CoverageObservation(
         category="error",
         pagination_complete=False,
@@ -697,7 +728,19 @@ def _blocked(reason: str) -> CoverageObservation:
         reason_codes=(reason, "blocked"),
         trust="unverified",
         price_quality="unknown",
+        credential_hint=hint,
     )
+
+
+def _endpoint_ready(scan, source_id: str) -> bool:
+    registry = getattr(scan.transport, "endpoints", None)
+    if registry is None:
+        return False
+    try:
+        registered = registry.get(source_id)
+    except Exception:
+        return False
+    return bool(getattr(registered, "endpoint", ""))
 
 
 def _note_logs(scan, logs) -> None:

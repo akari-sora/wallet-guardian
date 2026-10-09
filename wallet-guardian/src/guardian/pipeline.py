@@ -27,6 +27,7 @@ from guardian.configuration import (
     _load_secret_profile,
 )
 from guardian.coverage import CoverageObservation, build_coverage, resolve_support
+from guardian.sources.key_guide import credential_hint, hint_for_source
 from guardian.delivery import deliver, load_handoff
 from guardian.events import ChainEvent
 from guardian.errors import GuardianError
@@ -273,7 +274,7 @@ def run_capability_pipeline(
             kinza_cache=kinza_cache,
         )
         observations[(account.wallet_id, network, "exposure_news")] = news_coverage
-        _fill_gaps(public_config, private_inputs, catalog, account.wallet_id, network, observations)
+        _fill_gaps(public_config, private_inputs, catalog, account.wallet_id, network, observations, transport)
     if fetched is not None:
         _apply_fetched_coverage(
             observations, enabled, fetched, public_config, position_rows, approval_state,
@@ -417,7 +418,7 @@ def probe_sources(
             identity = _probe_chain(transport, name, _network_of(name, registry), registry)
         elif source.get("adapter") == "solana_rpc":
             identity = _probe_genesis(transport, name, _network_of(name, registry), registry)
-        sources.append({
+        row = {
             "adapter": source.get("adapter"),
             "configured": True,
             "credential_present": present,
@@ -425,7 +426,11 @@ def probe_sources(
             "enabled": enabled,
             "id": name,
             "identity": identity,
-        })
+        }
+        hint = _credential_hint(source, blocked if isinstance(blocked, str) else None)
+        if hint:
+            row["credential_hint"] = hint
+        sources.append(row)
     return {"live_verified": False, "sources": sources, "status": "ok"}
 
 
@@ -751,7 +756,59 @@ def _history_external(scan, public_config, private_inputs, wallet_id, address, s
     return history_external(scan, private_inputs, wallet_id, address, stored, plan_cache)
 
 
-def _fill_gaps(public_config, private_inputs, catalog, wallet_id, network, observations) -> None:
+def _credential_hint(source: Mapping[str, Any], blocked_reason: str | None) -> str | None:
+    return hint_for_source(source, blocked_reason)
+
+
+def _risk_gap(public_config, private_inputs, privacy: Any) -> CoverageObservation:
+    """GoPlus stays uncalled while privacy denies it. A missing key is still credential_missing."""
+    reasons = []
+    hint = ""
+    source_id, source = _adapter_source(public_config, "goplus")
+    if source is not None:
+        status = private_inputs.source_status.get(source_id)
+        if status is not None and status.blocked_reason == "credential_missing":
+            reasons.append("credential_missing")
+            env_name = source.get("credential_env")
+            if isinstance(env_name, str):
+                hint = credential_hint(env_name)
+    if privacy != "operator_approved_sources_only":
+        reasons.append("third_party_denied")
+    else:
+        reasons.append("not_run")
+    return CoverageObservation(
+        category="error",
+        pagination_complete=False,
+        gap_detection_complete=False,
+        declared="not_read",
+        reason_codes=tuple(reasons + ["blocked"]),
+        trust="unverified",
+        price_quality="unknown",
+        credential_hint=hint,
+    )
+
+
+def _adapter_source(public_config, adapter: str) -> tuple[str | None, Mapping[str, Any] | None]:
+    for name, source in public_config.document["sources"].items():
+        if source.get("adapter") == adapter:
+            return name, source
+    return None, None
+
+
+def _adapter_endpoint(public_config, transport, adapter: str) -> bool:
+    if transport is None:
+        return False
+    name, _source = _adapter_source(public_config, adapter)
+    if name is None:
+        return False
+    try:
+        registered = transport.endpoints.get(name)
+    except Exception:
+        return False
+    return bool(getattr(registered, "endpoint", ""))
+
+
+def _fill_gaps(public_config, private_inputs, catalog, wallet_id, network, observations, transport=None) -> None:
     privacy = public_config.document.get("privacy", {}).get("third_party_wallet_queries")
     for capability in (
         "address_risk",
@@ -767,13 +824,11 @@ def _fill_gaps(public_config, private_inputs, catalog, wallet_id, network, obser
             continue
         support, _probe = resolve_support(catalog, network, capability)
         if capability in {"address_risk", "asset_risk"} and support in _APPLICABLE:
-            if privacy != "operator_approved_sources_only":
-                observations[key] = _blocked("third_party_denied")
-            else:
-                observations[key] = _blocked("not_run")
+            observations[key] = _risk_gap(public_config, private_inputs, privacy)
             continue
         if capability == "sanctions" and support in _APPLICABLE:
-            observations[key] = _blocked("feed_not_supplied")
+            if not _adapter_endpoint(public_config, transport, "ofac_sls"):
+                observations[key] = _blocked("feed_not_supplied")
             continue
         if support == "unsupported":
             observations[key] = _unsupported()

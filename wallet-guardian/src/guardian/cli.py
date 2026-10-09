@@ -22,6 +22,7 @@ from guardian.errors import GuardianError
 from guardian.pipeline import default_backend, probe_sources, run_capability_pipeline, stored_coverage
 from guardian.scheduler import Watchdog, monitor_plan
 from guardian.security.redact import redact
+from guardian.sources.key_guide import hint_for_source
 from guardian.service import ROOT, doctor, load_config, load_local_env, operation_coverage, rescue_doctor, run_once, self_check
 from guardian.storage import Database
 from guardian.read_views import latest_items, resolve_tenant
@@ -325,19 +326,30 @@ def _open_mcm(path: str):
     return public, private, database
 
 
+def _validate_hint(public, name: str, blocked_reason: str | None) -> str | None:
+    source = public.document["sources"].get(name, {})
+    if not isinstance(source, dict):
+        return None
+    return hint_for_source(source, blocked_reason)
+
+
 def _mcm_validate(args: argparse.Namespace) -> tuple[dict, int]:
     public, private, database = _open_mcm(args.mcm_config)
     database.close()
     sources = []
     for name in sorted(private.source_status):
         status = private.source_status[name]
-        sources.append({
+        row = {
             "availability": status.availability,
             "blocked_reason": status.blocked_reason,
             "credential_present": status.credential_present,
             "enabled": status.enabled,
             "id": name,
-        })
+        }
+        hint = _validate_hint(public, name, status.blocked_reason)
+        if hint:
+            row["credential_hint"] = hint
+        sources.append(row)
     return {
         "live_verified": False,
         "notes": list(private.notes),
