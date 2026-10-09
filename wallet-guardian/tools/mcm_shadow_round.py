@@ -1,0 +1,650 @@
+"""One private shadow round. Read-only: run-once is always --no-send.
+
+Exit 0 means the round was recorded. It does not mean the window qualified.
+Degraded, blocked, fixture, and drill rounds stay non-qualifying. Raw diffs are
+written under the evidence directory before any relay dedup. This tool does not
+start the 24-window count; the operator does that after merge, on a host with
+real DNS. A fake-IP resolver (every name → 198.18.0.1) is private_endpoint or
+fetch_error, never ok.
+
+The incremental window is the configured polling interval ending at the round
+clock (3h ± 30min). See guardian.cutover.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import io
+import json
+import os
+import stat
+import sys
+import time
+from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+from guardian.cli import main as guardian_main
+from guardian.configuration import (
+    file_permission_bits,
+    load_public_config,
+    path_inside_work_tree,
+    resolve_private_inputs,
+)
+from guardian.cutover import GAP_TOKENS, evaluate_rounds
+from guardian.errors import ConfigError
+from guardian.legacy_state import (
+    rebuild_from_verified,
+    resume_after_restart,
+    review_poison_events,
+    snapshot_legacy_readonly,
+    verify_bsc_cursor,
+)
+from guardian.legacy_state import archive_freeform_cursors
+from guardian.protocols.pins import KINZA_POOLS, KINZA_PROVIDERS
+from guardian.sources.fixtures import PreparedCall
+from guardian.storage import Database
+
+_KINZA = {address.lower() for address in (*KINZA_POOLS.values(), *KINZA_PROVIDERS.values())}
+_CRITICAL = frozenset({
+    "approval",
+    "approval_revoked",
+    "approval_set",
+    "approve",
+    "asset_in",
+    "asset_out",
+    "transfer_in",
+    "transfer_out",
+})
+_FRESH = frozenset({"complete_in_declared_scope", "partial"})
+_BAD_STATUS = frozenset({"blocked", "degraded", "error", "failed"})
+
+
+def evaluate_cutover(rounds: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Same gate the round recorder persists."""
+    return evaluate_rounds(rounds)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="mcm_shadow_round")
+    parser.add_argument("--mcm-config", required=True)
+    parser.add_argument("--legacy-state", required=True)
+    parser.add_argument("--evidence-dir", required=True)
+    parser.add_argument("--drill", choices=("restart", "source_failure", "rollback"))
+    parser.add_argument("--relay", action="store_true", help="write one private mcm_shadow relay record (default off)")
+    return parser
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    backend: Any = None,
+    sender: Any = None,
+    clock: Callable[[], float] | None = None,
+) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        run_round(
+            mcm_config=args.mcm_config,
+            legacy_state=args.legacy_state,
+            evidence_dir=args.evidence_dir,
+            drill=args.drill,
+            relay=bool(args.relay),
+            backend=backend,
+            sender=sender,
+            clock=time.time if clock is None else clock,
+        )
+    except ConfigError as exc:
+        sys.stderr.write(json.dumps({"error": str(exc), "status": "error"}) + "\n")
+        return exc.exit_code
+    return 0
+
+
+def run_round(
+    *,
+    mcm_config: str,
+    legacy_state: str,
+    evidence_dir: str,
+    drill: str | None,
+    relay: bool,
+    backend: Any,
+    sender: Any,
+    clock: Callable[[], float],
+) -> dict[str, Any]:
+    evidence = prepare_evidence_dir(Path(evidence_dir))
+    moment = datetime.fromtimestamp(clock(), timezone.utc)
+    taken_at = _iso(moment)
+    snapshot = snapshot_legacy_readonly(legacy_state, evidence, taken_at=taken_at)
+    legacy = json.loads(Path(snapshot["snapshot_path"]).read_text(encoding="utf-8"))
+    if not isinstance(legacy, dict):
+        raise ConfigError("legacy state must be an object")
+    transport = CountingBackend(backend, fail_first=drill == "source_failure")
+    guarded = _GuardedSender(sender)
+    commands = evidence / "commands"
+    run_argv = ["run-once", "--mcm-config", mcm_config, "--no-send"]
+    if "--no-send" not in run_argv:
+        raise ConfigError("shadow run-once requires --no-send")
+    run_code, run_out, _run_err = _capture(commands, "run-once", run_argv, backend=transport, sender=guarded, clock=clock)
+    _capture(commands, "watchdog", ["watchdog", "--mcm-config", mcm_config], backend=transport, sender=guarded, clock=clock)
+    _capture(commands, "coverage", ["coverage", "--mcm-config", mcm_config], backend=transport, sender=guarded, clock=clock)
+    _register_labels(mcm_config)
+    compare_argv = [
+        "compare-legacy",
+        "--mcm-config", mcm_config,
+        "--legacy-state", snapshot["snapshot_path"],
+    ]
+    _compare_code, compare_out, _compare_err = _capture(
+        commands, "compare-legacy", compare_argv, backend=transport, sender=guarded, clock=clock,
+    )
+    # Raw diff before relay dedup. An already-alerted marker must not be the only copy.
+    _write_text(evidence / "diffs" / "raw-compare.json", compare_out if compare_out.endswith("\n") else compare_out + "\n")
+    compared = _object(compare_out)
+    poison = review_poison_events(legacy.get("poison_notes"), _events(legacy.get("poison_events")))
+    _write_json(evidence / "poison-review.json", poison)
+    cursors = inspect_cursors(legacy, lambda height: _block_hash(transport, height))
+    _write_json(evidence / "cursor-report.json", cursors)
+    if drill == "restart":
+        _write_json(evidence / "restart-proof.json", _restart_proof(legacy))
+    budget = transport.snapshot()
+    _write_json(evidence / "budget.json", budget)
+    leaks = _leak_scan(mcm_config, evidence)
+    _write_json(evidence / "leak-scan.json", {"leaks": leaks})
+    if relay:
+        _relay(evidence, compared)
+    record = _round_record(
+        mcm_config=mcm_config,
+        evidence=evidence,
+        taken_at=taken_at,
+        moment=moment,
+        drill=drill,
+        run_code=run_code,
+        run_out=run_out,
+        compared=compared,
+        leaks=leaks,
+        guarded=guarded,
+        injected_backend=backend is not None,
+        legacy=legacy,
+    )
+    if drill == "source_failure" and "fetch_error" not in record["required_gaps"]:
+        record["required_gaps"].append("fetch_error")
+        record["required_fresh"] = False
+    saved = _append_round(evidence, record)
+    decision = evaluate_cutover(saved)
+    _write_json(evidence / "cutover.json", decision)
+    _write_json(evidence / "round.json", record)
+    return {"cutover": decision, "round": record, "snapshot": snapshot}
+
+
+def prepare_evidence_dir(path: Path) -> Path:
+    """Refuse a repo path and a directory looser than 0700."""
+    resolved = Path(path).expanduser().resolve()
+    if path_inside_work_tree(resolved):
+        raise ConfigError("evidence dir is inside the repo")
+    if resolved.exists():
+        if not resolved.is_dir():
+            raise ConfigError("evidence dir is not a directory")
+        mode = file_permission_bits(resolved)
+        if mode is not None and mode & 0o077:
+            raise ConfigError("evidence dir perms looser than 0700")
+    else:
+        resolved.mkdir(parents=True, mode=0o700)
+    if os.name == "posix":
+        os.chmod(resolved, 0o700)
+        mode = stat.S_IMODE(resolved.stat().st_mode)
+        if mode & 0o077:
+            raise ConfigError("evidence dir perms looser than 0700")
+    return resolved
+
+
+def inspect_cursors(legacy: Mapping[str, Any], block_hash_at: Callable[[int], str | None]) -> dict[str, Any]:
+    """Archive free-form cursors and use a BSC cursor only when the RPC hash matches."""
+    archive = archive_freeform_cursors(legacy)
+    candidates: list[Any] = []
+    if isinstance(legacy.get("bsc_cursor"), dict):
+        candidates.append(legacy["bsc_cursor"])
+    extra = legacy.get("cursor_candidates")
+    if isinstance(extra, list):
+        for item in extra:
+            if isinstance(item, dict):
+                candidates.append(item)
+            else:
+                archive.append({"derived_block": None, "reason": "prose", "status": "unmapped", "used": False})
+    checks: list[dict[str, Any]] = []
+    verified: dict[str, Any] | None = None
+    for cursor in candidates:
+        result = verify_bsc_cursor(cursor, block_hash_at)
+        checks.append(result)
+        if verified is None and result.get("used") is True:
+            verified = result
+    rebuild = None
+    events = legacy.get("rebuild_events")
+    if verified is not None and isinstance(events, list):
+        overlap = legacy.get("overlap")
+        if type(overlap) is not int or isinstance(overlap, bool) or overlap < 0:
+            overlap = 20
+        rebuild = rebuild_from_verified(verified, events, overlap=overlap)
+    return {"archive": archive, "checks": checks, "rebuild": rebuild, "verified": verified}
+
+
+def scan_leaks(
+    paths: Sequence[Path],
+    *,
+    evidence_dir: Path,
+    secrets: Sequence[str],
+    addresses: Sequence[str],
+) -> list[dict[str, str]]:
+    """Find configured secrets and private addresses outside the evidence directory."""
+    leaks: list[dict[str, str]] = []
+    root = evidence_dir.resolve()
+    for path in paths:
+        resolved = Path(path).resolve()
+        if _inside(resolved, root) or not resolved.is_file():
+            continue
+        try:
+            text = resolved.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        lowered = text.lower()
+        for secret in secrets:
+            if isinstance(secret, str) and len(secret) >= 8 and secret in text:
+                leaks.append({"kind": "secret", "path": str(resolved), "sha256": _short_hash(secret)})
+        for address in addresses:
+            if isinstance(address, str) and len(address) >= 8 and address.lower() in lowered:
+                leaks.append({"kind": "address", "path": str(resolved), "sha256": _short_hash(address.lower())})
+    return leaks
+
+
+class CountingBackend:
+    """Count RPC, Etherscan, news GET, and Kinza eth_call traffic for one round."""
+
+    def __init__(self, inner: Any, *, fail_first: bool = False) -> None:
+        self.inner = inner
+        self.fail_first = fail_first
+        self.failed = False
+        self.rpc_calls: Counter[str] = Counter()
+        self.etherscan_calls = 0
+        self.news_gets = 0
+        self.kinza_eth_calls = 0
+
+    def send(self, call: Any) -> Any:
+        self._observe(call)
+        if self.fail_first and not self.failed:
+            self.failed = True
+            raise ConnectionError("injected source failure")
+        if self.inner is None:
+            from guardian.pipeline import default_backend
+
+            self.inner = default_backend()
+        return self.inner.send(call)
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "etherscan_calls": self.etherscan_calls,
+            "kinza_eth_calls": self.kinza_eth_calls,
+            "news_gets": self.news_gets,
+            "rpc_calls_by_network": dict(sorted(self.rpc_calls.items())),
+        }
+
+    def _observe(self, call: Any) -> None:
+        source_id = str(getattr(call, "source_id", "") or "")
+        method = str(getattr(call, "method", "") or "").upper()
+        body = getattr(call, "body", b"") or b""
+        payload: dict[str, Any] = {}
+        if body:
+            try:
+                parsed = json.loads(body.decode("utf-8"))
+            except (UnicodeError, json.JSONDecodeError):
+                parsed = None
+            if isinstance(parsed, dict):
+                payload = parsed
+        rpc_method = payload.get("method") if isinstance(payload.get("method"), str) else ""
+        if "etherscan" in source_id:
+            self.etherscan_calls += 1
+        elif source_id.startswith("rpc-"):
+            self.rpc_calls[source_id.removeprefix("rpc-")] += 1
+        if method == "GET" and ("news" in source_id or getattr(call, "protocol", "") == "xml"):
+            self.news_gets += 1
+        if rpc_method == "eth_call":
+            params = payload.get("params") if isinstance(payload.get("params"), list) else []
+            target = ""
+            if params and isinstance(params[0], dict) and isinstance(params[0].get("to"), str):
+                target = params[0]["to"].lower()
+            if target in _KINZA:
+                self.kinza_eth_calls += 1
+
+
+class _GuardedSender:
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+        self.calls = 0
+
+    def send(self, message: Mapping[str, Any]) -> None:
+        self.calls += 1
+        if self.inner is not None:
+            self.inner.send(message)
+
+
+def _capture(
+    directory: Path,
+    name: str,
+    argv: list[str],
+    *,
+    backend: Any,
+    sender: Any,
+    clock: Callable[[], float],
+) -> tuple[int, str, str]:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    code = 1
+    try:
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = guardian_main(argv, backend=backend, sender=sender, clock=clock)
+    except Exception as exc:  # noqa: BLE001 — a shadow command failure is evidence, not a crash
+        stderr.write(type(exc).__name__)
+        code = 1
+    _write_text(directory / f"{name}.stdout", stdout.getvalue())
+    _write_text(directory / f"{name}.stderr", stderr.getvalue())
+    _write_text(directory / f"{name}.exit", str(code) + "\n")
+    _write_text(directory / f"{name}.argv", " ".join(argv) + "\n")
+    return code, stdout.getvalue(), stderr.getvalue()
+
+
+def _register_labels(mcm_config: str) -> None:
+    public = load_public_config(mcm_config)
+    private = resolve_private_inputs(public, os.environ)
+    database = Database(private.state_dir / "monitor.sqlite")
+    try:
+        database.upsert_tenant(private.accounts.tenant_id, private.accounts.tenant_id)
+        for account in private.accounts.accounts:
+            database.upsert_wallet_identity(
+                private.accounts.tenant_id,
+                account.wallet_id,
+                account.family,
+                account.normalized.identity_key,
+                account.label,
+            )
+    finally:
+        database.close()
+
+
+def _round_record(
+    *,
+    mcm_config: str,
+    evidence: Path,
+    taken_at: str,
+    moment: datetime,
+    drill: str | None,
+    run_code: int,
+    run_out: str,
+    compared: Mapping[str, Any],
+    leaks: Sequence[Mapping[str, str]],
+    guarded: _GuardedSender,
+    injected_backend: bool,
+    legacy: Mapping[str, Any],
+) -> dict[str, Any]:
+    public = load_public_config(mcm_config)
+    private = resolve_private_inputs(public, os.environ)
+    report = _object(run_out)
+    interval = int(public.document["polling"]["interval_seconds"])
+    finished = moment
+    started = finished - timedelta(seconds=interval)
+    required = report.get("required") if isinstance(report.get("required"), dict) else {}
+    required_gaps, declared_gaps = _coverage_gaps(report.get("coverage"), required)
+    status = report.get("status") if isinstance(report.get("status"), str) else ""
+    fresh = bool(required) and all(isinstance(value, str) and value in _FRESH for value in required.values())
+    if status in _BAD_STATUS or run_code != 0 or required_gaps:
+        fresh = False
+    markers: list[str] = []
+    if injected_backend or report.get("live_pass") is True or report.get("live_verified") is True:
+        markers.append("mock_fixture_pass")
+    if guarded.calls:
+        markers.append("shadow_sent")
+    prior = _load_rounds(evidence)
+    natural = [item for item in prior if not item.get("drill")]
+    baseline = not drill and not natural
+    scope = {
+        "config_hash": hashlib.sha256(Path(mcm_config).read_bytes()).hexdigest(),
+        "docs_only": False,
+        "networks": sorted({network for account in private.accounts.accounts for network in account.networks}),
+        "plugins": sorted(name for name in public.document.get("plugins", []) if isinstance(name, str)),
+        "required": sorted(str(key) for key in required),
+        "src_sha": _source_sha(Path(__file__).resolve().parents[1]),
+        "wallets": sorted(account.wallet_id for account in private.accounts.accounts),
+    }
+    return {
+        "baseline": baseline,
+        "command_status": status or "missing",
+        "declared_gaps": sorted(set(declared_gaps)),
+        "dns_requirement": "real_dns_host",
+        "drill": drill,
+        "duplicates": _duplicate_alerts(private.state_dir / "monitor.sqlite", private.accounts.tenant_id),
+        "fake_ip_reported_as": ["fetch_error", "private_endpoint"],
+        "finished_at": _iso(finished),
+        "fixture": injected_backend,
+        "index": 0 if baseline else len(natural),
+        "live_pass": False,
+        "live_verified": False,
+        "markers": markers,
+        "no_send": guarded.calls == 0,
+        "required_fresh": fresh,
+        "taken_at": taken_at,
+        "required_gaps": sorted(set(required_gaps)),
+        "reverse_shadow": False,
+        "round_id": "baseline" if baseline else f"round-{len(prior) + 1}",
+        "scope": scope,
+        "secret_leaks": len(leaks),
+        "sender_calls": guarded.calls,
+        "started_at": _iso(started),
+        "unexplained_legacy_only": _unexplained(compared.get("legacy_only")),
+        "unexplained_mcm_only": _unexplained(compared.get("mcm_only")),
+        "watermark": legacy.get("delivery_watermark") if isinstance(legacy.get("delivery_watermark"), str) else "",
+    }
+
+
+def _coverage_gaps(coverage: Any, required: Mapping[str, Any]) -> tuple[list[str], list[str]]:
+    required_gaps: list[str] = []
+    declared: list[str] = []
+    if not isinstance(coverage, list):
+        return required_gaps, declared
+    for row in coverage:
+        if not isinstance(row, dict):
+            continue
+        codes = row.get("reason_codes") if isinstance(row.get("reason_codes"), list) else []
+        hits = [token for token in GAP_TOKENS if token in codes]
+        if not hits:
+            continue
+        key = "|".join(str(row.get(part) or "") for part in ("wallet_id", "network", "capability"))
+        bucket = required_gaps if key in required else declared
+        bucket.extend(hits)
+    return required_gaps, declared
+
+
+def _relay(evidence: Path, compared: Mapping[str, Any]) -> None:
+    rows = compared.get("mcm_only") if isinstance(compared.get("mcm_only"), list) else []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("kind") not in _CRITICAL:
+            continue
+        if row.get("classification") == "explained":
+            continue
+        parts = (
+            str(row.get("wallet_id") or ""),
+            str(row.get("network") or ""),
+            str(row.get("tx") or ""),
+            str(row.get("kind") or ""),
+            str(row.get("subject") or ""),
+        )
+        dedup = hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
+        path = evidence / "relay" / f"{dedup}.json"
+        if path.exists():
+            continue
+        _write_json(path, {
+            "dedup_id": dedup,
+            "kind": parts[3],
+            "network": parts[1],
+            "origin": "mcm_shadow",
+            "tx": parts[2],
+            "wallet_id": parts[0],
+        })
+
+
+def _restart_proof(legacy: Mapping[str, Any]) -> dict[str, Any]:
+    fixture = legacy.get("restart_fixture") if isinstance(legacy.get("restart_fixture"), dict) else {}
+    events = fixture.get("events") if isinstance(fixture.get("events"), list) else []
+    committed = fixture.get("committed_height")
+    partial = fixture.get("partial_height")
+    if type(committed) is not int or type(partial) is not int:
+        committed, partial = 0, 0
+    resumed = resume_after_restart(committed_height=committed, partial_height=partial, events=events)
+    return {"counts_toward_24": False, "drill": "restart", "resumed": resumed}
+
+
+def _append_round(evidence: Path, record: dict[str, Any]) -> list[dict[str, Any]]:
+    rounds = _load_rounds(evidence)
+    rounds.append(record)
+    lines = "".join(json.dumps(item, ensure_ascii=False, sort_keys=True) + "\n" for item in rounds)
+    _write_text(evidence / "rounds.jsonl", lines)
+    return rounds
+
+
+def _load_rounds(evidence: Path) -> list[dict[str, Any]]:
+    path = evidence / "rounds.jsonl"
+    if not path.is_file():
+        return []
+    rounds: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        item = json.loads(line)
+        if isinstance(item, dict):
+            rounds.append(item)
+    return rounds
+
+
+def _leak_scan(mcm_config: str, evidence: Path) -> list[dict[str, str]]:
+    public = load_public_config(mcm_config)
+    private = resolve_private_inputs(public, os.environ)
+    secrets = _secret_values(public, os.environ)
+    addresses = [account.normalized.display for account in private.accounts.accounts]
+    return scan_leaks([Path(mcm_config)], evidence_dir=evidence, secrets=secrets, addresses=addresses)
+
+
+def _secret_values(public: Any, environ: Mapping[str, str]) -> list[str]:
+    name = public.document.get("private_inputs", {}).get("secret_profile_file_env")
+    raw = environ.get(name) if isinstance(name, str) else None
+    if not isinstance(raw, str) or not raw:
+        return []
+    try:
+        document = json.loads(Path(raw).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(document, dict):
+        return []
+    return [value for value in document.values() if isinstance(value, str)]
+
+
+def _duplicate_alerts(database_path: Path, tenant: str) -> int:
+    if not database_path.is_file():
+        return 0
+    database = Database(database_path)
+    try:
+        keys = []
+        for row in database.outbox_for(tenant):
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            key = payload.get("dedup_key")
+            if isinstance(key, str):
+                keys.append(key)
+    finally:
+        database.close()
+    return len(keys) - len(set(keys))
+
+
+def _block_hash(backend: Any, height: int) -> str | None:
+    body = json.dumps({
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "eth_getBlockByNumber",
+        "params": [hex(int(height)), False],
+    }).encode("utf-8")
+    call = PreparedCall("rpc-bsc-mainnet", "POST", "https://bsc.example.invalid/rpc", body, "json-rpc")
+    try:
+        raw = backend.send(call)
+    except Exception:  # noqa: BLE001 — an unreadable block is an unverified cursor
+        return None
+    try:
+        payload = json.loads(raw.body.decode("utf-8"))
+    except (AttributeError, UnicodeError, json.JSONDecodeError):
+        return None
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if isinstance(result, dict) and isinstance(result.get("hash"), str):
+        return result["hash"]
+    return None
+
+
+def _events(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
+
+
+def _unexplained(value: Any) -> int:
+    if not isinstance(value, list):
+        return 0
+    return sum(1 for row in value if isinstance(row, dict) and row.get("classification") != "explained")
+
+
+def _object(text: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(text) if text.strip() else {}
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _source_sha(root: Path) -> str:
+    digest = hashlib.sha256()
+    base = root / "src" / "guardian"
+    for path in sorted(base.rglob("*.py")):
+        digest.update(path.relative_to(base).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _short_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def _inside(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _iso(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    _write_text(path, json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+
+
+def _write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = text.encode("utf-8")
+    fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o600)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+    if os.name == "posix":
+        os.chmod(path, 0o600)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
