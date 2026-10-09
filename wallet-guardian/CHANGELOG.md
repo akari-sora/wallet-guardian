@@ -8,6 +8,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 PEP 440 version `0.4.0rc1` maps to the git tag name `v0.4.0-rc.1`.
 This preview does not create that tag and does not publish.
 
+## [Unreleased]
+
+- Indexer catch-up starts at the lookback origin, uses one span per explorer, and stops at `bootstrap_request_cap` so a later round can resume. Plan refusals and successful DNS answers are cached.
+
 ## [0.4.0rc1] - 2026-10-09
 
 Preview channel. `published` stays false. The monitor is read-only: it does not sign, build a transaction, or broadcast.

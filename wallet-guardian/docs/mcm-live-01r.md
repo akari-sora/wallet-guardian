@@ -15,7 +15,7 @@ Blockscout PRO 的 key 由使用者自己放在私人 secret profile 的 `BLOCKS
 | Optimism | Blockscout PRO，然後 keyless instance | PRO：`BLOCKSCOUT_PRO_API_BASE`（預設 `https://api.blockscout.com`）加 `chain_id`。Optimism（10）在免費方案。keyless 預設 `https://explorer.optimism.io`（`optimism.blockscout.com` 已 301 轉址到它） |
 | Avalanche | 原生餘額照讀 | 深度歷史維持 `expansion_pending`。沒有重大曝險時，不用它擋住原來六條鏈 |
 
-`plan_not_supported` 記在狀態目錄旁的 `capability-failures.json`（只有來源 id、網路、原因）。下一輪改走已核准的後備，不再重送注定失敗的請求。Blockscout PRO 對 Base 的 featured-chain 402 也走這條 cache。失敗的探針不代表這條鏈沒有資產。`x-credits-remaining` 與 `x-ratelimit-limit` 有出現在回應時，記在 `budget.providers.*.rate_headers`。
+`plan_not_supported` 記在狀態目錄旁的 `capability-failures.json`（只有來源 id、網路、原因）。同一筆拒絕也涵蓋該來源的 `txlist` 與 `tokentx`：第一個拒絕之後，同一輪的下一個錢包與下一輪都不再打這家。快取帶 TTL（預設 24 小時），過期才再問一次。原因字串仍是 `plan_not_supported`。Blockscout PRO 對 Base 的 featured-chain 402 也走這條 cache。失敗的探針不代表這條鏈沒有資產。`x-credits-remaining` 與 `x-ratelimit-limit` 有出現在回應時，記在 `budget.providers.*.rate_headers`。公開設定裡 `enabled: false` 的來源不會註冊，也不會被呼叫。
 
 沒有 key 的跑法見 `examples/monitor.nokeys.json` 與 `docs/api-keys.md`。GoPlus 沒有 key 是 `credential_missing`，隱私拒絕把地址送出去的政策不變。CoinGecko 沒有 key 走公開無 key 層級，報價讀不到是 `valuation_unknown`，不是 0 也不是 1。Helius 沒有 key 時 parsed events 是 `credential_missing`，已設定的 Solana RPC 仍用。OFAC 公開清單不需要 key；`OFAC_SLS_FEED` 沒設是 `feed_not_supplied`。Alchemy 沒有 key 時 Base 轉帳記 `credential_missing`（說明指向 `docs/api-keys.md#alchemy`），然後改走 Blockscout。不會因為缺 key 當掉，也不會把缺的能力標成 complete。
 
@@ -35,13 +35,19 @@ Blockscout Free 是每天 100K credits、5 RPS、不需信用卡。多數基本�
 
 ## 追趕
 
-每一輪開始時凍結目標：高度、區塊 hash、時間戳，以及該鏈的 finality 文字。同一輪不再追新的 head。沒有游標時從 `polling.bootstrap_origin` 開始；省略則從 0，不是「最近 2000」。有游標時從游標加一、再減掉重疊 2。
+每一輪開始時凍結目標：高度、區塊 hash、時間戳，以及該鏈的 finality 文字。同一輪不再追新的 head。有游標時從游標加一、再減掉重疊 2。沒有游標時，明示的 `polling.bootstrap_origin`（含 0）優先。省略時起點是 `max(0, head - lookback_blocks)`。`lookback_blocks` 是 `ceil(bootstrap_lookback_days * 86400 / seconds_per_block)`。內建秒數：ethereum 12、bsc 0.75、arbitrum 0.25、base 2、optimism 2、polygon 2.1、avalanche 2，其餘 12。公開設定可以用可選的 `polling.seconds_per_block` 覆寫單一網路。這不是從創世區塊掃到現在。覆蓋範圍是這個 origin 到本輪 head，`complete_in_declared_scope` 只表示宣告範圍內讀完。origin 大於 0 時帶 `pre_origin_history_unknown`。
+
+日誌仍依 `log_range_max`（預設 2000）切片。`etherscan_v2`、`blockscout`、`nodereal_transfers`、`alchemy_transfers` 在來源沒有自訂 `range_limit` 或 `log_range_max` 時，用一個 `[origin, head]` 區間。客戶端仍會在結果窗滿的時候二分。授權掃描用同一個 origin。
+
+`polling.bootstrap_request_cap`（範例預設 2000）是每個來源、每一輪的 bootstrap 請求預算。分頁與二分的每一次傳輸都算。數字在報告的 `budget.bootstrap_request_cap` 與 `budget.bootstrap_requests`。碰到上限或 `round_deadline_seconds` 就停，提交最後一個完整讀完的區塊前綴，該能力是 partial，原因是 `bootstrap_request_cap` 或 `deadline`。下一輪從那個游標加一、再減掉重疊 2 繼續。同一輪不會空轉。
 
 每個完整成功的 chunk 在同一個資料庫交易裡寫入事件和連續前綴游標。後面的 chunk 失敗就留下前綴，報告是 partial，下一輪從那個前綴減掉重疊再繼續。不跳過缺口，也不把最後一頁的旗標當成整輪。
 
 token 歷史、原生歷史、授權各自提交。`tokentx` 失敗不會清掉已經寫入的原生歷史。預算或 `round_deadline_seconds` 到了就停，剩下的後綴留到下一輪。
 
-增量窗口完整（`incremental_window_complete`）只在 chunk 的聯集蓋住 origin 到 target 時成立。origin 大於 0 時同時標 `pre_origin_history_unknown`。那表示 origin 之前的授權沒有被查過，不是「舊授權不存在」。已知 pair 的目前 allowance 仍在同一個 checkpoint 讀。
+增量窗口完整（`incremental_window_complete`）只在 chunk 的聯集蓋住 origin 到 target 時成立。origin 大於 0 時同時標 `pre_origin_history_unknown`。那表示 origin 之前的歷史與授權沒有被查過，不是「舊授權不存在」，也不是從創世區塊就完整。已知 pair 的目前 allowance 仍在同一個 checkpoint 讀。
+
+DoH 或系統解析的成功答案，在同一個 `HostnameResolver` 裡快取 `min(記錄 TTL, 300)` 秒。失敗與私有 IP 不快取。命中時仍做私有位址與 pinning 檢查。這是行程內、每個 resolver 實例一份，不是全行程共用。
 
 餘額與 nonce 只是快照。+1 與 −1 可以淨值為零。收款不會增加收款人的 nonce。兩者都不能讓 `history.native_external` 變成 complete。
 

@@ -1,7 +1,7 @@
 """Check that the preview version strings agree.
 
 Sources: ``pyproject.toml``, ``guardian.__version__`` when that assignment is
-present, the ``guardian`` entry in ``uv.lock``, the first changelog heading,
+present, the ``guardian`` entry in ``uv.lock``, the first versioned changelog heading,
 and ``release/manifest.draft.json``.
 
 PEP 440 ``0.4.0rc1`` maps to ``v0.4.0-rc.1``.
@@ -49,14 +49,16 @@ def collect_versions(root: Path) -> dict[str, str | None]:
         guardian = init_match.group(1)
     lock = _lock_version((root / "uv.lock").read_text(encoding="utf-8"))
     changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
-    change_match = _CHANGELOG.search(changelog)
+    # [Unreleased] sits above the version heading and is not a release version.
+    headings = [item for item in _CHANGELOG.findall(changelog) if item.lower() != "unreleased"]
+    change_match = headings[0] if headings else None
     manifest = json.loads((root / "release" / "manifest.draft.json").read_text(encoding="utf-8"))
     manifest_version = manifest.get("version") if isinstance(manifest, dict) else None
     return {
         "pyproject": None if py_match is None else py_match.group(1),
         "guardian": guardian,
         "uv_lock": lock,
-        "changelog": None if change_match is None else change_match.group(1),
+        "changelog": change_match,
         "manifest": manifest_version if isinstance(manifest_version, str) else None,
     }
 
