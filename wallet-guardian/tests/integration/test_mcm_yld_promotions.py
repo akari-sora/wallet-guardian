@@ -902,6 +902,153 @@ def test_mcm_yld_03_negated_and_unparsed_terms_stay_unknown(tmp_path: Path) -> N
         database.close()
 
 
+def test_mcm_yld_03_free_text_outside_grammar_stays_unknown(tmp_path: Path) -> None:
+    """A recognized minimum and deadline do not cover an unlisted restriction."""
+    covered = "Minimum 100 USDT. Eligible until 2026-12-01T16:00:00Z."
+    residents = covered + " Participation is restricted to residents of Taiwan."
+    province = covered + " Holders must live in Example Province."
+    document = {
+        "records": [
+            {"record_id": "covered-terms-1", "body": covered},
+            {"record_id": "residents-1", "body": residents},
+            {"record_id": "province-1", "body": province},
+        ],
+    }
+    parsed = parse_source("explicit_body", json.dumps(document).encode("utf-8"))
+    assert parsed.ok is True
+    by_id = {item.record_id: item for item in parsed.records}
+
+    clean = by_id["covered-terms-1"]
+    assert clean.conditions["status"] == "extracted"
+    assert clean.conditions["minimum_amount"] == "100"
+    assert clean.conditions["minimum_unit"] == "USDT"
+    assert clean.deadline_status == "extracted"
+    assert clean.extraction_status == "extracted"
+    assert clean.residual_conditions == "none"
+    clean_quotes = {item["field"]: item["quote"] for item in clean.provenance}
+    assert "100" in clean_quotes["minimum_amount"] and "USDT" in clean_quotes["minimum_amount"]
+    assert "until" in clean_quotes["deadline"]
+    assert "2026-12-01T16:00:00Z" in clean_quotes["deadline"]
+
+    limited = by_id["residents-1"]
+    assert limited.conditions["minimum_amount"] == "100"
+    assert limited.conditions["minimum_unit"] == "USDT"
+    assert limited.extraction_status == "extracted"
+    assert any(item["role"] == "end" and item["utc"] == "2026-12-01T16:00:00Z" for item in limited.deadlines)
+    assert limited.residual_conditions == "unknown"
+    quotes = {item["field"]: item["quote"] for item in limited.provenance}
+    assert "100" in quotes["minimum_amount"] and "USDT" in quotes["minimum_amount"]
+    assert "Taiwan" not in quotes["minimum_amount"]
+    assert "residents" not in quotes["minimum_amount"]
+    assert "until" in quotes["deadline"]
+    assert "2026-12-01T16:00:00Z" in quotes["deadline"]
+    assert "Taiwan" not in quotes["deadline"]
+    assert quotes["minimum_amount"].startswith('"')
+    assert quotes["deadline"].startswith('"')
+    assert {item["source"] for item in limited.provenance} == {"explicit_body"}
+
+    other = by_id["province-1"]
+    assert other.conditions["minimum_amount"] == "100"
+    assert other.deadline_status == "extracted"
+    assert other.residual_conditions == "unknown"
+
+    backend = _backend(
+        [_response(_pools_doc([_pool(LEND, total=5)]))],
+        [_response(_empty_catalog())],
+    )
+    database = Database(tmp_path / "yld-03-free-text.sqlite")
+    try:
+        report = _run(database, Clock(), backend, promotions=json.dumps(document).encode("utf-8"))
+        stored = _record(report, "explicit_body", "residents-1")
+        assert stored["terms"]["residual_conditions"] == "unknown"
+        assert stored["terms"]["conditions"]["minimum_amount"] == "100"
+        assert stored["terms"]["deadline_status"] == "extracted"
+        assert _record(report, "explicit_body", "covered-terms-1")["terms"]["residual_conditions"] == "none"
+        assert _record(report, "explicit_body", "province-1")["terms"]["residual_conditions"] == "unknown"
+        validate(report["state"], state_schema())
+    finally:
+        database.close()
+
+
+def test_mcm_yld_03_negation_after_match_is_not_affirmative(tmp_path: Path) -> None:
+    """Negation after a matched amount, lock, or deadline is not an affirmative term."""
+    document = {
+        "records": [
+            {"record_id": "clean-min-1", "body": "Minimum 100 USDT."},
+            {"record_id": "after-not-1", "body": "A minimum 100 USDT is not required."},
+            {"record_id": "after-lock-1", "body": "Funds are locked for 14 days is not required."},
+            {
+                "record_id": "after-deadline-1",
+                "body": "Eligible until 2026-12-01T00:00:00Z is not the deadline.",
+            },
+            {
+                "record_id": "after-conflict-1",
+                "body": "Funds are locked for 14 days. Funds are locked for 14 days is not required.",
+            },
+        ],
+    }
+    parsed = parse_source("explicit_body", json.dumps(document).encode("utf-8"))
+    assert parsed.ok is True
+    by_id = {item.record_id: item for item in parsed.records}
+
+    clean = by_id["clean-min-1"]
+    assert clean.conditions["status"] == "extracted"
+    assert clean.conditions["minimum_amount"] == "100"
+    assert clean.conditions["minimum_unit"] == "USDT"
+    assert clean.extraction_status == "extracted"
+    assert clean.residual_conditions == "none"
+    clean_quote = {item["field"]: item["quote"] for item in clean.provenance}["minimum_amount"]
+    assert "100" in clean_quote and "USDT" in clean_quote
+    assert clean_quote.startswith('"')
+
+    negated = by_id["after-not-1"]
+    assert negated.conditions["status"] == "unknown"
+    assert negated.conditions["minimum_amount"] is None
+    assert negated.conditions["minimum_unit"] is None
+    assert negated.extraction_status == "unknown"
+    assert negated.residual_conditions == "unknown"
+    assert negated.described_as_temporary is False
+    assert negated.duration_stated is False
+    assert all(item["field"] != "minimum_amount" for item in negated.provenance)
+
+    locked = by_id["after-lock-1"]
+    assert locked.conditions["lock_days"] is None
+    assert locked.conditions["status"] == "unknown"
+    assert locked.extraction_status == "unknown"
+    assert locked.residual_conditions == "unknown"
+    assert all(item["field"] != "lock_days" for item in locked.provenance)
+
+    deadline = by_id["after-deadline-1"]
+    assert deadline.deadlines == ()
+    assert deadline.deadline_status == "unknown"
+    assert deadline.extraction_status == "unknown"
+    assert deadline.residual_conditions == "unknown"
+    assert deadline.described_as_temporary is False
+    assert all(item["field"] != "deadline" for item in deadline.provenance)
+
+    conflict = by_id["after-conflict-1"]
+    assert conflict.conditions["lock_days"] is None
+    assert conflict.residual_conditions == "unknown"
+    assert all(item["field"] != "lock_days" for item in conflict.provenance)
+
+    backend = _backend(
+        [_response(_pools_doc([_pool(LEND, total=5)]))],
+        [_response(_empty_catalog())],
+    )
+    database = Database(tmp_path / "yld-03-after-not.sqlite")
+    try:
+        report = _run(database, Clock(), backend, promotions=json.dumps(document).encode("utf-8"))
+        stored = _record(report, "explicit_body", "after-not-1")
+        assert stored["terms"]["conditions"]["minimum_amount"] is None
+        assert stored["terms"]["conditions"]["status"] == "unknown"
+        assert stored["terms"]["extraction_status"] == "unknown"
+        assert stored["terms"]["residual_conditions"] == "unknown"
+        assert _record(report, "explicit_body", "clean-min-1")["terms"]["conditions"]["minimum_amount"] == "100"
+        validate(report["state"], state_schema())
+    finally:
+        database.close()
+
+
 def _nested(minimum: int) -> bytes:
     nested = "0"
     while len(nested) < minimum:
