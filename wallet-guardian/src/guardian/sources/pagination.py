@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from guardian.errors import SecurityError
-from guardian.sources.budget import BudgetExhausted
+from guardian.sources.budget import BootstrapStop, BudgetExhausted
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,8 @@ def walk_page_offset(
             return _stop(items, pages, "page_cap")
         try:
             batch = fetch(page)
+        except BootstrapStop:
+            raise
         except BudgetExhausted:
             return _stop(items, pages, "budget")
         except SecurityError:
@@ -80,6 +82,8 @@ def walk_page_key(
             return _stop(items, pages, "page_cap")
         try:
             payload = fetch(token)
+        except BootstrapStop:
+            raise
         except BudgetExhausted:
             return _stop(items, pages, "budget")
         except SecurityError:

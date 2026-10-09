@@ -99,6 +99,18 @@
           "type": "integer",
           "minimum": 1
         },
+        "seconds_per_block": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]{1,64}$"
+          },
+          "additionalProperties": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 86400
+          }
+        },
         "webhooks_enabled": {
           "const": false
         }

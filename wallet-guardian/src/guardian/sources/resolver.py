@@ -19,6 +19,7 @@ import os
 import re
 import socket
 import ssl
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -300,25 +301,54 @@ def load_resolver_settings(
     )
 
 
-class HostnameResolver:
-    """Resolve one hostname. The default mode does not change a normal public answer."""
+_RESOLVER_CACHE_CAP = 300
 
-    def __init__(self, settings: ResolverSettings, hooks: EgressHooks | None = None) -> None:
+
+class HostnameResolver:
+    """Resolve one hostname. The default mode does not change a normal public answer.
+
+    A successful answer is reused for min(record TTL, 300 seconds) on this
+    instance only. A failure or a private address is not stored. Pinning and
+    the private-address check run again on every hit.
+    """
+
+    def __init__(
+        self,
+        settings: ResolverSettings,
+        hooks: EgressHooks | None = None,
+        *,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
         self.settings = settings
         self.hooks = hooks
         self.last_verified = False
         self.sent: list[DohRequest] = []
+        self._clock = clock or time.monotonic
+        self._cached: dict[str, tuple[list[str], float, bool]] = {}
 
     def resolve(self, host: str) -> list[str]:
         name = assert_query_hostname(host)
         self.last_verified = False
+        cached = self._cached.get(name)
+        now = self._clock()
+        if cached is not None and now < cached[1]:
+            mode = "system" if self.settings.mode == "system" else "doh"
+            _reject_destination_answers(list(cached[0]), mode=mode)
+            self.last_verified = cached[2]
+            return list(cached[0])
         if self.settings.mode == "system":
             answers = self._system(name)
             _reject_destination_answers(answers, mode="system")
-            return _dedupe(answers)
+            found = _dedupe(answers)
+            self._remember(name, found, _RESOLVER_CACHE_CAP, False)
+            return found
         if self.settings.mode != "doh":
             raise ConfigError("resolver mode must be system or doh")
         return self._doh(name)
+
+    def _remember(self, host: str, answers: list[str], ttl: int, verified: bool) -> None:
+        duration = min(max(int(ttl), 0), _RESOLVER_CACHE_CAP)
+        self._cached[host] = (list(answers), self._clock() + duration, verified)
 
     def _system(self, host: str) -> list[str]:
         if self.hooks is not None and self.hooks.system_resolve is not None:
@@ -331,26 +361,32 @@ class HostnameResolver:
         for endpoint in self.settings.endpoints:
             start = len(self.sent)
             try:
-                ips = self._query_endpoint(endpoint, host)
+                ips, ttl = self._query_endpoint(endpoint, host)
             except SecurityError as exc:
                 if exc.reason in _FALLBACK_REASONS:
                     errors.append(exc)
                     continue
                 raise
             self.last_verified = _pins_ok(self.sent[start:], self.settings.endpoints)
+            self._remember(host, ips, ttl, self.last_verified)
             return ips
         if errors:
             raise errors[-1]
         raise SecurityError("doh failed", reason="doh_failed")
 
-    def _query_endpoint(self, endpoint: DohEndpoint, host: str) -> list[str]:
-        addresses = _parse_answers(host, self._fetch(endpoint, host, "A"), self.settings.max_response_bytes)
-        addresses.extend(_parse_answers(host, self._fetch(endpoint, host, "AAAA"), self.settings.max_response_bytes))
-        found = _dedupe(addresses)
+    def _query_endpoint(self, endpoint: DohEndpoint, host: str) -> tuple[list[str], int]:
+        a_found, a_ttl = _parse_answers(host, self._fetch(endpoint, host, "A"), self.settings.max_response_bytes)
+        aaaa_found, aaaa_ttl = _parse_answers(host, self._fetch(endpoint, host, "AAAA"), self.settings.max_response_bytes)
+        found = _dedupe([*a_found, *aaaa_found])
         if not found:
             raise SecurityError("doh returned no addresses", reason="dns_failed")
         _reject_destination_answers(found, mode="doh")
-        return found
+        ttls = []
+        if a_found and isinstance(a_ttl, int):
+            ttls.append(a_ttl)
+        if aaaa_found and isinstance(aaaa_ttl, int):
+            ttls.append(aaaa_ttl)
+        return found, min(ttls) if ttls else 0
 
     def _fetch(self, endpoint: DohEndpoint, host: str, qtype: str) -> bytes:
         last = "doh_timeout"
@@ -704,7 +740,7 @@ def _check_size(response: DohResponse, limit: int) -> None:
         raise SecurityError("doh response exceeds the size limit", reason="doh_size")
 
 
-def _parse_answers(host: str, body: bytes, limit: int) -> list[str]:
+def _parse_answers(host: str, body: bytes, limit: int) -> tuple[list[str], int | None]:
     if len(body) > limit:
         raise SecurityError("doh response exceeds the size limit", reason="doh_size")
     try:
@@ -726,7 +762,7 @@ def _parse_answers(host: str, body: bytes, limit: int) -> list[str]:
     return _follow_cname(host, answers)
 
 
-def _follow_cname(host: str, answers: list[Any]) -> list[str]:
+def _follow_cname(host: str, answers: list[Any]) -> tuple[list[str], int | None]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for record in answers:
         if not isinstance(record, dict):
@@ -737,6 +773,7 @@ def _follow_cname(host: str, answers: list[Any]) -> list[str]:
         grouped.setdefault(owner, []).append(record)
     name = assert_query_hostname(host)
     seen: set[str] = set()
+    followed: list[int] = []
     for _step in range(_MAX_CNAME):
         if name in seen:
             raise SecurityError("doh cname chain looped", reason="doh_cname")
@@ -746,20 +783,27 @@ def _follow_cname(host: str, answers: list[Any]) -> list[str]:
         cnames = [item for item in records if _record_type(item) == _CNAME]
         if addresses:
             found = []
+            ttls = list(followed)
             for item in addresses:
                 data = item.get("data")
                 if not isinstance(data, str) or not data.strip():
                     raise SecurityError("doh answer is malformed", reason="doh_malformed")
                 found.append(data.strip())
+                ttl = item.get("TTL")
+                if isinstance(ttl, int) and not isinstance(ttl, bool):
+                    ttls.append(ttl)
             _reject_destination_answers(found, mode="doh")
-            return found
+            return found, min(ttls) if ttls else None
         if not cnames:
-            return []
+            return [], None
         if len(cnames) != 1:
             raise SecurityError("doh cname chain is ambiguous", reason="doh_cname")
         target = cnames[0].get("data")
         if not isinstance(target, str):
             raise SecurityError("doh cname chain is unusable", reason="doh_cname")
+        ttl = cnames[0].get("TTL")
+        if isinstance(ttl, int) and not isinstance(ttl, bool):
+            followed.append(ttl)
         try:
             name = assert_query_hostname(target)
         except SecurityError as exc:
