@@ -1,0 +1,435 @@
+{
+  "adapter": "etherscan_v2",
+  "allowed_operations": [
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "balance",
+        "module": "account"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "balancemulti",
+        "module": "account"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "token1155tx",
+        "module": "account"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "tokennfttx",
+        "module": "account"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "tokentx",
+        "module": "account"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "txlist",
+        "module": "account"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "txlistinternal",
+        "module": "account"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "getblocknobytime",
+        "module": "block"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "getabi",
+        "module": "contract"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "getsourcecode",
+        "module": "contract"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "getLogs",
+        "module": "logs"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "eth_blockNumber",
+        "module": "proxy"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "eth_call",
+        "module": "proxy"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "eth_chainId",
+        "module": "proxy"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "eth_feeHistory",
+        "module": "proxy"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "eth_gasPrice",
+        "module": "proxy"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "eth_getBalance",
+        "module": "proxy"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "eth_getBlockByHash",
+        "module": "proxy"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "eth_getBlockByNumber",
+        "module": "proxy"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "eth_getCode",
+        "module": "proxy"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "eth_getLogs",
+        "module": "proxy"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "eth_getStorageAt",
+        "module": "proxy"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "eth_getTransactionByHash",
+        "module": "proxy"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "eth_getTransactionCount",
+        "module": "proxy"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "eth_getTransactionReceipt",
+        "module": "proxy"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "net_version",
+        "module": "proxy"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest",
+      "query": {
+        "action": "web3_clientVersion",
+        "module": "proxy"
+      }
+    }
+  ],
+  "backend": "etherscan",
+  "capabilities": {
+    "address_risk": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "asset_risk": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.fungible": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.native": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "balances.nft": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "bridges": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "exposure_news": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "history.fungible": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "history.native_external": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "history.native_internal": {
+      "notes": "txlistinternal 是這條能力的計畫讀法。單頁或未分完不是完整歷史。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "history.nft": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "permissions.cosmos_authz": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.cosmos_feegrant": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.erc1155_operator": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.erc20": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.erc721_operator": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.erc721_token": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.move_capability": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.spl_authority": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.spl_delegate": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.ton_extensions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.tron_account": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permits.dai_variant": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permits.erc2612_observed": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permits.offchain_unused": {
+      "notes": "未提交的離線簽名不可觀察，不能標成 complete。",
+      "probe": "documented",
+      "support": "not_observable"
+    },
+    "permit2.allowance": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permit2.signature_usage": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "positions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "sanctions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "withdrawals": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    }
+  },
+  "families": [
+    "evm"
+  ],
+  "limits": [
+    {
+      "name": "free",
+      "notes": "Free tier：每秒 3 次、每日最多 100,000 次，僅選定鏈。版本清單裡有某條鏈，不等於免費取得所有歷史方法。",
+      "retrieved": "2026-10-08",
+      "source_url": "https://docs.etherscan.io/resources/rate-limits",
+      "max_rps": 3,
+      "max_requests_per_day": 100000,
+      "verification": "numbers_checked_against_source_url_2026-10-08"
+    }
+  ],
+  "networks": [
+    "ethereum-mainnet",
+    "bsc-mainnet",
+    "arbitrum-one",
+    "base-mainnet",
+    "optimism-mainnet",
+    "polygon-pos",
+    "avalanche-c",
+    "linea-mainnet",
+    "zksync-era",
+    "scroll-mainnet",
+    "mantle-mainnet",
+    "sonic-mainnet",
+    "unichain-mainnet",
+    "hyperevm-mainnet",
+    "blast-mainnet"
+  ],
+  "notes": "Etherscan V2 免費層是每秒 3 次、每日 100,000 次，而且只涵蓋選定鏈。鏈出現在版本清單裡，不代表這個帳戶能用全部歷史方法。opBNB 的 API 支援在 2026-10-12 停止，這個 adapter 不是 opbnb-mainnet 的來源。本檔沒有 live 驗證。",
+  "probe": "untested",
+  "protocol": "rest"
+}

@@ -26,10 +26,8 @@ from guardian.identities import (
 )
 from guardian.jsonschema_lite import SchemaError, ValidationError, validate
 from guardian.network_registry import load_registry
+from guardian.resources import resource_path
 from guardian.security.redact import redact
-
-ROOT = Path(__file__).resolve().parents[2]
-SCHEMAS = ROOT / "schemas"
 _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{1,95}$")
 _FORBIDDEN_KEYS = frozenset({
     "address",
@@ -162,7 +160,7 @@ def load_public_config(path: str | Path) -> PublicConfig:
     if _text_has_secret(_scrub_log_contracts(text)):
         raise ConfigError("forbidden value")
     document = _read_object(text, "public config")
-    _validate_document(document, SCHEMAS / "monitor.schema.json", "monitor")
+    _validate_document(document, resource_path("schemas", "monitor.schema.json"), "monitor")
     reject_private_material(document)
     _semantic_public(document)
     return PublicConfig(document=document, path=path)
@@ -174,8 +172,8 @@ def load_accounts(path: str | Path, *, registry: dict[str, dict[str, Any]] | Non
     if not path.is_file():
         raise ConfigError("accounts file was not found")
     document = _read_object(path.read_text(encoding="utf-8"), "accounts")
-    _validate_document(document, SCHEMAS / "accounts.schema.json", "accounts")
-    networks = registry if registry is not None else load_registry(ROOT / "config" / "chains")
+    _validate_document(document, resource_path("schemas", "accounts.schema.json"), "accounts")
+    networks = registry if registry is not None else load_registry(resource_path("config", "chains"))
     seen_ids: set[str] = set()
     records: list[AccountRecord] = []
     identities: list[WalletIdentity] = []
@@ -220,11 +218,11 @@ def resolve_private_inputs(public_config: PublicConfig, environ: Mapping[str, st
     state_dir = _env_path(environ, names["state_dir_env"])
     secret_path = _env_path(environ, names["secret_profile_file_env"])
     root = git_work_tree()
-    if path_inside_work_tree(accounts_path, root):
+    if root is not None and path_inside_work_tree(accounts_path, root):
         raise ConfigError("private accounts path is inside the git work tree")
-    if path_inside_work_tree(state_dir, root):
+    if root is not None and path_inside_work_tree(state_dir, root):
         raise ConfigError("private state path is inside the git work tree")
-    if path_inside_work_tree(secret_path, root):
+    if root is not None and path_inside_work_tree(secret_path, root):
         raise ConfigError("private secret path is inside the git work tree")
     if not accounts_path.is_file():
         raise ConfigError("accounts file was not found")
@@ -290,16 +288,33 @@ def file_permission_bits(path: Path) -> int | None:
     return stat.S_IMODE(path.stat().st_mode)
 
 
-def git_work_tree(start: Path | None = None) -> Path:
-    current = (start or ROOT).resolve()
-    for parent in (current, *current.parents):
-        if (parent / ".git").exists():
-            return parent
-    raise ConfigError("git work tree was not found")
+def git_work_tree(start: Path | None = None) -> Path | None:
+    """Nearest directory that contains ``.git``, or None outside a checkout.
+
+    An installed monitor has no checkout. Private files are then allowed.
+    A source checkout is still found from the loaded package, not from a
+    caller-supplied label.
+    """
+    if start is None:
+        from guardian.runtime_binding import source_checkout_root
+
+        checkout = source_checkout_root()
+        start = checkout if checkout is not None else Path.cwd()
+    current = Path(start).resolve()
+    while True:
+        if (current / ".git").exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
 
 
 def path_inside_work_tree(path: Path, root: Path | None = None) -> bool:
-    base = (root or git_work_tree()).resolve()
+    base = root if root is not None else git_work_tree()
+    if base is None:
+        return False
+    base = base.resolve()
     child = os.path.normcase(str(path.resolve()))
     parent = os.path.normcase(str(base))
     if child == parent:
@@ -309,7 +324,7 @@ def path_inside_work_tree(path: Path, root: Path | None = None) -> bool:
 
 
 def _semantic_public(document: dict[str, Any]) -> None:
-    registry = load_registry(ROOT / "config" / "chains")
+    registry = load_registry(resource_path("config", "chains"))
     enabled = set(document["enabled_networks"])
     for network in enabled:
         if network not in registry:

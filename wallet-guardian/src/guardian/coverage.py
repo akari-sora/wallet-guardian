@@ -9,13 +9,12 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from guardian.jsonschema_lite import validate
+from guardian.resources import resource_path
 from guardian.sources.capabilities import CAPABILITIES
 
-_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "coverage.schema.json"
 _SCHEMA: dict[str, Any] | None = None
 _APPLICABLE = frozenset({"implemented", "partial"})
 _QUALITIES = ("complete_in_declared_scope", "partial", "stale", "error", "unknown")
@@ -76,7 +75,7 @@ class CoverageObservation:
 def coverage_schema() -> dict[str, Any]:
     global _SCHEMA
     if _SCHEMA is None:
-        _SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+        _SCHEMA = json.loads(resource_path("schemas", "coverage.schema.json").read_text(encoding="utf-8"))
     return _SCHEMA
 
 

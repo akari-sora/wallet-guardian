@@ -21,8 +21,9 @@ from guardian.protocols.network import expected_chain_id
 from guardian.protocols.pins import UXLINK_SOURCES, UXLINK_SYMBOL_CHECK, UXLINK_TOKENS
 from guardian.protocols.views import ViewPlugin, ViewSpec
 
-_ROOT = Path(__file__).resolve().parents[3]
-ASSETS_PATH = _ROOT / "config" / "assets" / "uxlink.json"
+from guardian.resources import resource_path
+
+ASSETS_PATH = resource_path("config", "assets", "uxlink.json")
 _DATE = re.compile(r"^20[0-9]{2}-[01][0-9]-[0-3][0-9]$")
 _FORBIDDEN_TEXT = ("1:1", "redeem-only", "redeem_only", "redeemable")
 _TOP_KEYS = frozenset({

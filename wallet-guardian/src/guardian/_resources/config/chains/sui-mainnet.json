@@ -1,0 +1,39 @@
+{
+  "network": "sui-mainnet",
+  "display_name": "Sui",
+  "family": "sui",
+  "tier": 2,
+  "evm_chain_id": null,
+  "native_asset": {
+    "symbol": "SUI",
+    "decimals": 9,
+    "identity": "sui-native:SUI"
+  },
+  "identity": {
+    "method": "sui chain identifier",
+    "evm_chain_id": null,
+    "expected_value": "35834a8a",
+    "status": "documented"
+  },
+  "finality_policy": "Sui 以 checkpoint 認證後的 effects 為觀察點。不要用已停用的 JSON-RPC 回應來宣稱最終。",
+  "sources": [
+    {
+      "url": "https://docs.sui.io/references/sui-api",
+      "kind": "api_migration",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://docs.sui.io/references/sui-api/sui-graphql/beta/reference/operations/queries/chain-identifier",
+      "kind": "official_docs",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://docs.sui.io/develop/manage-packages/source-verification",
+      "kind": "chain_identity",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "不新建 JSON-RPC 或 suix_* 路徑作主幹。Sui Foundation mainnet fullnodes 已停用 JSON-RPC。新 adapter 用 GraphQL 或 gRPC。短鏈識別 35834a8a 是文件裡的 legacy 形式；GraphQL chainIdentifier 的完整 Base58 仍要由以後的 probe 核對，本包沒有呼叫節點。原生符號 SUI，9 位小數。enabled 維持 false。"
+}

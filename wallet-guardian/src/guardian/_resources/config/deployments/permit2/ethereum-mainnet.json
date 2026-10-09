@@ -1,0 +1,8 @@
+{
+  "network": "ethereum-mainnet",
+  "address": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+  "status": "documented",
+  "source_url": "https://github.com/Uniswap/permit2",
+  "retrieved": "2026-10-08",
+  "notes": "not verified on-chain by this package"
+}

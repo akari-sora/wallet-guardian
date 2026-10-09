@@ -4,6 +4,8 @@
 
 這不是投資建議。建置與測試也不等於獲准執行任何主網資產交易。
 
+授權：AGPL-3.0-only（見 `LICENSE`）。
+
 多鏈監控套件 MCM-01 的範圍契約見 [docs/mcm-01.md](docs/mcm-01.md)。那是計畫，不是 live 驗證。
 
 ## 現在做得到
@@ -42,6 +44,10 @@ Watch-only 地址只代表「拿來觀察」，不代表這個系統可以動用
 
 ## 安裝
 
+發行 wheel 的安裝、釘選的 constraints、XDG 私人目錄、升級與降版見 [docs/install.md](docs/install.md)。不要從 PyPI 執行 `pip install guardian`：這個名稱沒有被保留。
+
+在這個 checkout 裡開發：
+
 ```bash
 cd wallet-guardian
 ./scripts/bootstrap.sh
@@ -49,7 +55,7 @@ cd wallet-guardian
 
 需要 Python 3.12 與 [uv](https://docs.astral.sh/uv/)。
 
-把私人設定放在 `private/config.json`（不要提交）。格式見 `config/public.example.json`。
+把私人設定放在 `private/config.json`（不要提交）。格式見 `config/public.example.json`。已安裝的程式預設把私人設定與狀態放在 XDG 目錄，見 `docs/install.md`。
 
 ## 指令
 
@@ -62,7 +68,7 @@ uv run guardian workbench --json
 uv run guardian alerts test --dry-run
 ```
 
-`run-once` 會把完整結果寫進 `evidence/`。終端機輸出是給操作者看的 JSON；失敗會有非 0 的 exit code。
+`run-once` 的終端機輸出是給操作者看的 JSON；失敗會有非 0 的 exit code。舊的 Lista 路徑把結果寫進狀態目錄（預設 `$XDG_STATE_HOME/guardian`，否則 `~/.local/state/guardian`），不寫進安裝套件。見 `docs/install.md`。
 
 ## API key
 
@@ -123,3 +129,7 @@ uv run pytest -q
 ## 資料來源
 
 BNB Chain 官方 RPC、Lista 官方文件上的 StakeManager proxy、Hyperliquid 公開 info、Etherscan V2 chainlist、OFAC SDN CSV。文件網址與查證等級見 `docs/source-registry.json` 與 doctor 產生的 `source_registry.json`。
+
+## License
+
+Wallet Guardian is licensed under the GNU Affero General Public License v3.0 only (SPDX: AGPL-3.0-only). See [LICENSE](LICENSE). If you run a modified version as a network service, AGPL section 13 requires offering its source to that service's users.

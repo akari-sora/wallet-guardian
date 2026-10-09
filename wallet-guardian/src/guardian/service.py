@@ -11,11 +11,11 @@ import shutil
 import subprocess
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
@@ -36,10 +36,26 @@ from guardian.security.address import parse_evm_address
 from guardian.security.redact import redact
 from guardian.security.rpc_guard import FORBIDDEN_RPC_METHODS
 from guardian.storage import Database
+from guardian.locations import DynamicStateRoot, default_env_file, ensure_private_dir, secure_write_text
 from guardian.monitoring import SnapshotCycle
 
-ROOT = Path(__file__).resolve().parents[2]
-TAIPEI = ZoneInfo("Asia/Taipei")
+# Tests replace this with a concrete path. The default reads the XDG state dir at use time.
+ROOT = DynamicStateRoot()
+
+
+def _taipei_zone() -> tzinfo:
+    """Asia/Taipei when the host has zoneinfo; otherwise the fixed +08:00 offset.
+
+    Windows CPython does not ship the IANA database. Taipei has not observed DST
+    since 1979, so the offset matches ZoneInfo for every timestamp this process formats.
+    """
+    try:
+        return ZoneInfo("Asia/Taipei")
+    except ZoneInfoNotFoundError:
+        return timezone(timedelta(hours=8))
+
+
+TAIPEI = _taipei_zone()
 SECRET_ENV = (
     "ETHERSCAN_API_KEY",
     "GOPLUS_API_KEY",
@@ -142,7 +158,7 @@ def _which(name: str) -> dict[str, Any]:
 
 def load_local_env(path: Path | None = None) -> list[str]:
     """Load gitignored .env.local. Existing process environment wins. Values are not logged."""
-    target = path if path is not None else ROOT / ".env.local"
+    target = path if path is not None else default_env_file()
     loaded: list[str] = []
     if not target.is_file():
         return loaded
@@ -234,10 +250,12 @@ def _systemd_state() -> str:
 
 
 def environment_report() -> dict[str, Any]:
-    usage = shutil.disk_usage(ROOT)
-    probe = Path(ROOT / "data" / ".write-probe")
-    probe.parent.mkdir(parents=True, exist_ok=True)
-    probe.write_text("ok", encoding="utf-8")
+    root = Path(os.fspath(ROOT))
+    ensure_private_dir(root)
+    usage = shutil.disk_usage(root)
+    probe = root / "data" / ".write-probe"
+    ensure_private_dir(probe.parent)
+    secure_write_text(probe, "ok")
     probe.unlink()
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -398,11 +416,14 @@ def doctor() -> dict[str, Any]:
         "user_mainnet_send_env": os.environ.get(MAINNET_SEND_ENV, "false").lower() == "true",
         "writes_enabled": False,
     }
-    (ROOT / "environment_report.json").write_text(json.dumps(report["environment"], indent=2) + "\n", encoding="utf-8")
-    (ROOT / "source_registry.json").write_text(json.dumps({"generated_at_taipei": now_local(), "providers": probes}, indent=2) + "\n", encoding="utf-8")
-    (ROOT / "provider_benchmark.json").write_text(
+    secure_write_text(ROOT / "environment_report.json", json.dumps(report["environment"], indent=2) + "\n")
+    secure_write_text(
+        ROOT / "source_registry.json",
+        json.dumps({"generated_at_taipei": now_local(), "providers": probes}, indent=2) + "\n",
+    )
+    secure_write_text(
+        ROOT / "provider_benchmark.json",
         json.dumps({"generated_at_taipei": now_local(), "results": probes, "stress_tests": "BLOCKED"}, indent=2) + "\n",
-        encoding="utf-8",
     )
     return report
 
@@ -672,14 +693,14 @@ def _run_once(config: dict[str, Any], database: Database) -> dict[str, Any]:
     }
     database.save_run(tenant_id, run_id, result)
     evidence = ROOT / "evidence" / hashlib.sha256(tenant_id.encode()).hexdigest()
-    evidence.mkdir(parents=True, exist_ok=True, mode=0o700)
-    (evidence / f"{run_id}.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    ensure_private_dir(evidence)
+    secure_write_text(evidence / f"{run_id}.json", json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     full_plans = evidence / "plans"
-    full_plans.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(full_plans)
     for row in plans:
-        (full_plans / f"{row['plan']['task_id']}.json").write_text(
+        secure_write_text(
+            full_plans / f"{row['plan']['task_id']}.json",
             json.dumps(row["plan"], ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
         )
     return result
 

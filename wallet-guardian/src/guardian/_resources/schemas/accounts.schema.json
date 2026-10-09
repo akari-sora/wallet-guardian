@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "MCM-01 planning contract only. Not an installed runtime validator. Semantic cross-field validation is also required.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "guardian.accounts.v1"
+    },
+    "tenant_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,95}$"
+    },
+    "accounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "wallet_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "family": {
+            "enum": [
+              "evm",
+              "solana",
+              "bitcoin",
+              "tron",
+              "ton",
+              "sui",
+              "aptos",
+              "cosmos"
+            ]
+          },
+          "address": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "networks": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "ethereum-mainnet",
+                "bsc-mainnet",
+                "arbitrum-one",
+                "base-mainnet",
+                "optimism-mainnet",
+                "polygon-pos",
+                "avalanche-c",
+                "solana-mainnet",
+                "linea-mainnet",
+                "zksync-era",
+                "scroll-mainnet",
+                "mantle-mainnet",
+                "sonic-mainnet",
+                "unichain-mainnet",
+                "hyperevm-mainnet",
+                "bitcoin-mainnet",
+                "tron-mainnet",
+                "blast-mainnet",
+                "opbnb-mainnet",
+                "ton-mainnet",
+                "sui-mainnet",
+                "aptos-mainnet",
+                "cosmos-hub",
+                "osmosis-mainnet"
+              ]
+            },
+            "uniqueItems": true,
+            "minItems": 1
+          },
+          "relationship": {
+            "enum": [
+              "owned_user_declared",
+              "watch_only"
+            ]
+          },
+          "own_group": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,95}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "wallet_id",
+          "label",
+          "family",
+          "address",
+          "networks",
+          "relationship"
+        ]
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "tenant_id",
+    "accounts"
+  ]
+}

@@ -53,7 +53,8 @@ from guardian.scan.window import plan_chunks, read_logs, reject_wallet_emitter, 
 from guardian.security.transport_policy import Operation
 from guardian.sources.blockscout import BlockscoutClient
 from guardian.sources.budget import BudgetBook, BudgetExhausted
-from guardian.sources.capabilities import ROOT, load_source_capabilities
+from guardian.resources import resource_path
+from guardian.sources.capabilities import load_source_capabilities
 from guardian.sources.etherscan import EtherscanClient
 from guardian.sources.nodereal import NodeRealClient
 from guardian.sources.plan_cache import PlanFailureCache, database_file
@@ -189,7 +190,7 @@ def run_capability_pipeline(
     polling = public_config.document.get("polling") if isinstance(public_config.document.get("polling"), dict) else {}
     bootstrap_origin = polling.get("bootstrap_origin") if isinstance(polling.get("bootstrap_origin"), int) else None
     deadline = polling.get("round_deadline_seconds") if isinstance(polling.get("round_deadline_seconds"), int) else None
-    registry = load_registry(ROOT / "config" / "chains")
+    registry = load_registry(resource_path("config", "chains"))
     catalog = load_source_capabilities()
     policy = AlertPolicy.from_public(public_config.document["alerts"])
     observations: dict[tuple[str, str, str], CoverageObservation] = {}
@@ -394,7 +395,7 @@ def probe_sources(
 ) -> dict[str, Any]:
     """Per-source configuration and, for RPC, a chain-id or genesis read."""
     transport = _transport(public_config, backend, clock)
-    registry = load_registry(ROOT / "config" / "chains")
+    registry = load_registry(resource_path("config", "chains"))
     sources = []
     for name in sorted(public_config.document["sources"]):
         source = public_config.document["sources"][name]

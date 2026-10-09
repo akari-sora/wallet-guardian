@@ -1,0 +1,34 @@
+{
+  "network": "bitcoin-mainnet",
+  "display_name": "Bitcoin",
+  "family": "bitcoin",
+  "tier": 1,
+  "evm_chain_id": null,
+  "native_asset": {
+    "symbol": "BTC",
+    "decimals": 8,
+    "identity": "bitcoin-native:BTC"
+  },
+  "identity": {
+    "method": "genesis block hash",
+    "evm_chain_id": null,
+    "expected_value": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+    "status": "documented"
+  },
+  "finality_policy": "Bitcoin 的確認數是政策門檻，不是絕對 finalized。常見的觀察深度不能寫成不可逆保證，重組仍然可能。",
+  "sources": [
+    {
+      "url": "https://github.com/Blockstream/esplora/blob/master/API.md",
+      "kind": "api_docs",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://github.com/bitcoin/bitcoin",
+      "kind": "chain_identity",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "原生單位是 satoshi，8 位小數，符號 BTC。genesis 區塊雜湊是公開主網值，本包沒有連節點。xpub、descriptors、Lightning、Ordinals、Runes 不在範圍。單一位址不能代表整個 HD 錢包。enabled 維持 false。"
+}

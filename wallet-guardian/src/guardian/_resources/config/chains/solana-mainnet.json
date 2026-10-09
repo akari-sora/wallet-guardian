@@ -1,0 +1,34 @@
+{
+  "network": "solana-mainnet",
+  "display_name": "Solana",
+  "family": "solana",
+  "tier": 0,
+  "evm_chain_id": null,
+  "native_asset": {
+    "symbol": "SOL",
+    "decimals": 9,
+    "identity": "solana-native:SOL"
+  },
+  "identity": {
+    "method": "getGenesisHash",
+    "evm_chain_id": null,
+    "expected_value": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+    "status": "documented"
+  },
+  "finality_policy": "Solana 的 commitment 分成 processed、confirmed、finalized。finalized 不是絕對不可逆保證。",
+  "sources": [
+    {
+      "url": "https://solana.com/docs/rpc/http/getgenesishash",
+      "kind": "official_docs",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://github.com/solana-labs/solana/blob/master/sdk/src/genesis_config.rs",
+      "kind": "chain_identity",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "原生符號 SOL，9 位小數（lamports）。getGenesisHash 的公開主網值是 documented，本包沒有呼叫 RPC。非 EVM 地址必須由使用者另外提供，不能從 EVM 地址換算。enabled 維持 false。"
+}

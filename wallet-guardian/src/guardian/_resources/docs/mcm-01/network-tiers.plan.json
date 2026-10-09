@@ -1,0 +1,170 @@
+[
+  {
+    "network": "ethereum-mainnet",
+    "family": "evm",
+    "tier": 0,
+    "evm_chain_id": 1,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "bsc-mainnet",
+    "family": "evm",
+    "tier": 0,
+    "evm_chain_id": 56,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "arbitrum-one",
+    "family": "evm",
+    "tier": 0,
+    "evm_chain_id": 42161,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "base-mainnet",
+    "family": "evm",
+    "tier": 0,
+    "evm_chain_id": 8453,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "optimism-mainnet",
+    "family": "evm",
+    "tier": 0,
+    "evm_chain_id": 10,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "polygon-pos",
+    "family": "evm",
+    "tier": 0,
+    "evm_chain_id": 137,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "avalanche-c",
+    "family": "evm",
+    "tier": 0,
+    "evm_chain_id": 43114,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "solana-mainnet",
+    "family": "solana",
+    "tier": 0,
+    "evm_chain_id": null,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "linea-mainnet",
+    "family": "evm",
+    "tier": 1,
+    "evm_chain_id": 59144,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "zksync-era",
+    "family": "evm",
+    "tier": 1,
+    "evm_chain_id": 324,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "scroll-mainnet",
+    "family": "evm",
+    "tier": 1,
+    "evm_chain_id": 534352,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "mantle-mainnet",
+    "family": "evm",
+    "tier": 1,
+    "evm_chain_id": 5000,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "sonic-mainnet",
+    "family": "evm",
+    "tier": 1,
+    "evm_chain_id": 146,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "unichain-mainnet",
+    "family": "evm",
+    "tier": 1,
+    "evm_chain_id": 130,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "hyperevm-mainnet",
+    "family": "evm",
+    "tier": 1,
+    "evm_chain_id": 999,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "bitcoin-mainnet",
+    "family": "bitcoin",
+    "tier": 1,
+    "evm_chain_id": null,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "tron-mainnet",
+    "family": "tron",
+    "tier": 1,
+    "evm_chain_id": null,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "blast-mainnet",
+    "family": "evm",
+    "tier": 2,
+    "evm_chain_id": 81457,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "opbnb-mainnet",
+    "family": "evm",
+    "tier": 2,
+    "evm_chain_id": 204,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "ton-mainnet",
+    "family": "ton",
+    "tier": 2,
+    "evm_chain_id": null,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "sui-mainnet",
+    "family": "sui",
+    "tier": 2,
+    "evm_chain_id": null,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "aptos-mainnet",
+    "family": "aptos",
+    "tier": 3,
+    "evm_chain_id": null,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "cosmos-hub",
+    "family": "cosmos",
+    "tier": 3,
+    "evm_chain_id": null,
+    "status": "planned_not_live_verified"
+  },
+  {
+    "network": "osmosis-mainnet",
+    "family": "cosmos",
+    "tier": 3,
+    "evm_chain_id": null,
+    "status": "planned_not_live_verified"
+  }
+]

@@ -38,6 +38,7 @@ from guardian.chains.evm.permissions import (
 )
 from guardian.coverage import CoverageObservation
 from guardian.identities import IdentityError, parse_address
+from guardian.resources import resource_path
 
 OFFCHAIN_REASON = "offchain_signature_not_observable"
 CANONICAL_PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
@@ -50,8 +51,7 @@ T0_EVM_NETWORKS = frozenset({
     "optimism-mainnet",
     "polygon-pos",
 })
-_ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_PERMIT2_DIR = _ROOT / "config" / "deployments" / "permit2"
+DEFAULT_PERMIT2_DIR = resource_path("config", "deployments", "permit2")
 _FIELDS = frozenset({"address", "network", "notes", "retrieved", "source_url", "status"})
 _DATE = re.compile(r"^20[0-9]{2}-[01][0-9]-[0-3][0-9]$")
 _SOURCE = "https://github.com/Uniswap/permit2"
@@ -59,6 +59,8 @@ _NOTES = "not verified on-chain by this package"
 _PROBE = "untested"
 _UINT160 = 2**160
 _UINT48 = 2**48
+
+
 def _topic(signature: str) -> str:
     return "0x" + keccak(signature.encode("ascii")).hex()
 

@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 from guardian.network_registry import load_registry
+from guardian.resources import resource_path
 
-_ROOT = Path(__file__).resolve().parents[3]
-_CHAINS = _ROOT / "config" / "chains"
+_CHAINS = resource_path("config", "chains")
 
 
 @lru_cache(maxsize=1)

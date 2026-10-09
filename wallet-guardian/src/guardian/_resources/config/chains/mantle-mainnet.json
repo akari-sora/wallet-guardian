@@ -1,0 +1,34 @@
+{
+  "network": "mantle-mainnet",
+  "display_name": "Mantle",
+  "family": "evm",
+  "tier": 1,
+  "evm_chain_id": 5000,
+  "native_asset": {
+    "symbol": "MNT",
+    "decimals": 18,
+    "identity": "evm-native:5000"
+  },
+  "identity": {
+    "method": "eth_chainId",
+    "evm_chain_id": 5000,
+    "expected_value": "0x1388",
+    "status": "documented"
+  },
+  "finality_policy": "Mantle 的 L2 與 L1 最終化分開。資料可用性與 OP Stack 不完全相同，不能複製 OP 的最終性標籤。",
+  "sources": [
+    {
+      "url": "https://github.com/ethereum-lists/chains/blob/master/_data/chains/eip155-5000.json",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://github.com/ethereum-lists/chains",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "T1。原生符號是 MNT，不是 ETH。鏈 ID 5000 為 documented。本包未 live 驗證，enabled 維持 false。"
+}

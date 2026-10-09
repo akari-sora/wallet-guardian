@@ -1,0 +1,26 @@
+{
+  "id": "erc4626",
+  "version": "1",
+  "networks": [
+    "arbitrum-one",
+    "avalanche-c",
+    "base-mainnet",
+    "bsc-mainnet",
+    "ethereum-mainnet",
+    "optimism-mainnet",
+    "polygon-pos"
+  ],
+  "contracts": {},
+  "required_sources": [
+    "evm_rpc"
+  ],
+  "view_methods": [
+    "asset()",
+    "balanceOf(address)",
+    "convertToAssets(uint256)"
+  ],
+  "capabilities": [
+    "positions"
+  ],
+  "notes": "Public vault registry is empty. Vaults are supplied by the caller from private config. Not verified on-chain by this package."
+}

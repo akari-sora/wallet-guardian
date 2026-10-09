@@ -1,0 +1,39 @@
+{
+  "network": "ethereum-mainnet",
+  "display_name": "Ethereum",
+  "family": "evm",
+  "tier": 0,
+  "evm_chain_id": 1,
+  "native_asset": {
+    "symbol": "ETH",
+    "decimals": 18,
+    "identity": "evm-native:1"
+  },
+  "identity": {
+    "method": "eth_chainId",
+    "evm_chain_id": 1,
+    "expected_value": "0x1",
+    "status": "documented"
+  },
+  "finality_policy": "Ethereum 以共識層 finalized（Casper FFG）為最終性。不要把固定 12 個執行層確認套到每一條鏈，也不要把那 12 個確認說成絕對 finalized。",
+  "sources": [
+    {
+      "url": "https://github.com/ethereum-lists/chains/blob/master/_data/chains/eip155-1.json",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://github.com/ethereum-lists/chains",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://eips.ethereum.org/EIPS/eip-155",
+      "kind": "official_docs",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "鏈 ID 1 來自公開登錄，identity.status 是 documented。本包沒有對節點送出 eth_chainId，不是 live 驗證。enabled 維持 false。"
+}

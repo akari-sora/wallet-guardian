@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from guardian.errors import PolicyError, SecurityError
+from guardian.resources import resource_path
 
 TASK_VERSION = "guardian.task.v1"
 CLIENT_BUILD = "action-client@0.3.0"
@@ -88,7 +89,7 @@ def issue_task_link(ref: str, origin: str | None) -> dict[str, Any]:
     }
 
 
-PRIVATE_TASK_ORIGINS_PATH = Path(__file__).resolve().parents[3] / "config" / "deployments" / "private-task-origins.json"
+PRIVATE_TASK_ORIGINS_PATH = resource_path("config", "deployments", "private-task-origins.json")
 PRIVATE_TASK_DEFAULT_DEPLOYMENT = "wg-private-task-v1"
 
 
