@@ -16,6 +16,12 @@ from typing import Any
 from guardian.actions.policy import agent_wallet_request, parse_intent
 from guardian.actions.workbench import workbench_status
 from guardian.comparison import compare_with_legacy
+from guardian.legacy_capture import (
+    begin_capture,
+    finish_capture,
+    record_capture,
+    scope_hash_for_accounts,
+)
 from guardian.configuration import load_public_config, resolve_private_inputs, safe_export
 from guardian.domain import format_alert
 from guardian.errors import GuardianError
@@ -126,6 +132,35 @@ def build_parser() -> argparse.ArgumentParser:
     compared.add_argument("--legacy-state", required=True)
     compared.add_argument("--since", default=None, help="ISO window start")
     compared.add_argument("--until", default=None, help="ISO window end")
+    compared.add_argument("--legacy-runs-dir", default=None)
+    compared.add_argument("--slot-start", default=None)
+    compared.add_argument("--slot-end", default=None)
+    compared.add_argument("--legacy-max-age-seconds", type=int, default=12600)
+
+    capture = sub.add_parser("legacy-capture")
+    capture_sub = capture.add_subparsers(dest="capture_command", required=True)
+    begin = capture_sub.add_parser("begin")
+    begin.add_argument("--runs-dir", required=True)
+    begin.add_argument("--run-id", required=True)
+    begin.add_argument("--legacy-state", required=True)
+    begin.add_argument("--tool-name", required=True)
+    begin.add_argument("--tool-version", required=True)
+    begin.add_argument("--tool-hash", required=True)
+    begin.add_argument("--host-id", required=True)
+    begin.add_argument("--scope-hash", required=True)
+    begin.add_argument("--account", action="append", required=True, help="label=<sha256 of the identity key>")
+    begin.add_argument("--started-at", required=True)
+    recorded = capture_sub.add_parser("record")
+    recorded.add_argument("--runs-dir", required=True)
+    recorded.add_argument("--run-id", required=True)
+    recorded.add_argument("--window-json", action="append", default=[])
+    recorded.add_argument("--event-json", action="append", default=[])
+    finished = capture_sub.add_parser("finish")
+    finished.add_argument("--runs-dir", required=True)
+    finished.add_argument("--run-id", required=True)
+    finished.add_argument("--legacy-state", required=True)
+    finished.add_argument("--exit-code", type=int, required=True)
+    finished.add_argument("--finished-at", required=True)
 
     watchdog = sub.add_parser("watchdog", parents=[common])
     watchdog.add_argument("--mcm-config", required=True)
@@ -220,6 +255,8 @@ def dispatch(
         return _mcm_export(args)
     if args.command == "compare-legacy":
         return _mcm_compare(args)
+    if args.command == "legacy-capture":
+        return _legacy_capture(args)
     if args.command == "watchdog":
         return _mcm_watchdog(args, clock)
     if args.command == "monitor":
@@ -413,15 +450,71 @@ def _mcm_export(args: argparse.Namespace) -> tuple[dict, int]:
 def _mcm_compare(args: argparse.Namespace) -> tuple[dict, int]:
     _public, private, database = _open_mcm(args.mcm_config)
     try:
+        runs = getattr(args, "legacy_runs_dir", None)
         return compare_with_legacy(
             args.legacy_state,
             database,
             private.accounts.tenant_id,
             since=getattr(args, "since", None),
             until=getattr(args, "until", None),
+            legacy_runs_dir=runs,
+            legacy_scope_hash=None if not runs else scope_hash_for_accounts(private.accounts),
+            slot_start=getattr(args, "slot_start", None),
+            slot_end=getattr(args, "slot_end", None),
+            legacy_max_age_seconds=getattr(args, "legacy_max_age_seconds", 12600),
         ), 0
     finally:
         database.close()
+
+
+def _legacy_capture(args: argparse.Namespace) -> tuple[dict, int]:
+    command = args.capture_command
+    if command == "begin":
+        return begin_capture(
+            args.runs_dir,
+            run_id=args.run_id,
+            legacy_state=args.legacy_state,
+            tool_name=args.tool_name,
+            tool_version=args.tool_version,
+            tool_hash=args.tool_hash,
+            host_id=args.host_id,
+            scope_hash=args.scope_hash,
+            accounts=[_capture_account(item) for item in args.account],
+            started_at=args.started_at,
+        ), 0
+    if command == "record":
+        return record_capture(
+            args.runs_dir,
+            run_id=args.run_id,
+            windows=[_capture_json(item, "query window") for item in args.window_json],
+            events=[_capture_json(item, "sidecar event") for item in args.event_json],
+        ), 0
+    if command == "finish":
+        return finish_capture(
+            args.runs_dir,
+            run_id=args.run_id,
+            legacy_state=args.legacy_state,
+            exit_code=args.exit_code,
+            finished_at=args.finished_at,
+        ), 0
+    raise GuardianError("unknown command")
+
+
+def _capture_account(value: str) -> dict[str, str]:
+    label, sep, digest = value.partition("=")
+    if not sep:
+        raise GuardianError("account must be label=<sha256>")
+    return {"address_hash": digest, "label": label}
+
+
+def _capture_json(value: str, label: str) -> dict:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise GuardianError(f"{label} is not valid json") from exc
+    if not isinstance(parsed, dict):
+        raise GuardianError(f"{label} must be an object")
+    return parsed
 
 
 def _mcm_watchdog(args: argparse.Namespace, clock: Callable[[], float] | None) -> tuple[dict, int]:

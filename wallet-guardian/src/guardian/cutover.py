@@ -70,6 +70,7 @@ def evaluate_rounds(rounds: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             reasons.append("unreadable_round")
             continue
         history.append(_round_id(record, len(history)))
+        reasons.extend(compare_valid_block(record))
         gap_evidence.extend(_gap_evidence(record))
         drill = record.get("drill")
         if isinstance(drill, str) and drill:
@@ -174,6 +175,18 @@ def evaluate_rounds(rounds: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def compare_valid_block(record: Mapping[str, Any]) -> list[str]:
+    """A recorded false compare_valid disqualifies. A missing field stays compatible."""
+    if "compare_valid" not in record:
+        return []
+    if record.get("compare_valid") is True:
+        return []
+    reason = record.get("compare_reason")
+    if isinstance(reason, str) and reason:
+        return [reason]
+    return ["compare_invalid"]
+
+
 def _is_baseline(record: Mapping[str, Any]) -> bool:
     return record.get("baseline") is True or record.get("index") == 0
 
@@ -212,6 +225,7 @@ def _disqualify(record: Mapping[str, Any]) -> list[str]:
         found.append("sent")
     elif record.get("no_send") is not True:
         found.append("evidence_missing:no_send")
+    found.extend(compare_valid_block(record))
     return found
 
 

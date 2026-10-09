@@ -9,11 +9,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from guardian.errors import ConfigError
-from guardian.legacy_state import LEGACY_CHAINS, _parse_alert, convert_legacy_document
+from guardian.legacy_state import LEGACY_CHAINS, _parse_alert, convert_legacy_document, read_legacy_evidence
 from guardian.storage import Database
 
 _ADDRESS = re.compile(r"(?i)0x[0-9a-f]{40}")
@@ -27,6 +28,11 @@ def compare_with_legacy(
     *,
     since: str | None = None,
     until: str | None = None,
+    legacy_runs_dir: str | Path | None = None,
+    legacy_scope_hash: str | None = None,
+    slot_start: str | None = None,
+    slot_end: str | None = None,
+    legacy_max_age_seconds: int = 12600,
 ) -> dict[str, Any]:
     """Compare one shared window. Alerted history is dedup, not the miss set."""
     path = Path(legacy_state_path)
@@ -40,6 +46,21 @@ def compare_with_legacy(
         raise ConfigError("legacy state is not valid json") from None
     if not isinstance(legacy, dict):
         raise ConfigError("legacy state must be an object")
+    evidence = None
+    if legacy_runs_dir is not None:
+        evidence = read_legacy_evidence(
+            legacy_runs_dir,
+            expected_scope_hash=legacy_scope_hash or "",
+            slot_start=slot_start,
+            slot_end=slot_end,
+            max_age_seconds=legacy_max_age_seconds,
+        )
+        if evidence["reason"] is None and evidence["events"]:
+            legacy = dict(legacy)
+            prior = legacy.get("events")
+            merged = list(prior) if isinstance(prior, list) else []
+            merged.extend(evidence["events"])
+            legacy["events"] = merged
     labels = _labels(database, tenant)
     _ignored_rows, unmapped, legacy_networks = _legacy_rows(legacy, labels)
     del _ignored_rows
@@ -101,7 +122,106 @@ def compare_with_legacy(
         "window": {"since": window[0], "until": window[1]},
     }
     _apply_tx_level(report, legacy, labels, mcm_events, since, until)
+    if evidence is not None:
+        _attach_evidence(report, evidence, database, tenant, slot_start, slot_end)
     return report
+
+
+def _attach_evidence(
+    report: dict[str, Any],
+    evidence: Mapping[str, Any],
+    database: Database,
+    tenant: str,
+    slot_start: str | None,
+    slot_end: str | None,
+) -> None:
+    """compare_valid is true only for a trustworthy run whose windows cover the slot."""
+    reason = evidence.get("reason")
+    windows = evidence.get("windows") if isinstance(evidence.get("windows"), list) else []
+    if reason is None:
+        reason = _mcm_window_gap(database, tenant, windows, slot_start, slot_end)
+    report["compare_reason"] = "" if reason is None else str(reason)
+    report["compare_valid"] = reason is None
+    report["legacy_query_windows"] = windows
+    report["legacy_run_id"] = evidence.get("run_id") or ""
+
+
+def _mcm_window_gap(
+    database: Database,
+    tenant: str,
+    windows: Sequence[Mapping[str, Any]],
+    slot_start: str | None,
+    slot_end: str | None,
+) -> str | None:
+    """Required MCM rows must be complete and covered by a legacy query window.
+
+    A quiet text note, an unchanged nonce, or an approval total is not a window.
+    """
+    del slot_start, slot_end
+    record = database.latest_run(tenant)
+    required = record.get("required") if isinstance(record, dict) else None
+    if not isinstance(required, dict) or not required:
+        return "mcm_window_incomplete"
+    coverage: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for state in database.capability_state_for(tenant):
+        payload = state.get("payload") if isinstance(state.get("payload"), dict) else {}
+        row = payload.get("coverage") if isinstance(payload, dict) else None
+        if not isinstance(row, dict):
+            continue
+        network = row.get("network")
+        capability = row.get("capability")
+        if isinstance(network, str) and isinstance(capability, str):
+            coverage[(network, capability)] = row
+    for key, value in required.items():
+        if not isinstance(key, str):
+            return "mcm_window_incomplete"
+        parts = key.split("|")
+        if len(parts) != 3 or any(part == "" for part in parts):
+            return "mcm_window_incomplete"
+        _wallet, network, capability = parts
+        if value != "complete_in_declared_scope":
+            return "mcm_window_incomplete"
+        window = _matching_window(windows, network, capability)
+        if window is None:
+            return "legacy_window_gap"
+        if window.get("status") != "complete":
+            return "legacy_partial"
+        row = coverage.get((network, capability))
+        if row is None:
+            continue
+        if row.get("quality") != "complete_in_declared_scope":
+            return "mcm_window_incomplete"
+        scope = row.get("scope") if isinstance(row.get("scope"), dict) else {}
+        left = _block(scope.get("from"))
+        right = _block(scope.get("to"))
+        if left is None or right is None:
+            continue
+        span_from = window.get("from_block")
+        span_to = window.get("to_block")
+        if isinstance(span_from, bool) or isinstance(span_to, bool):
+            return "legacy_window_gap"
+        if not isinstance(span_from, int) or not isinstance(span_to, int):
+            return "legacy_window_gap"
+        if span_from < left or span_to > right:
+            return "legacy_window_gap"
+    return None
+
+
+def _matching_window(windows: Sequence[Mapping[str, Any]], network: str, capability: str) -> Mapping[str, Any] | None:
+    for window in windows:
+        if window.get("network") == network and window.get("capability") == capability:
+            return window
+    return None
+
+
+def _block(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
 
 
 def _legacy_rows(legacy: dict[str, Any], labels: dict[str, str]) -> tuple[list[dict[str, str]], list[dict[str, str]], set[str]]:

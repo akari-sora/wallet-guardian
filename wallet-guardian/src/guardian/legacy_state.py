@@ -855,3 +855,55 @@ def _archive_cursor(item: Any) -> dict[str, Any]:
 
 def _unmapped(reason: str) -> dict[str, Any]:
     return {"derived_block": None, "reason": reason, "status": "unmapped", "used": False}
+
+
+def sidecar_event_to_document(event: Mapping[str, Any]) -> dict[str, str]:
+    """Map one ``guardian.legacy-event.v1`` object into the comparison event shape.
+
+    ``subject`` becomes ``asset``. Block numbers are not copied out of free text.
+    """
+    subject = event.get("subject") if isinstance(event.get("subject"), str) else ""
+    return {
+        "asset": subject,
+        "finality": event.get("finality") if isinstance(event.get("finality"), str) else "",
+        "kind": event.get("kind") if isinstance(event.get("kind"), str) else "",
+        "label": event.get("label") if isinstance(event.get("label"), str) else "",
+        "network": event.get("network") if isinstance(event.get("network"), str) else "",
+        "observed_at": event.get("observed_at") if isinstance(event.get("observed_at"), str) else "",
+        "position": event.get("position") if isinstance(event.get("position"), str) else "",
+        "tx": event.get("tx") if isinstance(event.get("tx"), str) else "",
+        "wallet_id": event.get("wallet_id") if isinstance(event.get("wallet_id"), str) else "",
+    }
+
+
+def read_legacy_evidence(
+    runs_dir: str | Path,
+    *,
+    expected_scope_hash: str,
+    slot_start: str | None,
+    slot_end: str | None,
+    max_age_seconds: int,
+) -> dict[str, Any]:
+    """Load the newest run the capture publisher marked COMPLETE.
+
+    The runs directory is only read. A hash failure, a missing marker, a stale
+    window, or a scope mismatch yields a reason and no events.
+    """
+    from guardian.legacy_capture import inspect_runs
+
+    found = inspect_runs(
+        runs_dir,
+        expected_scope_hash=expected_scope_hash,
+        slot_start=slot_start,
+        slot_end=slot_end,
+        max_age_seconds=max_age_seconds,
+    )
+    raw = found.get("events") if isinstance(found.get("events"), list) else []
+    events = [sidecar_event_to_document(item) for item in raw if isinstance(item, Mapping)]
+    return {
+        "events": events if found.get("reason") is None else [],
+        "finished_at": found.get("finished_at") or "",
+        "reason": found.get("reason"),
+        "run_id": found.get("run_id") or "",
+        "windows": found.get("windows") if found.get("reason") is None else [],
+    }
