@@ -1,6 +1,6 @@
 # Command reference
 
-Package version in this tree: `0.4.0rc1`. Each fenced block is the output of that command's `--help`. JSON is printed for every command. `--json` is accepted and does not turn that off.
+Package version in this tree: `0.4.0rc2`. Each fenced block is the output of that command's `--help`. JSON is printed for every command. `--json` is accepted and does not turn that off.
 
 The monitor is read-only. `run-once --no-send` still contacts the read endpoints you configured. It does not sign, build a transaction, or broadcast, and it does not hand the outbox to a sender. Setup steps are in [guide-cli.md](guide-cli.md).
 
@@ -10,13 +10,14 @@ A nested command (`config validate`, `alerts test`, `action plan`) has its own s
 
 ```text
 usage: guardian [-h]
-                {doctor,run-once,snapshot,reconcile,claims,providers,wallets,approvals,explain,coverage,replay,alerts,self-check,diagnose,actions,action,rescue,operation-coverage,workbench,config,sources,export,compare-legacy,legacy-capture,watchdog,monitor,egress-doctor,init,install-service}
+                {doctor,run-once,snapshot,reconcile,claims,providers,wallets,approvals,explain,coverage,replay,alerts,self-check,diagnose,actions,action,rescue,operation-coverage,workbench,config,sources,export,compare-legacy,news,legacy-capture,watchdog,monitor,egress-doctor,init,install-service}
                 ...
 
 positional arguments:
-  {doctor,run-once,snapshot,reconcile,claims,providers,wallets,approvals,explain,coverage,replay,alerts,self-check,diagnose,actions,action,rescue,operation-coverage,workbench,config,sources,export,compare-legacy,legacy-capture,watchdog,monitor,egress-doctor,init,install-service}
+  {doctor,run-once,snapshot,reconcile,claims,providers,wallets,approvals,explain,coverage,replay,alerts,self-check,diagnose,actions,action,rescue,operation-coverage,workbench,config,sources,export,compare-legacy,news,legacy-capture,watchdog,monitor,egress-doctor,init,install-service}
     init                write a read-only monitor profile
-    install-service     print a dry-run install plan; units stay disabled without --apply
+    install-service     print a dry-run install plan; units stay disabled
+                        without --apply
 
 options:
   -h, --help            show this help message and exit
@@ -477,6 +478,33 @@ options:
   --slot-start SLOT_START
   --slot-end SLOT_END
   --legacy-max-age-seconds LEGACY_MAX_AGE_SECONDS
+```
+
+## `guardian news`
+
+```text
+usage: guardian news [-h] {health} ...
+
+positional arguments:
+  {health}
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## `guardian news health`
+
+```text
+usage: guardian news health [-h] [--db DB] [--tenant TENANT] [--json]
+                            --mcm-config MCM_CONFIG [--offline]
+
+options:
+  -h, --help            show this help message and exit
+  --db DB               sqlite path
+  --tenant TENANT       local tenant scope (required when ambiguous)
+  --json                print JSON (this is always on)
+  --mcm-config MCM_CONFIG
+  --offline             read stored feed health and do not fetch
 ```
 
 ## `guardian legacy-capture`

@@ -371,12 +371,12 @@ def test_mcm_share_s8_04_version_consistency(tmp_path: Path) -> None:
     buffer = io.StringIO()
     with redirect_stdout(buffer):
         assert tool.main(["--root", str(root)]) == 1
-    assert "changelog=0.4.0rc2" in buffer.getvalue()
+    assert "changelog=0.4.0rc3" in buffer.getvalue()
     errors = tool.consistency_errors(root)
-    assert any("changelog=0.4.0rc2" in item for item in errors)
+    assert any("changelog=0.4.0rc3" in item for item in errors)
     assert any("mismatch:" in item for item in errors)
 
-    # The release tag may exist in a checkout that fetched tags (v0.4.0-rc.2 is
+    # The release tag may exist in a checkout that fetched tags (a release tag is
     # published). The invariant is that this tool never creates or reads one.
     source = _text(WG / "tools" / "check_version_consistency.py")
     assert "git tag" not in source
