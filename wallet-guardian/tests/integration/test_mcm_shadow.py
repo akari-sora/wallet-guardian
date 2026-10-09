@@ -524,7 +524,7 @@ def test_mcm_live_l3_08_frozen_scope_no_denominator_shrink(tmp_path: Path) -> No
     assert kept["history"] == ["w0", "w1", "w2", "w3"]
 
 
-def test_mcm_live_l3_07_missing_evidence_fails_closed() -> None:
+def test_mcm_live_l3_09_missing_evidence_fails_closed() -> None:
     """MCM-LIVE-L3-07. Missing evidence is not zero: the window does not qualify."""
     tool = _tool()
     good = tool.evaluate_cutover(_windows(3))
@@ -556,7 +556,7 @@ def test_mcm_live_l3_07_missing_evidence_fails_closed() -> None:
     assert "evidence_missing:no_send" in reverse["reasons"]
 
 
-def test_mcm_live_l3_08_scope_identity_is_content_hash(tmp_path: Path) -> None:
+def test_mcm_live_l3_10_scope_identity_is_content_hash(tmp_path: Path) -> None:
     """MCM-LIVE-L3-08. Scope identity hashes src/guardian and config/, not a commit SHA."""
     tool = _tool()
     root = tmp_path / "repo"
