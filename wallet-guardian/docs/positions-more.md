@@ -27,9 +27,13 @@ These addresses are documented read candidates. A matching `symbol`, `name`, `as
 
 The plugin reads `decimals()` from the chain. If the chain value disagrees with the expected decimals above, the observation is `pin_mismatch`, not a corrected balance. A manifest address that disagrees with these pins is `contract_mismatch`.
 
+## Same-block reads
+
+sDAI, Steakhouse USDC, and Comet each take one block number from `eth_getBlockByNumber` and use that number for every `eth_call` in the observation. That numeric-height binding is not a canonical block-hash proof. The plugins do not read or pin `block.hash`, and a reorg can move the same height onto a different block.
+
 ## ERC-4626 accounting
 
-Each opted-in vault is read at one block.
+Each opted-in vault is read at one block number. That binding is the numeric height above, not a block hash.
 
 - The share balance is one receipt.
 - `convertToAssets` is the underlying quote of those shares. It rounds down. The quote leg records that rounding and points `duplicates` at the vault, so the portfolio counts the receipt once.
@@ -40,15 +44,15 @@ A zero share balance with a non-zero quote is `quote_mismatch`. A failed read is
 
 ## Comet accounting
 
-All Comet calls in one observation use the same block number from `eth_getBlockByNumber`.
+All Comet calls in one observation use the same block number from `eth_getBlockByNumber`. That numeric-height binding is not a canonical block-hash proof.
 
-`userBasic.principal` is the stored principal. `totalsBasic` supplies the stored base supply index, base borrow index, and `lastAccrualTime`. Those fields stay on the leg. The amount is not labeled accrued to now. If the block timestamp is more than 3600 seconds after `lastAccrualTime`, the label is `stale_stored_index`. A last-accrual time in the future of that block is `accrual_inconsistent`. The plugin does not call `accrueAccount`.
+`userBasic.principal` is the stored principal and stays on the leg as `principal`. The countable base amount is the present value of that principal at the stored index from the same block: absolute principal times the applicable index, divided by 10^15, rounded down. Supply uses the base supply index. Debt uses the base borrow index. `totalsBasic` still supplies those indices and `lastAccrualTime`, and those fields stay on the leg. The amount is not labeled accrued to now. When `lastAccrualTime` equals the block timestamp, no time has elapsed, so this conversion is the present value at that block. If the block timestamp is more than 3600 seconds after `lastAccrualTime`, the label is `stale_stored_index` and the amount is still that stored-index present value, not interest brought forward to the block. A last-accrual time in the future of that block is `accrual_inconsistent`. The plugin does not call `accrueAccount`, `balanceOf`, or `borrowBalanceOf`.
 
 `numAssets` and `getAssetInfo` enumerate every collateral slot up to 32. A longer list is `result_exceeds_bound` and is not reported as a shorter complete list. A zero collateral balance is still queried and is omitted from the legs. `assetsIn` is not used as a filter.
 
 Base supply (`principal > 0`) is a receipt of the Comet proxy. Base debt (`principal < 0`) is a separate debt leg, `compound-v3:base-debt`. Collateral is an underlying leg of the collateral token. Collateral does not become debt and does not become a base deposit.
 
-`getPrice` must return a positive value for the base feed and every collateral feed before the plugin reads health. A revert or a non-positive price is `oracle_failed`. The plugin then does not call the health views and does not store `is_liquidatable=false`.
+`getPrice` must return a positive value for the base feed and every collateral feed before the plugin reads health. A revert or a non-positive price is `oracle_failed`. The plugin then does not call the health views and does not store `is_liquidatable=false`. A positive oracle price does not prove freshness. The plugin does not read an update time, a heartbeat, or a round id, and it does not treat a positive price as a fresh oracle.
 
 When prices are readable, the observation records `is_borrow_collateralized` and `is_liquidatable` by those names. There is no health factor. The two predicates answer different questions.
 
