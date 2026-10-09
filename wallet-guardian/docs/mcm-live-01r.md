@@ -2,18 +2,20 @@
 
 這一輪把已經寫好的 NodeReal 與 Blockscout 讀取接到 `run-once --mcm-config`，並把日誌與歷史改成每輪掃到一個固定的目標區塊。它仍然只讀。不簽名、不組交易、不廣播。公開檔只放環境變數名稱，不放 key、不放真實地址。
 
-Blockscout 的 key 由使用者稍後自己提供。沒有 key 時，Base 與 Optimism 的 `history.native_external` 是 `credential_missing` 加 `blocked`，不是錯誤的空白歷史，也不是 `empty`。
+Blockscout PRO 的 key 由使用者自己放在私人 secret profile 的 `BLOCKSCOUT_API_KEY`，請求時只放在 `Authorization: Bearer`，不放進 URL。註冊與每一家的缺口說明見 `docs/api-keys.md`。沒有 key 時 PRO 的 HTTP 402（要 key 或 X402）是 `credential_missing`，接著改走該鏈的 keyless instance；Base 免費方案的 featured-chain 402 是 `plan_not_supported`（寫進 capability cache，下一輪不重打），然後同樣改走 keyless。Cloudflare 的 HTTP 403 HTML（`Just a moment...`）是 `blocked` / `bot_challenge`，不是空錢包。沒有任何後備時才留下缺口，不把失敗讀成 complete。
 
 ## 來源
 
 | 網路 | 主路徑 | 限制 |
 |---|---|---|
-| Ethereum、Arbitrum、Polygon | Etherscan V2 free | RPC 只讀狀態與 receipt。不要重做已經可用的路徑 |
-| BSC | NodeReal `nr_getAssetTransfers`，類別 `external` | 官方只列 BSC 與 Ethereum。incoming 與 outgoing 分開查，`pageKey` 要走完。方法被拒是 `method_not_found` 或 `unauthorized`，不能用 `eth_call` 猜 |
-| Base、Optimism | Blockscout 免費方案的 Etherscan 相容 `txlist` / `tokentx` | 端點與 key 來自使用者的環境變數。新 key 不是付費方案。方法沒通過就不標 live |
+| Ethereum、Arbitrum、Polygon | Etherscan V2 free | 沒有 `ETHERSCAN_API_KEY` 時改走 Blockscout keyless instance（有設定端點才呼叫）。RPC 讀狀態、receipt 與 token logs |
+| BSC | NodeReal `nr_getAssetTransfers`，類別 `external` | 沒有 key 就是 `credential_missing`，沒有 keyless 的 BSC 原生歷史。token 歷史仍走公開 RPC logs。官方只列 BSC 與 Ethereum。方法被拒是 `method_not_found` 或 `unauthorized`，不能用 `eth_call` 猜 |
+| Base、Optimism | Blockscout PRO，然後 keyless instance | PRO：`BLOCKSCOUT_PRO_API_BASE`（預設 `https://api.blockscout.com`）加 `chain_id`。Optimism（10）在免費方案。Base（8453）是 `plan_not_supported`。keyless 預設 `https://base.blockscout.com` 與 `https://optimism.blockscout.com` |
 | Avalanche | 原生餘額照讀 | 深度歷史維持 `expansion_pending`。沒有重大曝險時，不用它擋住原來六條鏈 |
 
-`plan_not_supported` 記在狀態目錄旁的 `capability-failures.json`（只有來源 id、網路、原因）。下一輪改走已核准的後備，不再重送注定失敗的請求。失敗的探針不代表這條鏈沒有資產。
+`plan_not_supported` 記在狀態目錄旁的 `capability-failures.json`（只有來源 id、網路、原因）。下一輪改走已核准的後備，不再重送注定失敗的請求。Blockscout PRO 對 Base 的 featured-chain 402 也走這條 cache。失敗的探針不代表這條鏈沒有資產。`x-credits-remaining` 與 `x-ratelimit-limit` 有出現在回應時，記在 `budget.providers.*.rate_headers`。
+
+沒有 key 的跑法見 `examples/monitor.nokeys.json` 與 `docs/api-keys.md`。GoPlus 沒有 key 是 `credential_missing`，隱私拒絕把地址送出去的政策不變。CoinGecko 沒有 key 走公開無 key 層級，報價讀不到是 `valuation_unknown`，不是 0 也不是 1。Helius 沒有 key 時 parsed events 是 `credential_missing`，已設定的 Solana RPC 仍用。OFAC 公開清單不需要 key；`OFAC_SLS_FEED` 沒設是 `feed_not_supplied`。Alchemy 仍不在預設路由裡。
 
 NodeReal 的 Base 產品頁存在，但連線位址要從使用者的 Dashboard 來。不要編造 `base-...` 主機名。Alchemy Transfers 只留介面（`guardian.sources.alchemy`），免費 `eth_getLogs` 目前一次 10 個區塊，預設不接進路由。它不是大範圍日誌的免費解法。
 
