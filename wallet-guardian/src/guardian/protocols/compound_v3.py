@@ -1,9 +1,11 @@
 """Compound III Ethereum USDC Comet. Read-only eth_call views on the proxy.
 
 Base supply, base debt, and collateral stay separate. Collateral is not borrowed
-principal and not a base deposit. ``userBasic.principal`` is the stored principal.
-It is not labeled accrued to now. ``isBorrowCollateralized`` and ``isLiquidatable``
-are the protocol's named predicates. This module does not invent a health factor
+principal and not a base deposit. ``userBasic.principal`` stays on the leg as
+metadata. The countable base amount is ``abs(principal) * index // 10**15``
+using the stored supply or borrow index from the same block. That amount is not
+labeled accrued to now. ``isBorrowCollateralized`` and ``isLiquidatable`` are
+the protocol's named predicates. This module does not invent a health factor
 and does not call ``accrueAccount``.
 """
 
@@ -19,6 +21,7 @@ from guardian.protocols.views import ViewPlugin, ViewSpec
 
 _ASSET_BOUND = 32
 _BASE_DECIMALS = 6
+_BASE_INDEX_SCALE = 10**15
 STALE_ACCRUAL_SECONDS = 3600
 _ASSET_INFO = "(uint8,address,address,uint64,uint64,uint64,uint64,uint128)"
 _TOTALS = "(uint64,uint64,uint64,uint64,uint104,uint104,uint40,uint8)"
@@ -124,6 +127,14 @@ class CompoundV3(ViewPlugin):
         principal = _principal(user[0])
         if principal is None:
             return _failed(self.plugin_id, wallet_id, network, prior, "malformed_result")
+        if principal > 0:
+            base_amount = _present_value(principal, supply_index)
+        elif principal < 0:
+            base_amount = _present_value(principal, borrow_index)
+        else:
+            base_amount = 0
+        if base_amount is None:
+            return _failed(self.plugin_id, wallet_id, network, prior, "malformed_result")
 
         infos: list[dict[str, Any]] = []
         for index in range(count):
@@ -181,6 +192,7 @@ class CompoundV3(ViewPlugin):
             ("is_liquidatable", "true" if liquidatable else "false"),
             ("last_accrual_time", str(last_accrual)),
             ("pause_flags", str(pause_flags)),
+            ("principal", str(principal)),
             ("safety_certificate", "false"),
         )
         metrics = tuple(common)
@@ -189,7 +201,7 @@ class CompoundV3(ViewPlugin):
             legs.append(PositionLeg(
                 kind="receipt",
                 identity=comet,
-                raw_amount=principal,
+                raw_amount=base_amount,
                 decimals=decimals,
                 network=network,
                 plugin_id=self.plugin_id,
@@ -200,7 +212,7 @@ class CompoundV3(ViewPlugin):
             legs.append(PositionLeg(
                 kind="debt",
                 identity="compound-v3:base-debt",
-                raw_amount=-principal,
+                raw_amount=base_amount,
                 decimals=decimals,
                 network=network,
                 plugin_id=self.plugin_id,
@@ -278,6 +290,21 @@ def _uint8(read: Any) -> int | None:
 
 def _uint(value: Any) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > UINT256_MAX:
+        return None
+    return value
+
+
+def _present_value(principal: int, index: int) -> int | None:
+    """Comet present value at a stored index. Division truncates, as in the contract.
+
+    ``BASE_INDEX_SCALE`` is 10**15. Supply uses the base supply index and debt
+    uses the base borrow index. This is not an accrual to the block timestamp.
+    """
+    magnitude = -principal if principal < 0 else principal
+    if magnitude > UINT256_MAX or index > UINT256_MAX:
+        return None
+    value = magnitude * index // _BASE_INDEX_SCALE
+    if value > UINT256_MAX:
         return None
     return value
 
