@@ -27,7 +27,7 @@ from guardian.sources.budget import BudgetBook
 from guardian.sources.fixtures import FixtureBackend, RawResponse, request_key
 from guardian.sources.transport import ReadOnlyTransport, build_endpoint_registry
 from guardian.sources.retry import Classification
-from guardian.sources.tron_grid import PAGE_CAP, PAGE_LIMIT, TronGridClient
+from guardian.sources.tron_grid import PAGE_CAP, PAGE_LIMIT, TronGridClient, parse_resume
 from guardian.storage import Database
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -74,6 +74,7 @@ MISSING_OK = "d2" * 32
 MISSING_TX = "d1" * 32
 TWIN_TX = "e1" * 32
 DUP_TX = "e2" * 32
+INSERTED_TX = "f3" * 32
 HEAD_TS = 1_700_000_000_000
 FOREIGN_BALANCE = 424242
 _TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
@@ -170,6 +171,7 @@ class TronBackend:
         self.sleeps: list[float] = []
         self.now_tries = 0
         self.prepend = False
+        self.layout = "plain"
 
     def record_sleep(self, seconds: float) -> None:
         self.sleeps.append(float(seconds))
@@ -258,15 +260,8 @@ class TronBackend:
             }
         if self.mode == "mixed":
             return {"data": _mixed_rows(), "meta": {"links": {"next": "https://evil.example/steal"}}, "success": True}
-        if self.mode == "verify_cap":
-            if parse_qs(query).get("fingerprint"):
-                return {"data": [], "meta": {"fingerprint": "even-further"}, "success": True}
-            rows = [_plain_transfer(f"{index + 1:064x}", WATCH, OTHER, 1) for index in range(60)]
-            return {
-                "data": rows,
-                "meta": {"fingerprint": "beyond60", "links": {"next": "https://evil.example/steal"}},
-                "success": True,
-            }
+        if self.mode in {"verify_cap", "resume_shift"}:
+            return self._shift_page(query)
         if self.mode == "missing_receipt":
             rows = [
                 _plain_transfer(MISSING_OK, WATCH, OTHER, 1),
@@ -302,6 +297,8 @@ class TronBackend:
         if self.mode == "dup_row":
             row = _trc20_row(DUP_TX, OTHER, WATCH, TOKEN_TRANSFER)
             return {"data": [row, dict(row)], "meta": {}, "success": True}
+        if self.mode in {"split_twin", "split_dup"}:
+            return self._split_trc20(_query)
         if self.mode != "typed":
             return _empty_page()
         return {
@@ -336,7 +333,7 @@ class TronBackend:
         }
 
     def _transaction(self, txid: str) -> dict:
-        if self.mode == "verify_cap":
+        if self.mode in {"verify_cap", "resume_shift"}:
             return _tx(txid, "TransferContract", {"amount": 1, "owner_address": WATCH_HEX, "to_address": OTHER_HEX}, "SUCCESS")
         if self.mode == "missing_receipt" and txid in {MISSING_OK, MISSING_TX}:
             amount = 1 if txid == MISSING_OK else 2
@@ -350,7 +347,7 @@ class TronBackend:
             )
         if self.mode in {"unmatched", "stable"} and txid in {UNMATCHED_TX, MATCHED_TX, STABLE_A, STABLE_B}:
             return _tx(txid, "TriggerSmartContract", {"call_value": 0, "owner_address": WATCH_HEX}, "SUCCESS")
-        if self.mode in {"twin_logs", "dup_row"} and txid in {TWIN_TX, DUP_TX}:
+        if self.mode in {"twin_logs", "dup_row", "split_twin", "split_dup"} and txid in {TWIN_TX, DUP_TX}:
             return _tx(txid, "TriggerSmartContract", {"call_value": 0, "owner_address": WATCH_HEX}, "SUCCESS")
         if txid in {ACT_TX, KEY_TX}:
             raise AssertionError(txid)
@@ -370,7 +367,7 @@ class TronBackend:
         return {}
 
     def _info(self, txid: str) -> dict:
-        if self.mode == "verify_cap":
+        if self.mode in {"verify_cap", "resume_shift"}:
             return {"blockNumber": 900, "fee": 1000, "id": txid, "receipt": {"result": "SUCCESS"}}
         if self.mode == "missing_receipt":
             if txid == MISSING_TX:
@@ -399,7 +396,7 @@ class TronBackend:
                 ],
                 "receipt": {"result": "SUCCESS"},
             }
-        if self.mode == "twin_logs" and txid == TWIN_TX:
+        if self.mode in {"twin_logs", "split_twin"} and txid == TWIN_TX:
             first = _event_log(TOKEN, OTHER, WATCH, TOKEN_TRANSFER, _TRANSFER_TOPIC)
             second = _event_log(TOKEN, OTHER, WATCH, TOKEN_TRANSFER, _TRANSFER_TOPIC)
             return {
@@ -408,7 +405,7 @@ class TronBackend:
                 "log": [first, second],
                 "receipt": {"result": "SUCCESS"},
             }
-        if self.mode == "dup_row" and txid == DUP_TX:
+        if self.mode in {"dup_row", "split_dup"} and txid == DUP_TX:
             return {
                 "blockNumber": 900,
                 "id": txid,
@@ -445,6 +442,36 @@ class TronBackend:
         else:
             raise AssertionError(selector)
         return {"constant_result": [word], "result": {"result": True}}
+
+    def _shift_page(self, query: str) -> dict:
+        if parse_qs(query).get("fingerprint"):
+            return {"data": [], "meta": {"fingerprint": "even-further"}, "success": True}
+        rows = [_plain_transfer(f"{index + 1:064x}", WATCH, OTHER, 1) for index in range(60)]
+        if self.layout == "insert":
+            rows = [_plain_transfer(INSERTED_TX, WATCH, OTHER, 1), *rows]
+        elif self.layout == "reverse":
+            rows = list(reversed(rows))
+        return {
+            "data": rows,
+            "meta": {"fingerprint": "beyond60", "links": {"next": "https://evil.example/steal"}},
+            "success": True,
+        }
+
+    def _split_trc20(self, query: str) -> dict:
+        fingerprint = parse_qs(query).get("fingerprint", [None])[0]
+        txid = TWIN_TX if self.mode == "split_twin" else DUP_TX
+        row = _trc20_row(txid, OTHER, WATCH, TOKEN_TRANSFER)
+        if fingerprint is None:
+            return {"data": [row], "meta": {"fingerprint": "cap-1"}, "success": True}
+        if fingerprint == "cap-1":
+            return {
+                "data": [{"transaction_id": "ab" * 32, "type": "Fee"}],
+                "meta": {"fingerprint": "cap-2"},
+                "success": True,
+            }
+        if fingerprint == "cap-2":
+            return {"data": [dict(row)], "meta": {}, "success": True}
+        return _empty_page()
 
 
 def _page(fingerprint: str | None) -> dict:
@@ -1313,6 +1340,178 @@ def test_mcm_tron_fix2_long_retry_after_and_expired_deadline(monkeypatch: pytest
     assert result.reason == "deadline"
     assert slept == []
     assert transport.calls == []
+
+
+def test_mcm_tron_fix3_inserted_row_in_frozen_window_is_verified(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A new transaction at the front of an unchanged timestamp window is still verified."""
+    work = tmp_path / "insert"
+    work.mkdir()
+    config = _desk(work, monkeypatch)
+    seen: list[str] = []
+    outs: list[str] = []
+    for index in range(5):
+        backend = TronBackend("resume_shift")
+        backend.layout = "insert" if index else "plain"
+        code, report = _run(capsys, config, backend)
+        assert code == 0, report
+        urls = _history_urls(backend, trc20=False)
+        assert urls
+        assert "fingerprint" not in _query(urls[0])
+        assert _bounds(urls[0]) == ("0", str(HEAD_TS))
+        fresh = _info_ids(backend)
+        assert fresh
+        assert len(fresh) == len(set(fresh))
+        assert set(fresh).isdisjoint(seen)
+        if index == 0:
+            assert fresh[0] == f"{1:064x}"
+            assert INSERTED_TX not in fresh
+            cursor = _capability_cursor(work, "history.native_external")
+            assert cursor.startswith("window|")
+            assert "|row:22" in cursor
+            assert f"v:tx:{fresh[0]}" in cursor
+            assert "beyond60" not in cursor
+            parsed = parse_resume(cursor)
+            assert parsed.kind == "window"
+            assert parsed.max_timestamp == HEAD_TS
+            assert f"tx:{fresh[0]}" in parsed.verified
+            assert all(not item.startswith(f"tx:{INSERTED_TX}") for item in parsed.verified)
+        if index == 1:
+            assert fresh[0] == INSERTED_TX
+        seen.extend(fresh)
+        outs = [event["tx_id"] for event in _stored(work) if event["kind"] == "asset_out"]
+        assert len(outs) == len(set(outs)) == len(seen)
+        if len(outs) == 61:
+            break
+    assert len(outs) == 61
+    assert set(outs) == {f"{number:064x}" for number in range(1, 61)} | {INSERTED_TX}
+    inserted = [event for event in _stored(work) if event["tx_id"] == INSERTED_TX and event["kind"] == "asset_out"]
+    assert len(inserted) == 1
+    assert inserted[0]["raw_amount"] == "1"
+    assert inserted[0]["tx_status"] == "success"
+    assert inserted[0]["finality"] == "finalized"
+    assert len(seen) == 61
+
+
+def test_mcm_tron_fix3_reordered_page_does_not_drop_transfers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Reordering the same frozen page does not drop transfers that moved into the old prefix."""
+    work = tmp_path / "reorder"
+    work.mkdir()
+    config = _desk(work, monkeypatch)
+    seen: list[str] = []
+    outs: list[str] = []
+    for index in range(5):
+        backend = TronBackend("resume_shift")
+        backend.layout = "reverse" if index else "plain"
+        code, report = _run(capsys, config, backend)
+        assert code == 0, report
+        urls = _history_urls(backend, trc20=False)
+        assert urls
+        assert "fingerprint" not in _query(urls[0])
+        assert _bounds(urls[0]) == ("0", str(HEAD_TS))
+        fresh = _info_ids(backend)
+        assert fresh
+        assert len(fresh) == len(set(fresh))
+        assert set(fresh).isdisjoint(seen)
+        if index == 0:
+            assert fresh == [f"{number:064x}" for number in range(1, 23)]
+            cursor = _capability_cursor(work, "history.native_external")
+            assert "|row:22" in cursor
+            assert f"v:tx:{fresh[0]}" in cursor
+            assert f"v:tx:{f'{60:064x}'}" not in cursor
+        if index == 1:
+            assert fresh[0] == f"{60:064x}"
+            assert f"{1:064x}" not in fresh
+        seen.extend(fresh)
+        outs = [event["tx_id"] for event in _stored(work) if event["kind"] == "asset_out"]
+        assert len(outs) == len(set(outs)) == len(seen)
+        if len(outs) == 60:
+            break
+    stored = [event for event in _stored(work) if event["kind"] == "asset_out"]
+    assert len(stored) == 60
+    assert {event["tx_id"] for event in stored} == {f"{number:064x}" for number in range(1, 61)}
+    assert {event["raw_amount"] for event in stored} == {"1"}
+    assert {event["tx_status"] for event in stored} == {"success"}
+    assert {event["finality"] for event in stored} == {"finalized"}
+    assert len(seen) == 60
+    assert len(set(seen)) == 60
+
+
+def test_mcm_tron_fix3_identical_logs_across_page_cap_keep_both_identities(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Two identical receipt logs stay two identities when their rows straddle the page cap."""
+    work = tmp_path / "split-twin"
+    work.mkdir()
+    config = _desk(work, monkeypatch)
+    first = TronBackend("split_twin")
+    code, report = _run(capsys, config, first)
+    assert code == 0, report
+    urls = _history_urls(first, trc20=True)
+    assert len(urls) == PAGE_CAP
+    assert "fingerprint" not in _query(urls[0])
+    assert _query(urls[1])["fingerprint"] == ["cap-1"]
+    assert all("cap-2" not in url for url in urls)
+    fungible = _coverage(report, "history.fungible")
+    assert fungible["scope"]["pagination_complete"] is False
+    assert fungible["scope"]["cursor"] == "fp:cap-2"
+    assert "page_cap" in fungible["reason_codes"]
+    assert _bounds(urls[0]) == ("0", str(HEAD_TS))
+
+    second = TronBackend("split_twin")
+    code, again = _run(capsys, config, second)
+    assert code == 0, again
+    resumed = _history_urls(second, trc20=True)
+    assert resumed
+    assert _query(resumed[0])["fingerprint"] == ["cap-2"]
+    assert _bounds(resumed[0]) == ("0", str(HEAD_TS))
+    incoming = [event for event in _stored(work) if event["tx_id"] == TWIN_TX and event["kind"] == "asset_in"]
+    assert len(incoming) == 2
+    assert {event["sub_index"] for event in incoming} == {"log-0", "log-1"}
+    assert len({event["identity"] for event in incoming}) == 2
+    assert {event["raw_amount"] for event in incoming} == {str(TOKEN_TRANSFER)}
+    assert {event["tx_status"] for event in incoming} == {"success"}
+    assert {event["finality"] for event in incoming} == {"finalized"}
+    assert "trc20_event_unmatched" not in _coverage(again, "history.fungible")["reason_codes"]
+
+
+def test_mcm_tron_fix3_duplicate_indexer_row_across_page_cap_stays_one_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """One receipt log repeated on the far side of the page cap stays one identity."""
+    work = tmp_path / "split-dup"
+    work.mkdir()
+    config = _desk(work, monkeypatch)
+    first = TronBackend("split_dup")
+    code, report = _run(capsys, config, first)
+    assert code == 0, report
+    urls = _history_urls(first, trc20=True)
+    assert len(urls) == PAGE_CAP
+    assert all("cap-2" not in url for url in urls)
+    assert _coverage(report, "history.fungible")["scope"]["cursor"] == "fp:cap-2"
+    assert _bounds(urls[0]) == ("0", str(HEAD_TS))
+
+    second = TronBackend("split_dup")
+    code, again = _run(capsys, config, second)
+    assert code == 0, again
+    resumed = _history_urls(second, trc20=True)
+    assert resumed
+    assert _query(resumed[0])["fingerprint"] == ["cap-2"]
+    assert _bounds(resumed[0]) == _bounds(urls[0])
+    repeated = [event for event in _stored(work) if event["tx_id"] == DUP_TX and event["kind"] == "asset_in"]
+    assert len(repeated) == 1
+    assert repeated[0]["sub_index"] == "log-0"
+    assert repeated[0]["raw_amount"] == str(TOKEN_TRANSFER)
+    assert repeated[0]["tx_status"] == "success"
+    assert repeated[0]["finality"] == "finalized"
+    assert len({event["identity"] for event in repeated}) == 1
+    assert all(event["sub_index"] != "log-1" for event in _stored(work) if event["tx_id"] == DUP_TX)
+    assert "trc20_event_unmatched" not in _coverage(again, "history.fungible")["reason_codes"]
+
+
+def _capability_cursor(tmp_path: Path, capability: str) -> str:
+    database = Database(tmp_path / "state" / "monitor.sqlite")
+    try:
+        rows = database.capability_cursors_for("local")
+    finally:
+        database.close()
+    found = next(row for row in rows if row["capability"] == capability)
+    return str(found["cursor"])
 
 
 def _info_ids(backend: TronBackend) -> list[str]:
