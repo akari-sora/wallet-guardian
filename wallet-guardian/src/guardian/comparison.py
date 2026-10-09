@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from guardian.errors import ConfigError
-from guardian.legacy_state import LEGACY_CHAINS, _parse_alert
+from guardian.legacy_state import LEGACY_CHAINS, _parse_alert, convert_legacy_document
 from guardian.storage import Database
 
 _ADDRESS = re.compile(r"(?i)0x[0-9a-f]{40}")
@@ -75,12 +75,13 @@ def compare_with_legacy(
             mcm_only.append(_public_event(only))
     never = sorted(set(mcm_networks) - set(LEGACY_CHAINS.values()))
     uncomparable.sort(key=lambda row: (row.get("reason", ""), row.get("network", ""), row.get("tx", ""), row.get("wallet_id", "")))
-    return {
+    report = {
         "awaiting_finality": awaiting,
         "counts": {
             "awaiting_finality": len(awaiting),
             "legacy_only": len(legacy_only),
             "matched": len(matched),
+            "matched_tx_level": 0,
             "mcm_only": len(mcm_only),
             "uncomparable": len(uncomparable),
             "unmapped_legacy": len(unmapped),
@@ -90,13 +91,17 @@ def compare_with_legacy(
             "mcm_networks": sorted(mcm_networks),
             "networks_legacy_never_checked": never,
         },
+        "legacy_coverage_windows": [],
         "legacy_only": legacy_only,
         "matched": matched,
+        "matched_tx_level": [],
         "mcm_only": mcm_only,
         "uncomparable": uncomparable,
         "unmapped_legacy": unmapped,
         "window": {"since": window[0], "until": window[1]},
     }
+    _apply_tx_level(report, legacy, labels, mcm_events, since, until)
+    return report
 
 
 def _legacy_rows(legacy: dict[str, Any], labels: dict[str, str]) -> tuple[list[dict[str, str]], list[dict[str, str]], set[str]]:
@@ -153,6 +158,13 @@ def _legacy_rows(legacy: dict[str, Any], labels: dict[str, str]) -> tuple[list[d
 
 _SETTLED = frozenset({"confirmed", "finalized"})
 _EVENT_FIELDS = ("wallet_id", "network", "tx", "position", "kind", "subject")
+EXPLAINED_REASONS = frozenset({
+    "awaiting_finality",
+    "legacy_free_text",
+    "outside_legacy_scope",
+    "source_gap_declared",
+    "spam_suppressed_rule",
+})
 
 
 def _legacy_events(
@@ -384,13 +396,132 @@ def _mask_subject(value: str) -> str:
 
 
 def _labels(database: Database, tenant: str) -> dict[str, str]:
+    """Current labels and aliases. A label that points at two wallets is not guessed."""
     found: dict[str, str] = {}
+    ambiguous: set[str] = set()
+
+    def add(label: str, wallet_id: str) -> None:
+        if not label or label in ambiguous:
+            return
+        previous = found.get(label)
+        if previous is not None and previous != wallet_id:
+            ambiguous.add(label)
+            found.pop(label, None)
+            return
+        found[label] = wallet_id
+
+    for row in database.conn.execute(
+        "SELECT label, wallet_id FROM wallet_identities WHERE tenant_id=?",
+        (tenant,),
+    ):
+        add(str(row["label"]), str(row["wallet_id"]))
     for row in database.conn.execute(
         "SELECT label, wallet_id FROM wallet_label_aliases WHERE tenant_id=?",
         (tenant,),
     ):
-        found[str(row["label"])] = str(row["wallet_id"])
+        add(str(row["label"]), str(row["wallet_id"]))
     return found
+
+
+def explain_diff(row: dict[str, str], reason: str, evidence_ref: str) -> dict[str, str]:
+    """Mark one diff explained only with a fixed reason and an evidence ref."""
+    if reason in EXPLAINED_REASONS and isinstance(evidence_ref, str) and evidence_ref:
+        row["classification"] = "explained"
+        row["classification_reason"] = reason
+        row["evidence_ref"] = evidence_ref
+        return row
+    row["classification"] = "unexplained"
+    row["classification_reason"] = ""
+    row["evidence_ref"] = ""
+    return row
+
+
+def _apply_tx_level(
+    report: dict[str, Any],
+    legacy: dict[str, Any],
+    labels: dict[str, str],
+    mcm_events: list[dict[str, str]],
+    since: str | None,
+    until: str | None,
+) -> None:
+    """Match alerted rows at wallet+network+tx. Full-identity matches stay in ``matched``.
+
+    A tx-level row is a miss candidate only inside a settled, concrete window.
+    Raw diffs are recorded before notification dedup, so an alerted marker does
+    not drop a legacy tx that MCM never saw.
+    """
+    converted = convert_legacy_document(legacy, labels)
+    report["legacy_coverage_windows"] = list(converted["coverage_windows"])
+    window = _tx_window(since, until, converted["common_since"], converted["common_until"])
+    if window[0] is None and window[1] is None:
+        _stamp_unexplained(report["legacy_only"])
+        _stamp_unexplained(report["mcm_only"])
+        return
+    settled_mcm: dict[tuple[str, str, str], list[dict[str, str]]] = {}
+    for row in mcm_events:
+        if row.get("comparable") != "yes" or not row.get("wallet_id") or not _settled(row):
+            continue
+        if not _covered(row.get("observed_at", ""), window):
+            continue
+        settled_mcm.setdefault((row["wallet_id"], row["network"], row["tx"]), []).append(row)
+    matched_tx: list[dict[str, str]] = []
+    extra_legacy: list[dict[str, str]] = []
+    matched_public: set[tuple[str, str, str]] = set()
+    seen_legacy: set[tuple[str, str, str]] = set()
+    for row in converted["tx_rows"]:
+        if not row.get("wallet_id") or row.get("finality") not in _SETTLED:
+            continue
+        if not _covered(row.get("observed_at", ""), window):
+            continue
+        key = (row["wallet_id"], row["network"], row["tx"])
+        if key in seen_legacy:
+            continue
+        seen_legacy.add(key)
+        public = _public_event(row)
+        public["tier"] = "tx"
+        public["evidence_ref"] = row.get("evidence_ref", "")
+        if key in settled_mcm:
+            public["classification"] = "matched_tx_level"
+            public["classification_reason"] = ""
+            matched_tx.append(public)
+            matched_public.add((public["wallet_id"], public["network"], public["tx"]))
+            continue
+        public["classification"] = "unexplained"
+        public["classification_reason"] = ""
+        extra_legacy.append(public)
+    if extra_legacy:
+        report["legacy_only"].extend(extra_legacy)
+    if matched_public:
+        report["mcm_only"] = [
+            row for row in report["mcm_only"]
+            if (row.get("wallet_id", ""), row.get("network", ""), row.get("tx", "")) not in matched_public
+        ]
+    report["matched_tx_level"] = matched_tx
+    _stamp_unexplained(report["legacy_only"])
+    _stamp_unexplained(report["mcm_only"])
+    report["counts"]["legacy_only"] = len(report["legacy_only"])
+    report["counts"]["matched_tx_level"] = len(matched_tx)
+    report["counts"]["mcm_only"] = len(report["mcm_only"])
+
+
+def _tx_window(since: str | None, until: str | None, common_since: str | None, common_until: str | None) -> tuple[str | None, str | None]:
+    if since or until:
+        return since or None, until or None
+    return common_since or None, common_until or None
+
+
+def _covered(observed: str, window: tuple[str | None, str | None]) -> bool:
+    """Tx-level comparison needs a concrete window. An open window is not coverage."""
+    if window[0] is None and window[1] is None:
+        return False
+    return _in_window(observed, window)
+
+
+def _stamp_unexplained(rows: list[dict[str, str]]) -> None:
+    for row in rows:
+        row.setdefault("classification", "unexplained")
+        row.setdefault("classification_reason", "")
+        row.setdefault("evidence_ref", "")
 
 
 def _mask(tx: str) -> str:
