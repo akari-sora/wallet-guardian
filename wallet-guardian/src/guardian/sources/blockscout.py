@@ -13,7 +13,7 @@ from typing import Any
 
 from guardian.errors import SecurityError
 from guardian.security.transport_policy import Operation
-from guardian.sources.budget import BudgetExhausted
+from guardian.sources.budget import BootstrapStop, BudgetExhausted
 from guardian.sources.etherscan import HistoryRead, plan_not_supported
 from guardian.sources.pagination import walk_page_key
 from guardian.sources.retry import read_with_retry
@@ -145,6 +145,11 @@ class BlockscoutClient:
                 )
             except (SecurityError, BudgetExhausted):
                 raise
+            except BootstrapStop as exc:
+                return HistoryRead(
+                    capability, tuple(items), False, False, (exc.reason,), previous_cursor,
+                    "partial", False, exc.reason, (exc.reason,), "",
+                )
             except TransportError as exc:
                 return _kept(capability, previous_cursor, exc.reason)
             except Exception:
@@ -213,6 +218,9 @@ class BlockscoutClient:
                 )
             except (SecurityError, BudgetExhausted):
                 raise
+            except BootstrapStop as exc:
+                state.reason = exc.reason
+                raise _Stop() from None
             except TransportError as exc:
                 if exc.reason == "fixture_miss":
                     state.explode = exc

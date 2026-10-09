@@ -46,14 +46,16 @@ def plan_chunks(
     limit: int,
     bootstrap_origin: int | None,
     overlap: int,
+    cap_at: int | None = LOG_RANGE_MAX,
 ) -> tuple[list[tuple[int, int]], int]:
-    """Chunks from the explicit origin, or from the cursor minus overlap, through head.
+    """Chunks from the caller-supplied origin, or from the cursor minus overlap, through head.
 
-    There is no page cap. The origin is not "latest minus a lookback".
+    ``cap_at`` limits one span. ``eth_getLogs`` keeps the 2000-block cap.
+    An indexer that already bisects on a full result window passes ``cap_at=None``.
     """
     span = limit if isinstance(limit, int) and not isinstance(limit, bool) and limit >= 1 else LOG_RANGE_MAX
-    if span > LOG_RANGE_MAX:
-        span = LOG_RANGE_MAX
+    if cap_at is not None and span > cap_at:
+        span = cap_at
     if head < 0:
         head = 0
     if stored is None:

@@ -14,7 +14,7 @@ from typing import Any
 
 from guardian.errors import SecurityError
 from guardian.security.transport_policy import Operation
-from guardian.sources.budget import BudgetExhausted
+from guardian.sources.budget import BootstrapStop, BudgetExhausted
 from guardian.sources.etherscan import HistoryRead
 from guardian.sources.pagination import walk_page_key
 from guardian.sources.retry import read_with_retry
@@ -150,14 +150,15 @@ class NodeRealClient:
             if chunk is None:
                 return _kept(capability, previous_cursor, "error")
             if not chunk.pagination_complete or chunk.category not in {"ok", "empty"}:
+                stopped = chunk.reason in {"bootstrap_request_cap", "deadline"}
                 return HistoryRead(
                     capability,
-                    (),
+                    tuple(items) + tuple(chunk.items) if stopped else (),
                     False,
                     False,
                     chunk.gaps,
                     previous_cursor,
-                    chunk.category if chunk.category in {"partial", "error"} else "error",
+                    "partial" if stopped else (chunk.category if chunk.category in {"partial", "error"} else "error"),
                     chunk.blocked,
                     chunk.reason or "error",
                     chunk.reason_codes or ((chunk.reason,) if chunk.reason else ()),
@@ -205,6 +206,9 @@ class NodeRealClient:
                 )
             except (SecurityError, BudgetExhausted):
                 raise
+            except BootstrapStop as exc:
+                state.reason = exc.reason
+                raise _Stop() from None
             except TransportError as exc:
                 if exc.reason == "fixture_miss":
                     state.explode = exc
@@ -245,6 +249,11 @@ class NodeRealClient:
         walk = walk_page_key(fetch, page_cap=page_cap, item_cap=item_cap)
         if state.explode is not None:
             raise state.explode
+        if state.reason in {"bootstrap_request_cap", "deadline"}:
+            tagged = tuple(_tag(item, category) for item in walk.items)
+            return HistoryRead(
+                capability, tagged, False, False, (), None, "partial", False, state.reason, (state.reason,), "",
+            )
         if state.failed or walk.stop_reason != "exhausted":
             reason = state.reason or walk.stop_reason or "error"
             return HistoryRead(

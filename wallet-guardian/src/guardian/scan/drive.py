@@ -19,7 +19,7 @@ from guardian.scan.window import plan_chunks, read_logs, reject_wallet_emitter, 
 from guardian.security.transport_policy import Operation
 from guardian.sources.alchemy import AlchemyClient
 from guardian.sources.blockscout import BlockscoutClient
-from guardian.sources.budget import BudgetExhausted
+from guardian.sources.budget import BootstrapStop, BudgetExhausted
 from guardian.sources.etherscan import EtherscanClient, HistoryRead
 from guardian.sources.key_guide import credential_hint
 from guardian.sources.nodereal import NodeRealClient
@@ -85,6 +85,7 @@ class _Outcome:
     rows: list[dict[str, Any]] = field(default_factory=list)
     refusal: str | None = None
     partial: bool = False
+    stopped: str | None = None
 
 
 def read_token_logs(scan: ScanContext, stored: int | None, log_done: set[str]) -> None:
@@ -310,6 +311,8 @@ def history_external(scan: ScanContext, private_inputs: Any, wallet_id: str, add
         adapter = source.get("adapter")
         if adapter not in _INDEXERS:
             continue
+        if source.get("enabled") is not True:
+            continue
         if not _endpoint_ready(scan, source_id):
             continue
         cached = None if plan_cache is None else plan_cache.reason(source_id, scan.network)
@@ -444,53 +447,66 @@ def _approval_operation(owners: list[str], start: int, end: int):
 
 
 def _run_indexer(scan, source_id, source, adapter, wallet_id, address, stored, plan_cache) -> _Outcome:
-    limit = _source_int(scan, "log_range_max", LOG_RANGE_MAX, source_id=source_id)
     page_size = _source_int(scan, "page_size", 1000, source_id=source_id)
-    chunks, origin = plan_chunks(
-        stored, int(scan.head), limit=min(limit, LOG_RANGE_MAX), bootstrap_origin=scan.bootstrap_origin, overlap=scan.overlap,
-    )
+    chunks, origin = _indexer_chunks(scan, source, stored)
+    limited = _LimitedTransport(scan.transport, scan, source_id)
     if adapter == "etherscan_v2":
-        client = _etherscan(scan, source_id, source)
+        client = _etherscan(scan, source_id, source, limited)
         native = _walk_pages(scan, chunks, origin, wallet_id, "history.native_external", source_id, True, lambda start, end: _safe_history(client, scan.chain_id, "txlist", address, start, end, stored))
-        if native.refusal:
+        _remember_plan(plan_cache, source_id, scan.network, native.refusal)
+        if native.refusal or _indexer_stopped(native) or _plan_cached(plan_cache, source_id, scan.network):
             return native
         token = _walk_pages(scan, chunks, origin, wallet_id, "history.fungible", source_id, False, lambda start, end: _safe_history(client, scan.chain_id, "tokentx", address, start, end, stored), cursor=False)
+        _remember_plan(plan_cache, source_id, scan.network, token.refusal)
         native.rows.extend(token.rows)
+        if token.stopped:
+            native.stopped = token.stopped
+            native.partial = True
         return native
     if adapter == "nodereal_transfers":
-        client = NodeRealClient(scan.transport, source_id, network=scan.network, clock=scan.clock, sleep=lambda _seconds: None, random=lambda: 0.0)
+        client = NodeRealClient(limited, source_id, network=scan.network, clock=scan.clock, sleep=lambda _seconds: None, random=lambda: 0.0)
         native = _walk_pages(scan, chunks, origin, wallet_id, "history.native_external", source_id, True, lambda start, end: _nodereal_sides(client, "external", address, start, end, stored))
         if native.refusal:
             _probe_internal(scan, client, wallet_id, address, stored)
+            return native
+        if _indexer_stopped(native):
             return native
         token = _walk_pages(scan, chunks, origin, wallet_id, "history.fungible", source_id, False, lambda start, end: _nodereal_sides(client, "20", address, start, end, stored), cursor=False)
         _probe_internal(scan, client, wallet_id, address, stored)
         native.rows.extend(token.rows)
         if token.refusal and token.refusal not in {None}:
             native.partial = True
+        if token.stopped:
+            native.stopped = token.stopped
+            native.partial = True
         return native
     if adapter == "blockscout":
-        client = _blockscout(scan, source_id, source)
+        client = _blockscout(scan, source_id, source, limited)
         pro = _blockscout_pro(source)
         chain_id = scan.chain_id if pro else None
         native = _walk_pages(scan, chunks, origin, wallet_id, "history.native_external", source_id, True, lambda start, end: _safe_blockscout(client, "txlist", address, start, end, page_size, stored, chain_id, pro))
-        if native.refusal:
+        _remember_plan(plan_cache, source_id, scan.network, native.refusal)
+        if native.refusal or _indexer_stopped(native) or _plan_cached(plan_cache, source_id, scan.network):
             return native
         token = _walk_pages(scan, chunks, origin, wallet_id, "history.fungible", source_id, False, lambda start, end: _safe_blockscout(client, "tokentx", address, start, end, page_size, stored, chain_id, pro), cursor=False)
+        _remember_plan(plan_cache, source_id, scan.network, token.refusal)
         native.rows.extend(token.rows)
+        if token.stopped:
+            native.stopped = token.stopped
+            native.partial = True
         return native
     if adapter == "alchemy_transfers":
-        return _run_alchemy(scan, source_id, wallet_id, address, stored, chunks, origin)
+        return _run_alchemy(scan, source_id, wallet_id, address, stored, chunks, origin, limited)
     return _Outcome(refusal="unsupported_source")
 
 
-def _run_alchemy(scan, source_id, wallet_id, address, stored, chunks, origin) -> _Outcome:
+def _run_alchemy(scan, source_id, wallet_id, address, stored, chunks, origin, transport=None) -> _Outcome:
     """External, token, and NFT transfers. Only native history is marked finished.
 
     Token and NFT rows are events. Approval coverage stays with the log scan.
     """
     client = AlchemyClient(
-        scan.transport,
+        transport or scan.transport,
         source_id,
         network=scan.network,
         clock=scan.clock,
@@ -510,6 +526,9 @@ def _run_alchemy(scan, source_id, wallet_id, address, stored, chunks, origin) ->
             break
         try:
             read = _alchemy_window(client, address, start, end, stored)
+        except BootstrapStop as exc:
+            stopped = exc.reason
+            break
         except BudgetExhausted:
             stopped = "budget_exhausted"
             break
@@ -518,6 +537,23 @@ def _run_alchemy(scan, source_id, wallet_id, address, stored, chunks, origin) ->
             break
         if read is None:
             hard = "read_error"
+            break
+        if read.reason in {"bootstrap_request_cap", "deadline"} and not read.pagination_complete:
+            stopped = read.reason
+            safe_end, kept = _indexed_prefix(read.items, start)
+            if safe_end is not None:
+                external, tokens, nfts = _split_alchemy(kept)
+                native_rows = scan.indexer_rows(external, owner, wallet_id, scan.network, scan.native_asset, True, source_id)
+                token_rows = scan.indexer_rows(tokens, owner, wallet_id, scan.network, scan.native_asset, False, source_id)
+                nft_rows = scan.indexer_rows(nfts, owner, wallet_id, scan.network, scan.native_asset, False, source_id)
+                for row in nft_rows:
+                    row["capability"] = "history.nft"
+                    row["is_native"] = False
+                native_count += len(native_rows)
+                built = [*native_rows, *token_rows, *nft_rows]
+                rows.extend(built)
+                _commit_leaf(scan, built, "history.native_external", safe_end, [wallet_id])
+                leaves.append((start, safe_end))
             break
         if getattr(read, "blocked", False) and read.reason in _SOURCE_REFUSALS:
             if leaves:
@@ -555,7 +591,7 @@ def _run_alchemy(scan, source_id, wallet_id, address, stored, chunks, origin) ->
         "ok" if native_count else "empty",
         source_id,
     )
-    return _Outcome(rows=rows, partial=bool(hard or gaps or stopped))
+    return _Outcome(rows=rows, partial=bool(hard or gaps or stopped), stopped=stopped)
 
 
 def _alchemy_window(client: AlchemyClient, address: str, start: int, end: int, stored: int | None) -> HistoryRead:
@@ -570,7 +606,7 @@ def _alchemy_window(client: AlchemyClient, address: str, start: int, end: int, s
             previous_cursor=None if stored is None else str(stored),
         )
         last = read
-        if read.blocked or read.category == "error" or not read.pagination_complete:
+        if read.blocked or read.category == "error" or read.reason in {"bootstrap_request_cap", "deadline"} or not read.pagination_complete:
             return read
         items.extend(read.items)
     if last is None:
@@ -608,6 +644,9 @@ def _walk_pages(scan, chunks, origin, wallet_id, capability, source_id, native, 
             break
         try:
             read = fetch(start, end)
+        except BootstrapStop as exc:
+            stopped = exc.reason
+            break
         except BudgetExhausted:
             stopped = "budget_exhausted"
             break
@@ -622,6 +661,16 @@ def _walk_pages(scan, chunks, origin, wallet_id, capability, source_id, native, 
                 hard = read.reason
                 break
             return _Outcome(refusal=read.reason)
+        if read.reason in {"bootstrap_request_cap", "deadline"} and not read.pagination_complete:
+            stopped = read.reason
+            safe_end, kept = _indexed_prefix(read.items, start)
+            if safe_end is not None:
+                built = scan.indexer_rows(kept, _owner_for(scan, wallet_id), wallet_id, scan.network, scan.native_asset, native, source_id)
+                rows.extend(built)
+                if cursor:
+                    _commit_leaf(scan, built, capability, safe_end, [wallet_id])
+                leaves.append((start, safe_end))
+            break
         if read.category == "error" or not read.pagination_complete:
             if start == end:
                 gaps.append(f"single_block_unreadable:{start}")
@@ -642,7 +691,7 @@ def _walk_pages(scan, chunks, origin, wallet_id, capability, source_id, native, 
         leaves.append((start, end))
     if cursor:
         _finish(scan, capability, [(wallet_id, _owner_for(scan, wallet_id))], origin, int(scan.head), leaves, gaps, hard, stopped, "ok" if rows else "empty", source_id)
-    return _Outcome(rows=rows, partial=bool(hard or gaps or stopped))
+    return _Outcome(rows=rows, partial=bool(hard or gaps or stopped), stopped=stopped)
 
 
 def _nodereal_sides(client, category, address, start, end, stored):
@@ -653,7 +702,7 @@ def _nodereal_sides(client, category, address, start, end, stored):
             category=category, address=address, start_block=start, end_block=end, side=side,
             previous_cursor=None if stored is None else str(stored),
         )
-        if read.blocked or read.category == "error":
+        if read.blocked or read.category == "error" or read.reason in {"bootstrap_request_cap", "deadline"}:
             return read
         items.extend(read.items)
         last = read
@@ -672,6 +721,8 @@ def _probe_internal(scan, client, wallet_id, address, stored) -> None:
             category="internal", address=address, start_block=max(0, scan.head), end_block=scan.head, side="to",
             previous_cursor=None if stored is None else str(stored),
         )
+    except BootstrapStop:
+        return
     except Exception:
         scan.observations[(wallet_id, scan.network, "history.native_internal")] = _blocked("read_error")
         return
@@ -704,19 +755,19 @@ def _blockscout_pro(source) -> bool:
     return source.get("credential_env") == "BLOCKSCOUT_API_KEY"
 
 
-def _etherscan(scan, source_id, source) -> EtherscanClient:
+def _etherscan(scan, source_id, source, transport=None) -> EtherscanClient:
     name = source.get("credential_env") if isinstance(source.get("credential_env"), str) else "ETHERSCAN_API_KEY"
     secret = _secret(scan, name)
     return EtherscanClient(
-        scan.transport, source_id, credential=secret, credential_env=name, clock=scan.clock, sleep=lambda _seconds: None,
+        transport or scan.transport, source_id, credential=secret, credential_env=name, clock=scan.clock, sleep=lambda _seconds: None,
     )
 
 
-def _blockscout(scan, source_id, source) -> BlockscoutClient:
+def _blockscout(scan, source_id, source, transport=None) -> BlockscoutClient:
     name = source.get("credential_env") if isinstance(source.get("credential_env"), str) else ""
     secret = _secret(scan, name) if name else ""
     return BlockscoutClient(
-        scan.transport, source_id, clock=scan.clock, sleep=lambda _seconds: None, random=lambda: 0.0, credential=secret,
+        transport or scan.transport, source_id, clock=scan.clock, sleep=lambda _seconds: None, random=lambda: 0.0, credential=secret,
     )
 
 
@@ -1104,11 +1155,117 @@ def _requests_remaining(scan, source_id: str) -> int:
 
 
 def _route_ids(public_config, network: str, capability: str) -> list[str]:
+    sources = public_config.document.get("sources") if isinstance(public_config.document.get("sources"), dict) else {}
     for route in public_config.document["routing"]:
         if route.get("network") == network and route.get("capability") == capability:
             ids = route.get("source_ids") or []
-            return [item for item in ids if isinstance(item, str)]
+            found = []
+            for item in ids:
+                if not isinstance(item, str):
+                    continue
+                source = sources.get(item)
+                if isinstance(source, dict) and source.get("enabled") is not True:
+                    continue
+                found.append(item)
+            return found
     return []
+
+
+class _LimitedTransport:
+    """Counts indexer HTTP calls against the per-source bootstrap cap.
+
+    The cap and the deadline are checked before the request is sent. Log reads
+    keep the inner transport and are not counted here.
+    """
+
+    def __init__(self, inner, scan, source_id: str) -> None:
+        self._inner = inner
+        self._scan = scan
+        self._source_id = source_id
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
+
+    def request(self, source_id: str, operation, **kwargs):
+        if _past_deadline(self._scan):
+            raise BootstrapStop("deadline")
+        cap = getattr(self._inner, "bootstrap_request_cap", None)
+        used = getattr(self._inner, "bootstrap_requests", None)
+        if isinstance(cap, int) and not isinstance(cap, bool) and cap >= 1 and isinstance(used, dict):
+            count = used.get(self._source_id, 0)
+            if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                count = 0
+            if count >= cap:
+                raise BootstrapStop("bootstrap_request_cap")
+            used[self._source_id] = count + 1
+        return self._inner.request(source_id, operation, **kwargs)
+
+
+def _indexer_chunks(scan, source, stored):
+    head = int(scan.head)
+    width = _declared_span(source)
+    if width is None:
+        return plan_chunks(
+            stored, head, limit=max(1, head), bootstrap_origin=scan.bootstrap_origin,
+            overlap=scan.overlap, cap_at=None,
+        )
+    return plan_chunks(
+        stored, head, limit=width, bootstrap_origin=scan.bootstrap_origin,
+        overlap=scan.overlap, cap_at=None,
+    )
+
+
+def _declared_span(source) -> int | None:
+    """A source that names its own range keeps that width. Others are one span."""
+    if not isinstance(source, dict):
+        return None
+    for key in ("range_limit", "log_range_max"):
+        value = source.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+            return value
+    return None
+
+
+def _indexer_stopped(outcome: _Outcome) -> bool:
+    return outcome.stopped in {"bootstrap_request_cap", "deadline"}
+
+
+def _plan_cached(plan_cache, source_id: str, network: str) -> bool:
+    if plan_cache is None:
+        return False
+    return plan_cache.reason(source_id, network) == "plan_not_supported"
+
+
+def _remember_plan(plan_cache, source_id: str, network: str, refusal: str | None) -> bool:
+    if refusal != "plan_not_supported":
+        return False
+    if plan_cache is not None:
+        plan_cache.remember(source_id, network, "plan_not_supported")
+    return True
+
+
+def _indexed_prefix(items, start: int) -> tuple[int | None, list[Any]]:
+    """Last fully read block: the highest block strictly below the top block seen."""
+    parsed: list[tuple[int, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        block = None
+        for key in ("blockNumber", "blockNum", "block_number", "block"):
+            block = _int(item.get(key))
+            if block is not None:
+                break
+        if block is None or block < start:
+            continue
+        parsed.append((block, item))
+    if not parsed:
+        return None, []
+    highest = max(block for block, _item in parsed)
+    earlier = [block for block, _item in parsed if block < highest]
+    if not earlier:
+        return None, []
+    safe_end = max(earlier)
+    return safe_end, [item for block, item in parsed if block <= safe_end]
 
 
 def _owner_for(scan, wallet_id: str) -> str:

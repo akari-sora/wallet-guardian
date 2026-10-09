@@ -30,6 +30,17 @@ class BudgetExhausted(GuardianError):
         super().__init__(reason)
 
 
+class BootstrapStop(Exception):
+    """The indexer walk hit the bootstrap request cap or the round deadline.
+
+    This is not a daily budget miss. Callers keep the last fully read prefix.
+    """
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
 @dataclass(frozen=True)
 class BudgetSpec:
     max_rps: float

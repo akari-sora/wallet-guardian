@@ -15,7 +15,7 @@ from typing import Any
 from guardian.errors import SecurityError
 from guardian.security.redact import redact
 from guardian.security.transport_policy import Operation
-from guardian.sources.budget import BudgetExhausted
+from guardian.sources.budget import BootstrapStop, BudgetExhausted
 from guardian.sources.pagination import walk_page_offset
 from guardian.sources.retry import read_with_retry
 from guardian.sources.transport import TransportError
@@ -263,6 +263,9 @@ class EtherscanClient:
                 )
             except (SecurityError, BudgetExhausted):
                 raise
+            except BootstrapStop as exc:
+                state.reason = exc.reason
+                raise _Stop() from None
             except TransportError as exc:
                 if exc.reason == "fixture_miss":
                     state.explode = exc
@@ -301,6 +304,20 @@ class EtherscanClient:
         walk = walk_page_offset(fetch, page_cap=page_cap, item_cap=item_cap, offset=offset)
         if state.explode is not None:
             raise state.explode
+        if state.reason in {"bootstrap_request_cap", "deadline"}:
+            return HistoryRead(
+                capability,
+                tuple(walk.items),
+                False,
+                False,
+                (state.reason,),
+                None,
+                "partial",
+                False,
+                state.reason,
+                (state.reason,),
+                "",
+            )
         if state.plan:
             return HistoryRead(
                 capability,
@@ -347,7 +364,7 @@ class EtherscanClient:
                 counter=counter,
                 capability=capability,
             )
-            if left.blocked or left.category == "error":
+            if left.blocked or left.category == "error" or left.reason in {"bootstrap_request_cap", "deadline"}:
                 return left
             right = self._walk_range(
                 chain_id=chain_id,

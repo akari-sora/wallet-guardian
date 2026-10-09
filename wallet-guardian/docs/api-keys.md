@@ -18,7 +18,9 @@ Signup: <https://etherscan.io/apis>. One key covers the V2 multichain API.
 
 What it unlocks: `history.native_external` on Ethereum, Arbitrum, and Polygon (transaction list). Token history on those chains still prefers public RPC logs.
 
-Free tier, check current terms: about 5 calls/second and 100,000 calls/day. The free plan does not include every chain. A chain the plan refuses is `plan_not_supported`. That result is cached and the next round uses the approved fallback instead of repeating the same refusal.
+Free tier, check current terms: about 5 calls/second and 100,000 calls/day. The free plan does not include every chain. A chain the plan refuses is `plan_not_supported`. That result is cached, with a TTL, for the source and network. Later wallets, `tokentx`, and the next round skip straight to the approved fallback. A source with `enabled: false` is not called.
+
+A fresh database does not walk from genesis. With no cursor and no `polling.bootstrap_origin`, the origin is `max(0, head - ceil(bootstrap_lookback_days * 86400 / seconds_per_block))`. Built-in block times are ethereum 12s, bsc 0.75s, arbitrum 0.25s, base 2s, optimism 2s, polygon 2.1s, avalanche 2s, and 12s otherwise. `polling.seconds_per_block` can override one network. Coverage is `complete_in_declared_scope` for that window only. `polling.bootstrap_request_cap` (2000 in the example) is the per-source, per-round budget for bootstrap and catch-up, counting every page and bisect. Hitting it records partial with reason `bootstrap_request_cap` and a checkpoint. The next round resumes at that checkpoint plus one, minus the overlap of 2. Successful DNS answers are cached in-process for min(record TTL, 300 seconds). A private address is rejected and not cached.
 
 Environment:
 

@@ -49,6 +49,7 @@ from guardian.protocols.runner import run_plugin
 from guardian.protocols.uxlink import AssetManifestError, CallerQuote, parse_price_input, public_leg
 from guardian.rules import AlertPolicy, Candidate
 from guardian.runtime_binding import assert_worktree
+from guardian.scan.block_time import lookback_blocks
 from guardian.scan.window import plan_chunks, read_logs, reject_wallet_emitter, window_covers
 from guardian.security.transport_policy import Operation
 from guardian.sources.blockscout import BlockscoutClient
@@ -194,12 +195,14 @@ def run_capability_pipeline(
     disclosures: list[dict[str, Any]] = []
     transport.indexer_disclosures = disclosures
     kinza_cache = KinzaMetadataCache()
-    plan_cache = _plan_cache(database)
+    plan_cache = _plan_cache(database, clock)
     checkpoints: list[dict[str, Any]] = []
     log_evidence: list[dict[str, Any]] = []
     permission_notes: list[dict[str, Any]] = []
     polling = public_config.document.get("polling") if isinstance(public_config.document.get("polling"), dict) else {}
-    bootstrap_origin = polling.get("bootstrap_origin") if isinstance(polling.get("bootstrap_origin"), int) else None
+    transport.bootstrap_request_cap = _bootstrap_request_cap(polling)
+    transport.bootstrap_requests = {}
+    bootstrap_origin = polling.get("bootstrap_origin") if isinstance(polling.get("bootstrap_origin"), int) and not isinstance(polling.get("bootstrap_origin"), bool) else None
     deadline = polling.get("round_deadline_seconds") if isinstance(polling.get("round_deadline_seconds"), int) else None
     registry = load_registry(resource_path("config", "chains"))
     catalog = load_source_capabilities()
@@ -400,7 +403,7 @@ def run_capability_pipeline(
         delivery_status=delivery.status,
         misconfigured=delivery.misconfigured,
         baseline=bool(baseline),
-        budget={**provenance, "kinza": kinza_cache.snapshot()},
+        budget=_budget_evidence(provenance, kinza_cache, transport),
         egress=provenance.get("egress"),
         checkpoints=checkpoints,
         log_evidence=log_evidence,
@@ -725,13 +728,14 @@ def _read_evm(
         native_reads.append({"network": network, "raw_amount": balance.raw_wei, "wallet_id": wallet_id})
         _baseline(wallet_id, network, "balances.native", seen, baseline, candidates, tenant)
     head = _head(transport, source_id)
+    origin = _effective_bootstrap_origin(public_config, network, head, bootstrap_origin)
     chain_id = entry.get("evm_chain_id") if isinstance(entry.get("evm_chain_id"), int) else network
     native_asset = _native_asset(entry, network)
     checkpoint = _checkpoint(transport, source_id, network, head, str(entry.get("finality_policy") or ""))
     checkpoints.append(checkpoint)
     scan = _Scan(
         public_config, transport, database, tenant, clock, started_at, source_id, network, chain_id,
-        native_asset, head, checkpoint, bootstrap_origin, deadline, events, seen_transfers, candidates,
+        native_asset, head, checkpoint, origin, deadline, events, seen_transfers, candidates,
         observations, seen, baseline, explicit_cursors, held_cursors, started, log_evidence, peers,
     )
     fungible_cursor = _cursor_block(stored_cursors, wallet_id, network, "history.fungible")
@@ -1206,11 +1210,45 @@ def _cursor_block(stored: Mapping[tuple[str, str, str], Mapping[str, Any]], wall
     return _raw_int(row.get("block_number")) if _raw_int(row.get("block_number")) is not None else _raw_int(row.get("cursor"))
 
 
-def _plan_cache(database) -> PlanFailureCache | None:
+def _plan_cache(database, clock) -> PlanFailureCache | None:
     file = database_file(database)
     if file is None:
         return None
-    return PlanFailureCache(file.parent / "capability-failures.json")
+    return PlanFailureCache(file.parent / "capability-failures.json", clock=clock)
+
+
+def _bootstrap_request_cap(polling: Mapping[str, Any]) -> int:
+    value = polling.get("bootstrap_request_cap")
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+        return value
+    return 2000
+
+
+def _effective_bootstrap_origin(public_config, network: str, head: int | None, explicit: int | None) -> int | None:
+    """An explicit origin wins, including 0. Otherwise the lookback window ends at head."""
+    if isinstance(explicit, int) and not isinstance(explicit, bool):
+        return max(0, explicit)
+    if not isinstance(head, int) or isinstance(head, bool):
+        return None
+    polling = public_config.document.get("polling") if isinstance(public_config.document.get("polling"), dict) else {}
+    days = polling.get("bootstrap_lookback_days")
+    if not isinstance(days, int) or isinstance(days, bool):
+        days = 30
+    overrides = polling.get("seconds_per_block")
+    if not isinstance(overrides, dict):
+        overrides = None
+    return max(0, head - lookback_blocks(network, days, overrides))
+
+
+def _budget_evidence(provenance: Mapping[str, Any], kinza_cache, transport) -> dict[str, Any]:
+    budget = {**provenance, "kinza": kinza_cache.snapshot()}
+    cap = getattr(transport, "bootstrap_request_cap", None)
+    used = getattr(transport, "bootstrap_requests", None)
+    if isinstance(cap, int) and not isinstance(cap, bool):
+        budget["bootstrap_request_cap"] = cap
+    if isinstance(used, dict):
+        budget["bootstrap_requests"] = {key: value for key, value in used.items() if isinstance(key, str)}
+    return budget
 
 
 def _checkpoint(transport, source_id: str, network: str, head: int | None, policy: str) -> dict[str, Any]:
