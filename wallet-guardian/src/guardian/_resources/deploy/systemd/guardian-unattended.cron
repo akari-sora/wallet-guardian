@@ -1,0 +1,11 @@
+# Wallet Guardian cron fallback. Fixed version @VERSION@.
+# Use this only when a systemd user timer with linger is unavailable,
+# a dedicated non-root system service is unavailable, and cron is present.
+# Do not download main or update dependencies from this job.
+# A missed slot is not replayed as an on-time round.
+# The collector line does not wait for an LLM chat to be idle.
+# Install this crontab for the monitor account, not the CI account and not the coding workspace.
+SHELL=/bin/sh
+@OFFSET_MINUTE@ */3 * * * @EXECUTABLE@ run-once --mcm-config @MCM_CONFIG@ --no-send
+@OFFSET_MINUTE@ */3 * * * @LEGACY_EXECUTABLE@
+*/15 * * * * @EXECUTABLE@ watchdog --mcm-config @MCM_CONFIG@

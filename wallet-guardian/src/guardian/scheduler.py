@@ -10,12 +10,13 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from guardian.configuration import PublicConfig, PrivateInputs
 from guardian.delivery import CANARY_STATUS
 from guardian.errors import ConfigError
 from guardian.rules import dedup_key
+from guardian.shadow_recorder import evaluate_slot, record_slot, sole_writer_lock
 from guardian.storage import Database
 
 _BETTER = frozenset({"complete_in_declared_scope", "partial"})
@@ -234,3 +235,39 @@ def _save(database: Database, tenant: str, payload: dict[str, Any]) -> None:
             """,
             (tenant, encoded),
         )
+
+
+def evaluate_scheduled_slot(
+    *,
+    slot_at: datetime,
+    started_at: datetime | None,
+    sealed_at: datetime | None,
+    required_scans_ok: bool,
+    comparison_sealed: bool,
+    evidence_present: bool,
+    timed_out: bool = False,
+    missed: bool = False,
+    catch_up: bool = False,
+) -> dict[str, Any]:
+    """On-time rule for one unattended slot. This does not start a round."""
+    return evaluate_slot(
+        slot_at=slot_at,
+        started_at=started_at,
+        sealed_at=sealed_at,
+        required_scans_ok=required_scans_ok,
+        comparison_sealed=comparison_sealed,
+        evidence_present=evidence_present,
+        timed_out=timed_out,
+        missed=missed,
+        catch_up=catch_up,
+    )
+
+
+def record_scheduled_slot(directory: Path, verdict: Mapping[str, Any]) -> dict[str, Any]:
+    """Append one attempt under the sole writer lock."""
+    return record_slot(directory, verdict)
+
+
+def shadow_writer_lock(directory: Path):
+    """The lock a second concurrent shadow round fails to take."""
+    return sole_writer_lock(directory)

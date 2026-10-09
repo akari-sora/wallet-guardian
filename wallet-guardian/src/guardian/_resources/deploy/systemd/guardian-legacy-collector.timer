@@ -1,0 +1,13 @@
+[Unit]
+Description=Wallet Guardian legacy collector every 3 hours
+# Separate timer. It does not wait for the MCM unit or the watchdog unit.
+
+[Timer]
+OnCalendar=@ON_CALENDAR@
+RandomizedDelaySec=0
+Persistent=false
+AccuracySec=1s
+Unit=guardian-legacy-collector.service
+
+[Install]
+WantedBy=timers.target

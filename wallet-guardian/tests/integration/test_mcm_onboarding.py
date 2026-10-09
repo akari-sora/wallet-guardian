@@ -356,12 +356,22 @@ def test_mcm_share_s5_05_no_auto_enable(tmp_path: Path, capsys: pytest.CaptureFi
         ["install-service", "--dry-run", "--mcm-config", str(private / "monitor.json")],
     )
     assert code == 1
-    assert planned["status"] == "not_implemented"
+    assert planned["dry_run"] is True
+    assert planned["status"] in {"ok", "warn"}
     assert planned["installed"] is False
+    assert planned["applied"] is False
     assert planned["sender_started"] is False
-    assert "not implemented" in planned["error"]
+    assert planned["systemctl_called"] is False
+    assert planned["fetches_code"] is False
     names = {unit["name"] for unit in planned["planned_units"]}
-    assert names == {"guardian-monitor.service", "guardian-monitor.timer"}
+    assert names == {
+        "guardian-mcm-shadow.service",
+        "guardian-mcm-shadow.timer",
+        "guardian-legacy-collector.service",
+        "guardian-legacy-collector.timer",
+        "guardian-watchdog.service",
+        "guardian-watchdog.timer",
+    }
     after = sorted(path.relative_to(private).as_posix() for path in private.rglob("*"))
     assert after == before
     commands = _readme_commands()
@@ -392,4 +402,7 @@ def test_mcm_share_s5_06_example_answers_file_initializes(tmp_path: Path, capsys
     code = main(["init", "--dir", str(private), "--from", str(example), "--yes"])
     capsys.readouterr()
     assert code == 0
-    assert stat.S_IMODE((private / "monitor.json").stat().st_mode) == 0o600
+    assert (private / "monitor.json").is_file()
+    # POSIX records 0600. Windows does not enforce those bits (docs/install.md).
+    if os.name == "posix":
+        assert stat.S_IMODE((private / "monitor.json").stat().st_mode) == 0o600

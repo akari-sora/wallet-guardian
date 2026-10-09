@@ -181,9 +181,21 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--yes", action="store_true", help="record data-sharing consent and write files")
     init.add_argument("--force", action="store_true", help="back up existing files first; does not touch the state database")
 
-    service = sub.add_parser("install-service", parents=[common], help="print planned units; does not install them")
-    service.add_argument("--dry-run", action="store_true", help="print planned units and exit")
+    service = sub.add_parser(
+        "install-service",
+        parents=[common],
+        help="print a dry-run install plan; units stay disabled without --apply",
+    )
+    service.add_argument("--dry-run", action="store_true", help="print the plan and do not enable units")
+    service.add_argument("--apply", action="store_true", help="install rendered units; refused when omitted")
     service.add_argument("--mcm-config", default=None)
+    service.add_argument("--output", default=None, help="write rendered units only under this directory")
+    service.add_argument("--executable", default=None, help="absolute path of the installed guardian executable")
+    service.add_argument("--config-dir", default=None)
+    service.add_argument("--state-dir", default=None)
+    service.add_argument("--user", default="guardian-monitor")
+    service.add_argument("--offset-minutes", type=int, default=5)
+    service.add_argument("--legacy-executable", default=None)
     return parser
 
 
@@ -196,6 +208,7 @@ def dispatch(
     egress_hooks: Any = None,
     notification_backend: Any = None,
     notification_resolve: Any = None,
+    service_runner: Any = None,
 ) -> tuple[dict, int]:
     if args.command == "egress-doctor":
         return _egress_doctor(args, egress_hooks)
@@ -292,12 +305,23 @@ def dispatch(
             environ=os.environ,
         )
     if args.command == "install-service":
-        from guardian.onboarding import install_service_plan
+        from guardian.service_install import execute_install_service
 
-        return install_service_plan(
-            dry_run=bool(getattr(args, "dry_run", False)),
+        apply = bool(getattr(args, "apply", False)) and not bool(getattr(args, "dry_run", False))
+        payload = execute_install_service(
+            dry_run=not apply,
+            apply=apply,
             mcm_config=getattr(args, "mcm_config", None),
-        ), 1
+            output_dir=getattr(args, "output", None),
+            executable=getattr(args, "executable", None),
+            config_directory=getattr(args, "config_dir", None),
+            state_directory=getattr(args, "state_dir", None),
+            user=getattr(args, "user", None) or "guardian-monitor",
+            offset_minutes=int(getattr(args, "offset_minutes", 5)),
+            legacy_executable=getattr(args, "legacy_executable", None),
+            runner=service_runner,
+        )
+        return payload, 0 if payload.get("installed") else 1
     raise GuardianError("unknown command")
 
 
@@ -637,6 +661,7 @@ def main(
     egress_hooks: Any = None,
     notification_backend: Any = None,
     notification_resolve: Any = None,
+    service_runner: Any = None,
 ) -> int:
     load_local_env()
     parser = build_parser()
@@ -653,6 +678,7 @@ def main(
             notification_backend=notification_backend,
             notification_resolve=notification_resolve,
             egress_hooks=egress_hooks,
+            service_runner=service_runner,
         )
     except GuardianError as exc:
         payload = {"status": "error", "error_type": type(exc).__name__, "error": redact(str(exc))}

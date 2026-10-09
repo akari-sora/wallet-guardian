@@ -1,0 +1,13 @@
+[Unit]
+Description=Wallet Guardian watchdog every 15 minutes
+# Separate from the 3 hour collector timers.
+
+[Timer]
+OnCalendar=@WATCHDOG_CALENDAR@
+RandomizedDelaySec=0
+Persistent=false
+AccuracySec=1s
+Unit=guardian-watchdog.service
+
+[Install]
+WantedBy=timers.target

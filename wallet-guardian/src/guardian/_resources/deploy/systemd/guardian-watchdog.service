@@ -1,0 +1,24 @@
+[Unit]
+Description=Wallet Guardian watchdog @VERSION@
+# Same-host watchdog. It cannot alert when the whole host is down. That is a common-cause failure.
+# This unit is separate from the collector. The collector does not wait for it.
+# Fixed installed version @VERSION@. Do not download main or update dependencies from this unit.
+
+[Service]
+Type=oneshot
+@USER_DIRECTIVE@
+Environment=GUARDIAN_INSTALLED_VERSION=@VERSION@
+Environment=GUARDIAN_CONFIG_DIR=@CONFIG_DIR@
+Environment=GUARDIAN_STATE_DIR=@STATE_DIR@
+ExecStart=@EXECUTABLE@ watchdog --mcm-config @MCM_CONFIG@
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@STATE_DIR@
+PrivateTmp=yes
+MemoryMax=512M
+CPUQuota=50%
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=@WANTED_BY@

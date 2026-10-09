@@ -1,8 +1,9 @@
 """Copy the editable resource trees into the package so a wheel matches them.
 
 Repo-root ``config/``, ``schemas/``, ``migrations/monitor/``, ``examples/``,
-and the network tier plan stay the files editors change. The packaged copies
-under ``src/guardian/_resources/`` are what an installed monitor loads.
+``deploy/systemd/``, and the network tier plan stay the files editors change.
+The packaged copies under ``src/guardian/_resources/`` are what an installed
+monitor loads.
 ``runtime-pin.json`` is not part of that copy.
 """
 
@@ -17,6 +18,7 @@ _TREES = (
     ("schemas", "schemas"),
     ("migrations/monitor", "migrations/monitor"),
     ("examples", "examples"),
+    ("deploy/systemd", "deploy/systemd"),
 )
 _FILES = (
     ("docs/mcm-01/network-tiers.plan.json", "docs/mcm-01/network-tiers.plan.json"),
