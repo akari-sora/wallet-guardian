@@ -19,8 +19,9 @@ Preview channel. `published` stays false. The monitor is read-only: it does not 
 - S2: same-host legacy evidence sidecar and compare path. See `docs/legacy-evidence.md`.
 - S6: on-demand runner model and `tools/release_evidence.py`. A missing gate step stays `NOT_RUN`. See `docs/ci.md`.
 - S0: egress policy, DNS-over-HTTPS, and `guardian egress-doctor`. See `docs/host-network.md`.
-- S5: `guardian init` for one operator, plus `docs/security-model.md` and `docs/threat-model.md`. `install-service` prints planned unit names and exits non-zero.
+- S5: `guardian init` for one operator, plus `docs/security-model.md` and `docs/threat-model.md`.
 - S7: opt-in Telegram sender. Tests use a mock. The canary is `NOT_RUN`. See `docs/notifications.md`.
+- S3: `guardian install-service` is a dry-run installer for separate shadow, watchdog, and legacy-collector systemd units (cron only as a fallback). It prints the plan and exits non-zero until an apply really installs; `--apply` is explicit. No unit was installed on any host and the host smoke is `NOT_RUN`. See `docs/box-unattended.md`.
 - S1: Base source profile. Alchemy Transfers and the Base log route are covered by offline fixtures. No live Alchemy probe is recorded. See `docs/coverage.md`.
 - S8: honest coverage matrix (`docs/coverage-matrix.md`), an unpublished release-manifest draft, and a version consistency check. See `docs/release-preview.md`.
 
@@ -32,7 +33,7 @@ Preview channel. `published` stays false. The monitor is read-only: it does not 
 - On the reviewed SNI-proxy host, formal egress qualification is `BLOCKED_EGRESS`. A preview verdict of OK on that host is not proof.
 - Solana, Kinza, and Alchemy Transfers on Base have offline fixtures and no recorded live probe for those claims. The coverage matrix states the cell.
 - BSC external history has no keyless source. Avalanche deep native history is `expansion_pending`.
-- The service-installer draft is not in this tree.
+- The unattended installer has never been applied on a real host. Host smoke and restart smoke are `NOT_RUN`.
 - No git tag is created here, and the manifest draft stays unpublished.
 
 ### Release blockers for stable
@@ -43,7 +44,7 @@ Preview channel. `published` stays false. The monitor is read-only: it does not 
 - Formal egress qualification on a host that actually delivers the pinned address. The reviewed SNI-proxy host stays `BLOCKED_EGRESS` for that qualification.
 - Live gaps recorded in `docs/coverage-matrix.md`, including Base host-specific keyless Blockscout, BSC external history without a key, Avalanche deep history, Solana public-address checks, and Kinza.
 - A human decision to create the tag `v0.4.0-rc.1` and to publish. This preview does neither.
-- The service installer, which is still a printed plan that exits non-zero.
+- Host smoke of the unattended units (install, reboot, missed-slot recording) on the actual host.
 
 ## [0.3.0] - 2026-10-07
 

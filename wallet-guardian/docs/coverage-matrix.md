@@ -168,7 +168,7 @@ Keyless sources that the routes still name:
 - The Base keyless Blockscout result depends on the host.
 - BSC external history has no keyless source.
 - Avalanche deep native history is expansion_pending.
-- The service-installer draft is not in this tree. `guardian install-service` prints planned unit names and exits non-zero.
+- `guardian install-service` is a dry-run installer. No unit has been installed on a host, and the host smoke is NOT_RUN. See `docs/box-unattended.md`.
 - No git tag is created by this preview, and nothing is published.
 - Failed reads, missing keys, plan refusals, and unrun probes are gaps. They are not zero balances and they are not a finished scan.
 
