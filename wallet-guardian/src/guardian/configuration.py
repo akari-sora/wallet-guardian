@@ -3,6 +3,11 @@
 Public files name environment variables. They do not contain addresses, API
 keys, or state. Private paths must sit outside the git work tree. This module
 does not open a socket, sign, or broadcast.
+
+A monitored address is sent only to an approved chain RPC or indexer, and it is
+stored in the private accounts file. News, promotions, and risk providers that
+lack consent do not receive it. Public export and routine diagnostics do not
+copy it or any credential. See ``guardian.security.privacy_boundary``.
 """
 
 from __future__ import annotations
