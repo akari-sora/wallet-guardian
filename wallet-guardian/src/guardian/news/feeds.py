@@ -55,20 +55,24 @@ class FeedParse:
     ok: bool
     items: tuple[NewsItem, ...]
     reason: str
+    quarantined: int = 0
 
 
 def canonicalize_url(url: str) -> str | None:
     """Lowercase the host, drop the fragment, and drop utm_* and ref query keys."""
     if not isinstance(url, str) or not url.strip():
         return None
-    parts = urlsplit(url.strip())
+    try:
+        parts = urlsplit(url.strip())
+        port = parts.port
+    except ValueError:
+        return None
     if parts.username or parts.password:
         return None
     scheme = parts.scheme.lower()
     if scheme not in {"http", "https"} or not parts.hostname:
         return None
     host = parts.hostname.lower().rstrip(".")
-    port = parts.port
     netloc = host if port is None else f"{host}:{port}"
     query = []
     for key, value in parse_qsl(parts.query, keep_blank_values=True):
@@ -81,7 +85,11 @@ def canonicalize_url(url: str) -> str | None:
 
 
 def parse_feed(data: bytes, *, source_id: str, source_protocols: Sequence[str] = ()) -> FeedParse:
-    """Parse RSS 2.0 or Atom bytes. A rejected document yields no items."""
+    """Parse RSS 2.0 or Atom bytes.
+
+    A document that is truncated, compressed, or carries a DOCTYPE is rejected
+    as a whole. One malformed item is quarantined; valid siblings are kept.
+    """
     text, reason = _decode(data)
     if text is None:
         return FeedParse(False, (), reason)
@@ -91,16 +99,24 @@ def parse_feed(data: bytes, *, source_id: str, source_protocols: Sequence[str] =
         root = ET.fromstring(text)
     except ET.ParseError:
         return FeedParse(False, (), "unparseable")
+    if _local(root.tag) not in {"rss", "feed"}:
+        return FeedParse(False, (), "unparseable")
     elements = _entries(root)
+    if len(elements) > 100:
+        return FeedParse(False, (), "item_cap")
     items: list[NewsItem] = []
+    quarantined = 0
     for element in elements:
         item = _from_xml(element, source_id, source_protocols)
         if item is None:
-            return FeedParse(False, (), "malformed_item")
+            quarantined += 1
+            continue
         items.append(item)
         if len(items) > 100:
-            return FeedParse(False, (), "item_cap")
-    return FeedParse(True, tuple(items), "")
+            return FeedParse(False, (), "item_cap", quarantined)
+    if elements and not items:
+        return FeedParse(False, (), "malformed_item", quarantined)
+    return FeedParse(True, tuple(items), "", quarantined)
 
 
 def parse_structured(
@@ -112,16 +128,23 @@ def parse_structured(
     """Structured rows for manual X entries and fixtures. Text is not executed."""
     if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
         return FeedParse(False, (), "malformed_item")
+    if len(rows) > 100:
+        return FeedParse(False, (), "item_cap")
     items: list[NewsItem] = []
+    quarantined = 0
     for row in rows:
         if not isinstance(row, Mapping):
-            return FeedParse(False, (), "malformed_item")
+            quarantined += 1
+            continue
         item_source = row.get("source_id", source_id)
         item = _from_mapping(row, item_source, source_protocols)
         if item is None:
-            return FeedParse(False, (), "malformed_item")
+            quarantined += 1
+            continue
         items.append(item)
-    return FeedParse(True, tuple(items), "")
+    if rows and not items:
+        return FeedParse(False, (), "malformed_item", quarantined)
+    return FeedParse(True, tuple(items), "", quarantined)
 
 
 def normalize_title(title: str) -> str:
@@ -158,6 +181,9 @@ def _decode(data: bytes) -> tuple[str | None, str]:
         return None, "unparseable"
     if len(data) > _MAX_BYTES:
         return None, "unparseable"
+    # Never inflate a compressed body. A bomb stays a rejected document.
+    if data.startswith(b"\x1f\x8b") or data.startswith(b"PK\x03\x04") or data[:2] in {b"\x78\x01", b"\x78\x9c", b"\x78\xda"}:
+        return None, "compressed_rejected"
     if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff"):
         return None, "unparseable"
     try:
@@ -330,8 +356,28 @@ def _local(tag: str) -> str:
 def _child_text(element: ET.Element, name: str) -> str:
     for child in list(element):
         if _local(child.tag) == name.lower() and child.text and child.text.strip():
-            return " ".join(child.text.split())
+            return _display_text(child.text)
     return ""
+
+
+def _display_text(value: str) -> str:
+    """Collapse ordinary wrapping spaces. Keep newlines and other controls as data."""
+    pieces: list[str] = []
+    buffer: list[str] = []
+
+    def flush() -> None:
+        if buffer:
+            pieces.append(" ".join("".join(buffer).split()))
+            buffer.clear()
+
+    for char in value.strip():
+        if char in "\n\r" or (ord(char) < 32 and char != "\t") or char in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069":
+            flush()
+            pieces.append(char)
+            continue
+        buffer.append(char)
+    flush()
+    return "".join(pieces)
 
 
 def _link_href(element: ET.Element) -> str:

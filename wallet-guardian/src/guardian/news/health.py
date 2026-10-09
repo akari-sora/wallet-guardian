@@ -112,6 +112,7 @@ def _from_records(source_id: str, records: Sequence[Mapping[str, Any]], now: str
     last_fetch = _latest(record.get("last_fetch_at") for record in records)
     last_item = _latest(record.get("last_item_at") for record in records)
     parse_status = _parse_status(records)
+    held = sum(r.get("quarantined_items") for r in records if isinstance(r.get("quarantined_items"), int) and not isinstance(r.get("quarantined_items"), bool))
     return _public(
         source_id,
         feed_type,
@@ -119,6 +120,7 @@ def _from_records(source_id: str, records: Sequence[Mapping[str, Any]], now: str
         last_item,
         parse_status,
         stale_reason_for(last_item, now, missing=False),
+        held,
     )
 
 
@@ -157,6 +159,7 @@ def _public(
     last_item_at: str | None,
     parse_status: str,
     stale_reason: str | None,
+    quarantined_items: int = 0,
 ) -> dict[str, Any]:
     if feed_type not in _TYPES:
         feed_type = "none"
@@ -167,6 +170,7 @@ def _public(
         "last_fetch_at": last_fetch_at,
         "last_item_at": last_item_at,
         "parse_status": parse_status,
+        "quarantined_items": quarantined_items if isinstance(quarantined_items, int) and quarantined_items > 0 else 0,
         "source_id": source_id,
         "stale_reason": stale_reason,
     }
@@ -180,6 +184,7 @@ def _public_copy(row: Mapping[str, Any]) -> dict[str, Any]:
         row.get("last_item_at") if isinstance(row.get("last_item_at"), str) else None,
         str(row.get("parse_status") or "empty"),
         row.get("stale_reason") if isinstance(row.get("stale_reason"), str) else None,
+        row.get("quarantined_items") if isinstance(row.get("quarantined_items"), int) else 0,
     )
 
 

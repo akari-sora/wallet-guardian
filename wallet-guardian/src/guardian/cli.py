@@ -370,8 +370,17 @@ def _explain(args: argparse.Namespace) -> tuple[dict, int]:
         database.close()
     for payload in rows:
         if payload.get("dedup_key") == args.event_id:
-            text = format_alert(payload) if "severity_label" in payload else str(payload.get("what", ""))
-            return {"status": "ok", "alert": payload, "text": text}, 0
+            from guardian.security.display_text import render_alert
+
+            rendered = render_alert(payload)
+            return {
+                "status": "ok",
+                "alert": payload,
+                "csv": rendered["csv"],
+                "html": rendered["html"],
+                "markdown": rendered["markdown"],
+                "text": rendered["plain"],
+            }, 0
     return {"status": "not_found", "event_id": args.event_id}, 0
 
 
