@@ -6,6 +6,7 @@ HTTP backend. This module does not sign, encode, or broadcast a transaction.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -52,6 +53,7 @@ from guardian.runtime_binding import assert_worktree
 from guardian.scan.block_time import lookback_blocks
 from guardian.scan.window import plan_chunks, read_logs, reject_wallet_emitter, window_covers
 from guardian.security.transport_policy import Operation
+from guardian.security.untrusted import begin_untrusted_notes, untrusted_notes
 from guardian.sources.blockscout import BlockscoutClient
 from guardian.sources.budget import BudgetBook, BudgetExhausted
 from guardian.sources.esplora import bitcoin_gap_observations, read_bitcoin_address
@@ -136,6 +138,7 @@ class RunReport:
     indexer_disclosures: list[dict[str, Any]] | None = None
     egress: dict[str, Any] | None = None
     provider_message_ids: tuple[str, ...] = ()
+    news_health: list[dict[str, Any]] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -154,6 +157,7 @@ class RunReport:
             "log_evidence": self.log_evidence or [],
             "misconfigured": self.misconfigured,
             "native_reads": self.native_reads,
+            "news_health": self.news_health or [],
             "outbox_written": self.outbox_written,
             "permission_notes": self.permission_notes or [],
             "positions": self.positions,
@@ -184,6 +188,7 @@ def run_capability_pipeline(
     notification_resolve: Any = None,
 ) -> RunReport:
     """Read configured wallets and commit one capability cycle."""
+    begin_untrusted_notes()
     runtime = assert_worktree()
     started_at = clock()
     started = _iso(started_at)
@@ -224,6 +229,7 @@ def run_capability_pipeline(
     approval_state = _load_approval_state(database, tenant)
     previous_native = _previous_native(database, tenant)
     events: list[ChainEvent] = []
+    counterparties: list[tuple[str, str]] = []
     seen_transfers: set[tuple[str, ...]] = set()
     explicit_cursors: list[dict[str, Any]] = []
     held_cursors: set[tuple[str, str, str]] = set()
@@ -272,6 +278,7 @@ def run_capability_pipeline(
                 permission_notes=permission_notes,
                 bootstrap_origin=bootstrap_origin,
                 deadline=deadline,
+                counterparties=counterparties,
             )
         elif family == "solana":
             _read_solana(
@@ -296,6 +303,9 @@ def run_capability_pipeline(
         )
         observations[(account.wallet_id, network, "exposure_news")] = news_coverage
         _fill_gaps(public_config, private_inputs, catalog, account.wallet_id, network, observations, transport)
+    sanction_alerts = _apply_sanctions(
+        public_config, transport, catalog, enabled, counterparties, observations, started, tenant,
+    )
     if fetched is not None:
         _apply_fetched_coverage(
             observations, enabled, fetched, public_config, position_rows, approval_state,
@@ -325,10 +335,15 @@ def run_capability_pipeline(
         if news_book is not None:
             for notice in link_exposure(news_book.incidents, wallets):
                 alerts.append(exposure_alert(tenant, notice, _notice_network(notice.wallet_id, position_rows, active_approvals)))
+    alerts.extend(sanction_alerts)
     cursors = _merge_cursors(observations, explicit_cursors, held_cursors)
     cycle = CapabilityCycle(database, tenant)
     capability_rows = _storage_rows(rows, position_state, approval_state)
+    news_health = _news_health(fetched)
     if fetched is not None:
+        notes = untrusted_notes()
+        if notes:
+            fetched.state["untrusted_text"] = notes
         capability_rows.append(news_state_row(fetched.state, started))
     finished_cycle = cycle.finish(
         incoming=_incoming(native_reads, registry),
@@ -411,6 +426,7 @@ def run_capability_pipeline(
         runtime=runtime,
         indexer_disclosures=disclosures,
         provider_message_ids=delivery.message_ids,
+        news_health=news_health,
     )
     database.save_run(tenant, run_id, {
         "baseline": report.baseline,
@@ -556,6 +572,15 @@ def _news_fetch_enabled(public_config: PublicConfig) -> bool:
     return isinstance(news, dict) and news.get("fetch") is True
 
 
+def _news_health(fetched: FetchReport | None) -> list[dict[str, Any]]:
+    if fetched is not None:
+        return list(fetched.health)
+    from guardian.news.catalog import load_news_sources
+    from guardian.news.health import build_feed_health
+
+    return build_feed_health(load_news_sources(), {}, None)
+
+
 def _apply_fetched_coverage(
     observations,
     enabled,
@@ -576,7 +601,7 @@ def _apply_fetched_coverage(
     for account, network in enabled:
         gaps = tuple(sorted(scoped[account.wallet_id] - set(fetched.fetchable)))
         observations[(account.wallet_id, network, "exposure_news")] = _fetched_observation(
-            fetched, gaps, supplied, caller_reason,
+            fetched, gaps, supplied, caller_reason, fetched.health, scoped[account.wallet_id],
         )
 
 
@@ -601,6 +626,8 @@ def _fetched_observation(
     gaps: tuple[str, ...],
     supplied: bool,
     caller_reason: str,
+    health: Sequence[Mapping[str, Any]] = (),
+    scope: set[str] | None = None,
 ) -> CoverageObservation:
     """Fetched news is allowlisted_get. A missing feed or a failed read stays a gap."""
     reasons = ["allowlisted_get"]
@@ -622,6 +649,17 @@ def _fetched_observation(
     failed = frozenset({"budget_exhausted", "fetch_error"})
     all_failed = bool(fetched.feeds) and statuses <= failed
     category = "error" if all_failed or (supplied and bool(caller_reason)) else "partial"
+    scoped = scope or set()
+    stale = [
+        row["stale_reason"]
+        for row in health
+        if row.get("source_id") in scoped and isinstance(row.get("stale_reason"), str) and row.get("stale_reason")
+    ]
+    if stale and category != "error":
+        category = "stale"
+        reasons.extend(stale)
+        if "feed_missing" in stale and "unsupported" not in reasons:
+            reasons.append("unsupported")
     return CoverageObservation(
         category=category,
         pagination_complete=False,
@@ -725,6 +763,7 @@ def _read_evm(
     seen, baseline, candidates, tenant, *, stored_cursors, previous_native, events, seen_transfers,
     explicit_cursors, held_cursors, started, active_approvals, database, clock, started_at, peers,
     log_done, plan_cache, checkpoints, log_evidence, permission_notes, bootstrap_origin, deadline,
+    counterparties,
 ) -> None:
     wallet_id = account.wallet_id
     source_id = _family_source(public_config, private_inputs, network, "evm_rpc")
@@ -753,6 +792,7 @@ def _read_evm(
         public_config, transport, database, tenant, clock, started_at, source_id, network, chain_id,
         native_asset, head, checkpoint, origin, deadline, events, seen_transfers, candidates,
         observations, seen, baseline, explicit_cursors, held_cursors, started, log_evidence, peers,
+        counterparties,
     )
     fungible_cursor = _cursor_block(stored_cursors, wallet_id, network, "history.fungible")
     _read_token_logs(scan, address, wallet_id, fungible_cursor, log_done)
@@ -897,18 +937,19 @@ def _credential_hint(source: Mapping[str, Any], blocked_reason: str | None) -> s
     return hint_for_source(source, blocked_reason)
 
 
-def _risk_gap(public_config, private_inputs, privacy: Any) -> CoverageObservation:
-    """GoPlus stays uncalled while privacy denies it. A missing key is still credential_missing."""
+def _risk_gap(public_config, private_inputs, privacy: Any, transport=None) -> CoverageObservation:
+    """GoPlus stays uncalled. A missing key or base is credential_missing and makes no request."""
     reasons = []
     hint = ""
     source_id, source = _adapter_source(public_config, "goplus")
-    if source is not None:
-        status = private_inputs.source_status.get(source_id)
-        if status is not None and status.blocked_reason == "credential_missing":
-            reasons.append("credential_missing")
-            env_name = source.get("credential_env")
-            if isinstance(env_name, str):
-                hint = credential_hint(env_name)
+    status = None if source_id is None else private_inputs.source_status.get(source_id)
+    endpoint_ready = _adapter_endpoint(public_config, transport, "goplus")
+    key_missing = status is None or status.blocked_reason == "credential_missing" or not getattr(status, "credential_present", False)
+    if source is not None and (key_missing or not endpoint_ready):
+        reasons.append("credential_missing")
+        env_name = source.get("credential_env")
+        if isinstance(env_name, str) and (status is None or status.blocked_reason == "credential_missing"):
+            hint = credential_hint(env_name)
     if privacy != "operator_approved_sources_only":
         reasons.append("third_party_denied")
     else:
@@ -945,6 +986,206 @@ def _adapter_endpoint(public_config, transport, adapter: str) -> bool:
     return bool(getattr(registered, "endpoint", ""))
 
 
+def _apply_sanctions(public_config, transport, catalog, enabled, counterparties, observations, started: str, tenant: str) -> list[dict[str, Any]]:
+    """Local exact match. A missing feed stays feed_not_supplied. A bad feed is an error, not a miss."""
+    name, endpoint = _ofac_endpoint(public_config, transport)
+    if not name or not endpoint:
+        return []
+    applicable = [
+        (account, network)
+        for account, network in enabled
+        if resolve_support(catalog, network, "sanctions")[0] in _APPLICABLE
+    ]
+    if not applicable:
+        return []
+    try:
+        body, failure = _read_ofac_feed(endpoint, transport, name)
+    except Exception:
+        body, failure = None, "feed_unreadable"
+    if body is None:
+        observation = _ofac_error(_safe_reason(failure or "feed_unreadable"), started, "unreadable")
+        for account, network in applicable:
+            observations[(account.wallet_id, network, "sanctions")] = observation
+        return []
+    try:
+        return _screen_ofac(body, applicable, counterparties, observations, started, tenant)
+    except Exception:
+        observation = _ofac_error("feed_unreadable", started, "unreadable")
+        for account, network in applicable:
+            observations[(account.wallet_id, network, "sanctions")] = observation
+        return []
+
+
+def _ofac_endpoint(public_config, transport) -> tuple[str, str]:
+    name, _source = _adapter_source(public_config, "ofac_sls")
+    if not name or transport is None:
+        return "", ""
+    try:
+        registered = transport.endpoints.get(name)
+    except Exception:
+        return "", ""
+    endpoint = getattr(registered, "endpoint", "") or ""
+    return name, endpoint if isinstance(endpoint, str) else ""
+
+
+def _read_ofac_feed(endpoint: str, transport, source_id: str) -> tuple[bytes | None, str]:
+    from urllib.parse import unquote, urlsplit
+
+    if endpoint.startswith("file:"):
+        try:
+            return _ofac_file(endpoint).read_bytes(), ""
+        except OSError:
+            return None, "list_missing"
+    parts = urlsplit(endpoint)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        return None, "feed_unreadable"
+    path = unquote(parts.path or "/")
+    if len(path) > 1 and path.endswith("/"):
+        path = path[:-1]
+    operation = Operation(protocol="rest", adapter="ofac_sls", http_method="GET", path=path)
+    try:
+        result = transport.request(source_id, operation)
+    except (BudgetExhausted, GuardianError, SecurityError, TransportError) as exc:
+        reason = getattr(exc, "reason", None)
+        return None, reason if isinstance(reason, str) and reason else "feed_unreadable"
+    if not getattr(result, "ok", False):
+        return None, "http_error"
+    body = getattr(result, "body", None)
+    if isinstance(body, str):
+        body = body.encode("utf-8")
+    if not isinstance(body, (bytes, bytearray)) or not body:
+        return None, "unparseable"
+    return bytes(body), ""
+
+
+def _ofac_file(endpoint: str):
+    import os
+    import re
+    from pathlib import Path
+    from urllib.parse import unquote, urlsplit
+
+    parts = urlsplit(endpoint)
+    if parts.netloc not in {"", "localhost"}:
+        raise OSError
+    raw = unquote(parts.path)
+    if os.name == "nt" and re.match(r"^/[A-Za-z]:", raw):
+        raw = raw[1:]
+    return Path(raw)
+
+
+def _screen_ofac(body: bytes, applicable, counterparties, observations, started: str, tenant: str) -> list[dict[str, Any]]:
+    from datetime import date
+
+    from guardian.pricing.catalog import load_risk_sources
+    from guardian.risk.ofac import ingest, screen_round
+
+    risk = load_risk_sources()
+    snapshot = ingest(body, risk, retrieved_at=started)
+    now = _ofac_date(started)
+    alerts: list[dict[str, Any]] = []
+    if not isinstance(now, date):
+        observation = _ofac_error("undated", started, "undated")
+        for account, network in applicable:
+            observations[(account.wallet_id, network, "sanctions")] = observation
+        return []
+    for account, network in applicable:
+        parties = [party for net, party in counterparties if net == network]
+        result = screen_round(
+            snapshot,
+            network_id=network,
+            monitored=account.normalized.canonical,
+            counterparties=parties,
+            catalog=risk,
+            now=now,
+        )
+        observations[(account.wallet_id, network, "sanctions")] = _observation_from_screen(result, started)
+        stale = result.validity == "feed_stale"
+        if result.monitored_hit:
+            alerts.append(_sanction_alert(tenant, account.wallet_id, network, "monitored", stale))
+        if result.counterparty_hit:
+            alerts.append(_sanction_alert(tenant, account.wallet_id, network, "counterparty", stale))
+    return alerts
+
+
+def _sanction_alert(tenant: str, wallet_id: str, network: str, role: str, stale: bool) -> dict[str, Any]:
+    material = "\x1f".join((tenant, wallet_id, network, "official_sanction", role))
+    return {
+        "dedup_key": hashlib.sha256(material.encode("utf-8")).hexdigest(),
+        "kind": "official_sanction",
+        "loss_alert": False,
+        "network": network,
+        "source": "ofac",
+        "stale": stale,
+        "subject": role,
+        "wallet_id": wallet_id,
+    }
+
+
+def _observation_from_screen(result, started: str) -> CoverageObservation:
+    publish = result.publish_date or "undated"
+    evidence = (
+        "ofac:source=ofac",
+        f"ofac:fetched_at={started}",
+        f"ofac:publish_date={publish}",
+        f"ofac:validity={result.validity}",
+    )
+    if result.status != "parsed":
+        return _ofac_error(result.reason or "unparseable", started, result.validity, evidence)
+    reasons = ["feed_stale"] if result.validity == "feed_stale" else []
+    reasons.append("exact_match" if result.monitored_hit or result.counterparty_hit else "screened_no_hit")
+    return CoverageObservation(
+        category="partial",
+        pagination_complete=False,
+        gap_detection_complete=False,
+        declared="ofac_sls",
+        sources=("ofac",),
+        reason_codes=tuple(reasons),
+        evidence_refs=evidence + (f"ofac:checked={result.checked}",),
+        trust="unverified",
+        price_quality="unknown",
+        last_success_at=started,
+    )
+
+
+def _ofac_error(reason: str, started: str, validity: str, evidence: tuple[str, ...] | None = None) -> CoverageObservation:
+    refs = evidence or (
+        "ofac:source=ofac",
+        f"ofac:fetched_at={started}",
+        "ofac:publish_date=undated",
+        f"ofac:validity={validity}",
+    )
+    return CoverageObservation(
+        category="error",
+        pagination_complete=False,
+        gap_detection_complete=False,
+        declared="not_read",
+        sources=("ofac",),
+        reason_codes=(_safe_reason(reason), "blocked"),
+        evidence_refs=refs,
+        trust="unverified",
+        price_quality="unknown",
+    )
+
+
+def _safe_reason(reason: str) -> str:
+    import re
+
+    token = reason.strip().lower().replace(" ", "_")
+    if re.fullmatch(r"[a-z][a-z0-9_:-]{0,63}", token):
+        return token
+    return "feed_unreadable"
+
+
+def _ofac_date(started: str):
+    from datetime import datetime
+
+    text = started[:-1] + "+00:00" if started.endswith("Z") else started
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        return None
+
+
 def _fill_gaps(public_config, private_inputs, catalog, wallet_id, network, observations, transport=None) -> None:
     privacy = public_config.document.get("privacy", {}).get("third_party_wallet_queries")
     for capability in (
@@ -961,7 +1202,7 @@ def _fill_gaps(public_config, private_inputs, catalog, wallet_id, network, obser
             continue
         support, _probe = resolve_support(catalog, network, capability)
         if capability in {"address_risk", "asset_risk"} and support in _APPLICABLE:
-            observations[key] = _risk_gap(public_config, private_inputs, privacy)
+            observations[key] = _risk_gap(public_config, private_inputs, privacy, transport)
             continue
         if capability == "sanctions" and support in _APPLICABLE:
             if not _adapter_endpoint(public_config, transport, "ofac_sls"):
@@ -1321,6 +1562,7 @@ def _Scan(
     public_config, transport, database, tenant, clock, started_at, source_id, network, chain_id,
     native_asset, head, checkpoint, bootstrap_origin, deadline, events, seen_transfers, candidates,
     observations, seen, baseline, explicit_cursors, held_cursors, started, log_evidence, peers,
+    counterparties,
 ):
     from guardian.scan.drive import ScanContext
 
@@ -1350,7 +1592,7 @@ def _Scan(
         started=started,
         log_evidence=log_evidence,
         peers=list(peers),
-        emit=_emit_transfers,
+        emit=_emit_with_parties(counterparties),
         baseline_cb=_baseline,
         advance=_advance_cursor,
         hold=_hold_cursor,
@@ -1529,6 +1771,7 @@ def _movement_transfers(ledger, wallet_id: str, network: str, source_id: str) ->
             "network": network,
             "position": str(movement.log_index),
             "raw_amount": amount,
+            "counterparty": movement.counterparty,
             "source": source_id,
             "tx": movement.tx_id,
             "wallet_id": wallet_id,
@@ -1554,8 +1797,10 @@ def _etherscan_transfers(items, address: str, wallet_id: str, network: str, nati
         receiver = _party(item.get("to"))
         if receiver == owner:
             kind, direction = "asset_in", "in"
+            counterparty = "" if sender in {"", owner} else sender
         elif sender == owner:
             kind, direction = "asset_out", "out"
+            counterparty = "" if receiver in {"", owner} else receiver
         else:
             continue
         if native:
@@ -1578,6 +1823,7 @@ def _etherscan_transfers(items, address: str, wallet_id: str, network: str, nati
             "block": _transfer_block(item),
             "block_hash": block_hash,
             "capability": capability,
+            "counterparty": counterparty,
             "direction": direction,
             "is_native": native,
             "kind": kind,
@@ -1589,6 +1835,21 @@ def _etherscan_transfers(items, address: str, wallet_id: str, network: str, nati
             "wallet_id": wallet_id,
         })
     return rows
+
+
+def _emit_with_parties(parties: list[tuple[str, str]]):
+    """Remember the other party of a transfer. The address is not copied into the public event."""
+
+    def emit(rows, candidates, events, seen_transfers, tenant, chain_id, started, head, source_id) -> None:
+        for row in rows:
+            party = row.get("counterparty") if isinstance(row, dict) else None
+            network = row.get("network") if isinstance(row, dict) else None
+            if isinstance(party, str) and party.startswith("0x") and len(party) == 42 and isinstance(network, str):
+                if party.lower() != "0x" + ("0" * 40):
+                    parties.append((network, party.lower()))
+        _emit_transfers(rows, candidates, events, seen_transfers, tenant, chain_id, started, head, source_id)
+
+    return emit
 
 
 def _emit_transfers(rows, candidates, events, seen_transfers, tenant, chain_id, started, head, source_id) -> None:

@@ -124,6 +124,9 @@ def compare_with_legacy(
     _apply_tx_level(report, legacy, labels, mcm_events, since, until)
     if evidence is not None:
         _attach_evidence(report, evidence, database, tenant, slot_start, slot_end)
+    _drop_awaiting_duplicates(report)
+    _explain_legacy_not_scanned(report)
+    _strip_internal(report)
     return report
 
 
@@ -281,6 +284,7 @@ _EVENT_FIELDS = ("wallet_id", "network", "tx", "position", "kind", "subject")
 EXPLAINED_REASONS = frozenset({
     "awaiting_finality",
     "legacy_free_text",
+    "legacy_not_scanned",
     "outside_legacy_scope",
     "source_gap_declared",
     "spam_suppressed_rule",
@@ -388,6 +392,7 @@ def _mcm_events(database: Database, tenant: str) -> tuple[list[dict[str, str]], 
         finality = payload.get("finality") if isinstance(payload.get("finality"), str) else "unknown"
         observed = payload.get("observed_at") if isinstance(payload.get("observed_at"), str) else ""
         row = {
+            "block": _block_text(payload.get("block_number")),
             "comparable": "yes",
             "finality": finality,
             "kind": kind,
@@ -496,7 +501,7 @@ def _in_window(observed: str, window: tuple[str | None, str | None]) -> bool:
 
 def _public_event(row: dict[str, str]) -> dict[str, str]:
     tx = row.get("tx") or ""
-    return {
+    public = {
         "kind": row.get("kind", ""),
         "label": row.get("label", ""),
         "network": row.get("network", ""),
@@ -505,6 +510,112 @@ def _public_event(row: dict[str, str]) -> dict[str, str]:
         "tx": _mask(tx) if tx.startswith("0x") else "",
         "wallet_id": row.get("wallet_id", ""),
     }
+    block = row.get("block") or ""
+    if block:
+        public["_block"] = block
+    return public
+
+
+def _public_identity(row: Mapping[str, str]) -> tuple[str, ...]:
+    return tuple(str(row.get(field, "")) for field in ("wallet_id", "network", "tx", "kind", "position", "subject"))
+
+
+def _drop_awaiting_duplicates(report: dict[str, Any]) -> None:
+    """An unsettled event is awaiting_finality only. It does not also count as mcm_only."""
+    awaiting = {_public_identity(row) for row in report["awaiting_finality"] if isinstance(row, dict)}
+    kept = [
+        row for row in report["mcm_only"]
+        if not isinstance(row, dict) or _public_identity(row) not in awaiting
+    ]
+    report["mcm_only"] = kept
+    report["counts"]["mcm_only"] = len(kept)
+
+
+def _explain_legacy_not_scanned(report: dict[str, Any]) -> None:
+    """An MCM event on a network this legacy round did not scan is explained, not unexplained.
+
+    A chain outside the legacy map is never scanned. A chain inside that map is
+    legacy_not_scanned only when this round recorded some other scan window.
+    An empty window list does not prove the network was skipped.
+    """
+    never = set(report["coverage_differences"].get("networks_legacy_never_checked") or [])
+    recorded = _recorded_scan(report)
+    for row in report["mcm_only"]:
+        if not isinstance(row, dict) or row.get("classification") == "explained":
+            continue
+        if _legacy_scanned(report, row):
+            continue
+        network = row.get("network", "")
+        if network in never:
+            explain_diff(row, "legacy_not_scanned", "coverage_differences.networks_legacy_never_checked")
+            continue
+        if recorded:
+            explain_diff(row, "legacy_not_scanned", "coverage_differences.legacy_networks")
+
+
+def _recorded_scan(report: Mapping[str, Any]) -> bool:
+    windows = report.get("legacy_coverage_windows") or []
+    queries = report.get("legacy_query_windows") or []
+    return any(isinstance(item, dict) and item.get("network") for item in windows) or any(
+        isinstance(item, dict) and item.get("network") for item in queries
+    )
+
+
+def _legacy_scanned(report: Mapping[str, Any], row: Mapping[str, str]) -> bool:
+    network = row.get("network", "")
+    windows = [
+        item for item in report.get("legacy_coverage_windows") or []
+        if isinstance(item, dict) and item.get("network") == network
+    ]
+    queries = [
+        item for item in report.get("legacy_query_windows") or []
+        if isinstance(item, dict) and item.get("network") == network
+    ]
+    bounded = [item for item in queries if _block_bounds(item)]
+    block = _as_int(row.get("_block"))
+    if bounded and block is not None:
+        return any(_window_covers(item, block) for item in bounded)
+    return bool(windows or queries)
+
+
+def _block_bounds(item: Mapping[str, Any]) -> bool:
+    return _as_int(item.get("from_block")) is not None and _as_int(item.get("to_block")) is not None
+
+
+def _window_covers(item: Mapping[str, Any], block: int) -> bool:
+    status = item.get("status")
+    if status not in {None, "", "complete"}:
+        return False
+    start = _as_int(item.get("from_block"))
+    end = _as_int(item.get("to_block"))
+    if start is None or end is None:
+        return False
+    return start <= block <= end
+
+
+def _as_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _block_text(value: Any) -> str:
+    number = _as_int(value)
+    return "" if number is None else str(number)
+
+
+def _strip_internal(report: dict[str, Any]) -> None:
+    for name in ("awaiting_finality", "legacy_only", "matched", "matched_tx_level", "mcm_only", "uncomparable"):
+        rows = report.get(name)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict):
+                row.pop("_block", None)
 
 
 def _mask_subject(value: str) -> str:

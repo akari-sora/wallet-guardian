@@ -15,6 +15,8 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Mapping, Sequence
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from guardian.security.untrusted import sanitize_untrusted
+
 _MAX_BYTES = 1_000_000
 _KINDS = frozenset({"governance", "incident", "other", "upgrade"})
 _PROTOCOL_ALIASES = {
@@ -250,12 +252,14 @@ def _build(
     correction_of: str | None,
     source_protocols: Sequence[str],
 ) -> NewsItem:
+    title = sanitize_untrusted(title)
+    body = sanitize_untrusted(body)
     canonical_correction = canonicalize_url(correction_of) if isinstance(correction_of, str) else None
-    is_correction = canonical_correction is not None or _CORRECTION_PREFIX.match(title.strip()) is not None
+    is_correction = canonical_correction is not None or _CORRECTION_PREFIX.match(title) is not None
     return NewsItem(
         source_id=source_id,
         url=url,
-        title=title.strip(),
+        title=title,
         normalized_title=normalize_title(title),
         published_at=parse_timestamp(published),
         protocols=resolve_protocols(title, body, declared, source_protocols),

@@ -194,6 +194,67 @@ def screen(
     return _screen("no_hit", "no_exact_match", False, snapshot.version, snapshot.publish_date, key)
 
 
+@dataclass(frozen=True)
+class RoundScreen:
+    """One local exact-match pass. Addresses stay in memory and are not part of this result."""
+
+    status: str
+    reason: str
+    validity: str
+    publish_date: str | None
+    checked: int
+    monitored_hit: bool
+    counterparty_hit: bool
+
+    def __post_init__(self) -> None:
+        if self.status not in {"parsed", "unknown"}:
+            raise ValueError("status")
+        if self.validity not in {"current", "feed_stale", "undated", "unreadable"}:
+            raise ValueError("validity")
+
+
+def screen_round(
+    snapshot: SdnSnapshot | None,
+    *,
+    network_id: str,
+    monitored: str,
+    counterparties: Iterable[str],
+    catalog: RiskSources,
+    now: date,
+) -> RoundScreen:
+    """Exact-match the monitored address and counterparties. A bad list is not a miss."""
+    if snapshot is None or snapshot.status != "parsed":
+        reason = snapshot.reason if snapshot is not None and snapshot.reason else "unparseable"
+        return RoundScreen("unknown", reason, "unreadable", None if snapshot is None else snapshot.publish_date, 0, False, False)
+    freshness = _freshness(snapshot, now, catalog.ofac_max_age_days)
+    if freshness == "unknown":
+        return RoundScreen("unknown", "undated", "undated", snapshot.publish_date, 0, False, False)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for address in (monitored, *tuple(counterparties)):
+        if not isinstance(address, str) or not address:
+            continue
+        key = address.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(address)
+    monitored_key = monitored.lower() if isinstance(monitored, str) else ""
+    monitored_hit = False
+    counterparty_hit = False
+    for address in ordered:
+        result = screen(snapshot, network_id=network_id, address=address, catalog=catalog, now=now)
+        if result.status != "hit":
+            continue
+        if address.lower() == monitored_key:
+            monitored_hit = True
+        else:
+            counterparty_hit = True
+    validity = "feed_stale" if freshness == "stale" else "current"
+    reason = "exact_match" if monitored_hit or counterparty_hit else "screened_no_hit"
+    return RoundScreen("parsed", reason, validity, snapshot.publish_date, len(ordered), monitored_hit, counterparty_hit)
+
+
 def diff_lists(older: SdnSnapshot | None, newer: SdnSnapshot | None) -> ListDiff:
     """Added and delisted identifiers. A removal keeps both versions as evidence."""
     if older is None or newer is None or older.status != "parsed" or newer.status != "parsed":
