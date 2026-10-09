@@ -33,3 +33,11 @@
 操作覆蓋與監控覆蓋分開。能讀 Lista 不代表能執行 Lista 的每一個寫入方法。建置與測試不等於獲准執行任何主網資產交易。
 
 先前 run-once 的鏈上事實仍有效：Lista implementation `0xF9a3702659d8bFDb2ff5E3c3f264E479801F63Bf`，`paused=false`。一個 watch 地址當時有一筆 `isClaimable=true` 的提款，另一個陣列是空的。未簽名計畫 `wallet_request_allowed=false`。這次工作台沒有把那次讀取變成一筆已送出的交易。
+
+## 2026-10-09 MCM-SHARE-01 S1
+
+離線驗收，不是 live pass。Base 仍在必要範圍裡。失敗的讀取保持缺口（`credential_missing`、`plan_not_supported`、`blocked` / `bot_challenge`），不記成 0、不記成 complete。
+
+- Base 外部與代幣轉帳：有 `ALCHEMY_API_KEY` 與 `ALCHEMY_TRANSFERS_URL` 時走 Alchemy Transfers（`from` / `to` 分開、`pageKey` 跟完、固定區塊窗口）。每次呼叫的 120 CU 是估計。沒有 key 就留下說明並改走 Blockscout。
+- Base 的 Approval、ApprovalForAll、Transfer 日誌：`tenderly_base` 的 `range_limit` 是 1000。`base-1rpc`（50）預設關閉，只有啟用且剩餘預算夠追趕才用。Alchemy 免費 `eth_getLogs`（10 個區塊）不是這條路徑。
+- 轉帳資料不會把授權能力標成 complete。

@@ -222,7 +222,16 @@
   "families": [
     "evm"
   ],
-  "limits": [],
+  "limits": [
+    {
+      "name": "base_log_range",
+      "notes": "Base log reads use tenderly_base with range_limit 1000, then base-1rpc with range_limit 50 only when that source is enabled and the remaining daily budget can cover the catch-up. These are this package's configured read widths. Alchemy free eth_getLogs (10 blocks) is not this path.",
+      "retrieved": "2026-10-09",
+      "source_url": "https://docs.tenderly.co/node/rpc",
+      "tenderly_base_range_limit": 1000,
+      "base_1rpc_range_limit": 50
+    }
+  ],
   "networks": [
     "ethereum-mainnet",
     "bsc-mainnet",
@@ -241,7 +250,7 @@
     "blast-mainnet",
     "opbnb-mainnet"
   ],
-  "notes": "只 allowlist 唯讀 JSON-RPC。getLogs 不是原生轉帳 API，eth_getBalance 也不涵蓋代幣歷史或權限。這個套件沒有鏈 adapter，也沒有 live 驗證。",
+  "notes": "只 allowlist 唯讀 JSON-RPC。getLogs 不是原生轉帳 API，eth_getBalance 也不涵蓋代幣歷史或權限。Base 日誌先走 tenderly_base（range_limit 1000），base-1rpc（range_limit 50）只在啟用且剩餘預算夠追趕時才接上。Alchemy 免費 eth_getLogs 一次 10 個區塊，不是這條路徑。沒有 live 驗證。",
   "probe": "untested",
   "protocol": "jsonrpc"
 }

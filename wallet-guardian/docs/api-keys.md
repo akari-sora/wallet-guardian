@@ -79,19 +79,32 @@ Order for Base and Optimism: PRO when the key is set and the plan includes the c
 
 ## Alchemy
 
-Alchemy is the free keyed candidate for Base and Optimism asset transfers after Blockscout. It is not routed by default. `guardian.sources.alchemy` is an interface only (`ROUTED_BY_DEFAULT` is false). Opt in only by adding your own route. A missing key means Alchemy is not routed.
+Alchemy Transfers is the preferred Base source for external and token transfers when you set both env names below. It does not replace Approval or `ApprovalForAll` logs. Those stay on the Base log route (`tenderly_base`, then `base-1rpc` only when that source is enabled and the remaining budget can catch up).
+
+A missing key does not crash the run. The monitor records `credential_missing` with a pointer to this section, then continues with Blockscout PRO and the keyless Base instance. Those Blockscout gaps stay `plan_not_supported` or `blocked` / `bot_challenge`. They are not an empty wallet. Base stays a required network.
 
 Signup:
 
 1. Create an account at <https://www.alchemy.com>.
-2. Create an app.
-3. Select Base Mainnet or OP Mainnet.
-4. Copy the API key.
-5. Set `ALCHEMY_API_KEY`.
+2. Open the dashboard and create an app.
+3. Select Base Mainnet.
+4. Copy the HTTPS URL the dashboard shows for that app. It already contains the key in the path (`/v2/<key>`).
+5. Put that URL in the private secret profile as `ALCHEMY_TRANSFERS_URL`.
+6. Put the same key in `ALCHEMY_API_KEY`. The monitor uses the name as the gate. It does not append the key again.
 
-The transfers URL comes from that app. The env name, if you opt in, is `ALCHEMY_TRANSFERS_URL`. Do not invent a hostname.
+Do not commit the URL or the key. The public config only names `ALCHEMY_TRANSFERS_URL` and `ALCHEMY_API_KEY`. Logs and reports redact an Alchemy `/v2/` key.
 
-Free tier, check current terms: the Transfers API returns asset transfers. It does not replace approval or `ApprovalForAll` logs. Free `eth_getLogs` is 10 blocks per query. It is not a way to scan a wide log range.
+Free tier, checked against Alchemy's published tables on 2026-10-09 (an estimate, not a live quota read):
+
+- About 30,000,000 compute units per month and 300 compute units per second.
+- `alchemy_getAssetTransfers` is 120 compute units per call. The run report records that under `budget.providers` with `credits_basis` `estimate`.
+- Categories requested: `external`, `erc20`, `erc721`, `erc1155`. `fromAddress` and `toAddress` are separate calls. `pageKey` is followed until it is absent. `fromBlock` and `toBlock` stay a fixed window.
+- Free `eth_getLogs` is 10 blocks per query. That method is not the approval scan, and this adapter does not call it.
+
+Base log endpoints, if you set them yourself:
+
+- `TENDERLY_BASE_URL`, for example `https://base.gateway.tenderly.co`, `range_limit` 1000. No key.
+- `BASE_1RPC_URL`, for example `https://1rpc.io/base`, `range_limit` 50. The example leaves `base-1rpc` disabled. It runs only after you enable it, and only when the remaining daily budget can cover the catch-up.
 
 <a id="goplus"></a>
 

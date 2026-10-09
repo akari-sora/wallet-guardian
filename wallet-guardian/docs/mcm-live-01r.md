@@ -10,14 +10,16 @@ Blockscout PRO 的 key 由使用者自己放在私人 secret profile 的 `BLOCKS
 |---|---|---|
 | Ethereum、Arbitrum、Polygon | Etherscan V2 free | 沒有 `ETHERSCAN_API_KEY` 時改走 Blockscout keyless instance（有設定端點才呼叫）。RPC 讀狀態、receipt 與 token logs |
 | BSC | NodeReal `nr_getAssetTransfers`，類別 `external` | 沒有 key 就是 `credential_missing`，沒有 keyless 的 BSC 原生歷史。token 歷史仍走公開 RPC logs。官方只列 BSC 與 Ethereum。方法被拒是 `method_not_found` 或 `unauthorized`，不能用 `eth_call` 猜 |
-| Base、Optimism | Blockscout PRO，然後 keyless instance | PRO：`BLOCKSCOUT_PRO_API_BASE`（預設 `https://api.blockscout.com`）加 `chain_id`。Optimism（10）在免費方案。Base（8453）是 `plan_not_supported`。keyless 預設 `https://base.blockscout.com` 與 `https://optimism.blockscout.com` |
+| Base 轉帳 | Alchemy Transfers（有 `ALCHEMY_API_KEY` 與 `ALCHEMY_TRANSFERS_URL`），否則 Blockscout PRO 然後 keyless | 沒有 key 是 `credential_missing`，接著走 Blockscout。Base（8453）PRO 免費方案仍是 `plan_not_supported`。keyless 的 Cloudflare 403 仍是 `blocked` / `bot_challenge`。不把缺口改成非必要 |
+| Base 日誌 | `tenderly_base`（`range_limit` 1000），然後 `base-1rpc`（50） | `base-1rpc` 預設關閉。只有啟用且剩餘每日預算夠追趕才接上。Alchemy 免費 `eth_getLogs` 一次 10 個區塊，不是這條路徑 |
+| Optimism | Blockscout PRO，然後 keyless instance | PRO：`BLOCKSCOUT_PRO_API_BASE`（預設 `https://api.blockscout.com`）加 `chain_id`。Optimism（10）在免費方案。keyless 預設 `https://optimism.blockscout.com` |
 | Avalanche | 原生餘額照讀 | 深度歷史維持 `expansion_pending`。沒有重大曝險時，不用它擋住原來六條鏈 |
 
 `plan_not_supported` 記在狀態目錄旁的 `capability-failures.json`（只有來源 id、網路、原因）。下一輪改走已核准的後備，不再重送注定失敗的請求。Blockscout PRO 對 Base 的 featured-chain 402 也走這條 cache。失敗的探針不代表這條鏈沒有資產。`x-credits-remaining` 與 `x-ratelimit-limit` 有出現在回應時，記在 `budget.providers.*.rate_headers`。
 
-沒有 key 的跑法見 `examples/monitor.nokeys.json` 與 `docs/api-keys.md`。GoPlus 沒有 key 是 `credential_missing`，隱私拒絕把地址送出去的政策不變。CoinGecko 沒有 key 走公開無 key 層級，報價讀不到是 `valuation_unknown`，不是 0 也不是 1。Helius 沒有 key 時 parsed events 是 `credential_missing`，已設定的 Solana RPC 仍用。OFAC 公開清單不需要 key；`OFAC_SLS_FEED` 沒設是 `feed_not_supplied`。Alchemy 仍不在預設路由裡。
+沒有 key 的跑法見 `examples/monitor.nokeys.json` 與 `docs/api-keys.md`。GoPlus 沒有 key 是 `credential_missing`，隱私拒絕把地址送出去的政策不變。CoinGecko 沒有 key 走公開無 key 層級，報價讀不到是 `valuation_unknown`，不是 0 也不是 1。Helius 沒有 key 時 parsed events 是 `credential_missing`，已設定的 Solana RPC 仍用。OFAC 公開清單不需要 key；`OFAC_SLS_FEED` 沒設是 `feed_not_supplied`。Alchemy 沒有 key 時 Base 轉帳記 `credential_missing`（說明指向 `docs/api-keys.md#alchemy`），然後改走 Blockscout。不會因為缺 key 當掉，也不會把缺的能力標成 complete。
 
-NodeReal 的 Base 產品頁存在，但連線位址要從使用者的 Dashboard 來。不要編造 `base-...` 主機名。Alchemy Transfers 只留介面（`guardian.sources.alchemy`），免費 `eth_getLogs` 目前一次 10 個區塊，預設不接進路由。它不是大範圍日誌的免費解法。
+NodeReal 的 Base 產品頁存在，但連線位址要從使用者的 Dashboard 來。不要編造 `base-...` 主機名。Alchemy Transfers 讀的是轉帳，不是授權。`fromAddress` 與 `toAddress` 分開查，`pageKey` 跟到沒有為止，`fromBlock` / `toBlock` 是固定窗口。每一次 `alchemy_getAssetTransfers` 依公開價目記 120 CU，`credits_basis` 是 `estimate`。免費 `eth_getLogs` 一次 10 個區塊，不拿來掃 Approval。金鑰放在 URL 路徑裡，報告與錯誤摘錄會遮掉。
 
 Blockscout Free 是每天 100K credits、5 RPS、不需信用卡。多數基本方法約 20 credits。100K credits 不是 100K 次請求。範例預算把每日請求上限放在 5000，留餘裕。付費方案不在這一輪，也不是預設。
 
@@ -25,7 +27,7 @@ Blockscout Free 是每天 100K credits、5 RPS、不需信用卡。多數基本�
 
 ## 日誌區間
 
-每個 RPC 來源可以用 `log_range_max`（1 到 2000，省略時 2000）。區間被拒才二分。429 依 `Retry-After` 退避，秒數記在 `budget.backoff`。單一區塊仍然失敗就記 `single_block_unreadable:<block>`，游標不跨過它。
+每個 RPC 來源可以用 `log_range_max`（1 到 2000，省略時 2000）。`range_limit` 有設時，日誌寬度用它。Base 的 `tenderly_base` 是 1000，`base-1rpc` 是 50。區間被拒才二分。429 依 `Retry-After` 退避，秒數記在 `budget.backoff`。單一區塊仍然失敗就記 `single_block_unreadable:<block>`，游標不跨過它，也不改走下一個來源。來源整段失敗時，下一個來源只有在剩餘每日請求數夠追完剩下的區間才接上。
 
 `eth_getLogs.address` 是發出事件的合約。監控中的錢包不能放進去。兩個錢包只在正確的 topic 位置做 OR，再在本地拆開。轉入看 topic 2，轉出看 topic 1，不把兩個位置 OR 在一起。`log_contract` 只有在它不是錢包時才當成合約篩選。
 

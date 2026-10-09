@@ -19,6 +19,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 
 from guardian.configuration import MaskedSecret
 from guardian.errors import ConfigError, GuardianError, SecurityError
+from guardian.security.redact import redact
 from guardian.security.ssrf import validate_url
 from guardian.sources.resolver import (
     BENCHMARK_MESSAGE,
@@ -548,7 +549,7 @@ def _finish(source_id: str, protocol: str, raw: RawResponse, max_bytes: int) -> 
     headers = {str(key).lower(): str(value) for key, value in raw.headers.items()}
     if raw.status >= 400 or raw.status < 200:
         classification = classify_response(raw.status, None)
-        return _result(source_id, raw.status, None, classification, headers, detail=_snippet(raw.body))
+        return _result(source_id, raw.status, None, classification, headers, detail=redact(_snippet(raw.body)))
     try:
         parsed = _parse_body(protocol, raw.body)
     except TransportError:
