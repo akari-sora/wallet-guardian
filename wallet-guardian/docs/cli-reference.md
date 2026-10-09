@@ -1,6 +1,6 @@
 # Command reference
 
-Package version in this tree: `0.4.0rc2`. Each fenced block is the output of that command's `--help`. JSON is printed for every command. `--json` is accepted and does not turn that off.
+Package version in this tree: `0.4.0rc3`. Each fenced block is the output of that command's `--help`. JSON is printed for every command. `--json` is accepted and does not turn that off.
 
 The monitor is read-only. `run-once --no-send` still contacts the read endpoints you configured. It does not sign, build a transaction, or broadcast, and it does not hand the outbox to a sender. Setup steps are in [guide-cli.md](guide-cli.md).
 

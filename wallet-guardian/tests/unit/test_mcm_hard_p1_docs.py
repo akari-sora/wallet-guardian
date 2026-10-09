@@ -17,8 +17,8 @@ DOCS = (
     ROOT / "docs" / "coverage-matrix.md",
     ROOT / "docs" / "release-preview.md",
 )
-FORBIDDEN = ("guardian-0.4.0rc1", "guardian-0.4.0rc2", "no Telegram sender", "tag is not created")
-WHEEL = "wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl"
+FORBIDDEN = ("guardian-0.4.0rc1", "guardian-0.4.0rc3", "no Telegram sender", "tag is not created")
+WHEEL = "wallet_guardian_monitor-0.4.0rc3-py3-none-any.whl"
 
 
 def test_mcm_hard_p1_docs_consistency() -> None:

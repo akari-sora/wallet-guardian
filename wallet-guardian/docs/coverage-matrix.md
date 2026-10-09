@@ -2,7 +2,7 @@
 
 Date of this preview: 2026-10-09. License: AGPL-3.0-only (see `LICENSE`).
 
-The installable distribution is `wallet-guardian-monitor` (wheel `wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl`). Whether git tag `v0.4.0-rc.2` is published, see GitLab releases. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`). `--no-send` forbids sends. The canary is NOT_RUN. How the monitor differs from the optional Action Client is stated once in `docs/threat-model.md`.
+The installable distribution is `wallet-guardian-monitor` (wheel `wallet_guardian_monitor-0.4.0rc3-py3-none-any.whl`). Whether git tag `v0.4.0-rc.3` is published, see GitLab releases. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`). `--no-send` forbids sends. The canary is NOT_RUN. How the monitor differs from the optional Action Client is stated once in `docs/threat-model.md`.
 
 This matrix is the preview claim for chain × capability. It is derived from `config/source-capabilities/*.json`, `config/chains`, `examples/monitor.json`, `src/guardian/sources/`, `src/guardian/protocols/`, `docs/api-keys.md`, `docs/mcm-01/network-tiers.plan.json`, and `docs/coverage.md`. The live probes below are recorded facts. This document does not re-run them. No monitored address, API key, or keyed URL appears here.
 
@@ -84,8 +84,8 @@ Not added: Bitcoin Core `rss.xml` (593 KB) is refused by the parser's item cap. 
 
 ### What is still not verified
 - Alchemy Base, Helius, NodeReal (keyed), GoPlus (keyed), Kinza and UXLINK plugins, Aave on a live position, and any chain not named above have no probe today.
-- TRON and Hyperliquid pipeline support were recommended by the review (`gpt/reply-all-chains.md`) but not built here: they are not claimed.
-- Preview wording: Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS and Solana, with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path; capability varies by network and source (see the tables).
+- TRON: an experimental, opt-in, read-only reader exists (see the TRON row and `docs/coverage-tron.md`). It is disabled by default, not live-qualified, and not claimed as TRON support. Only finalized native TRX transfers produce alert candidates; stored TRC-20 or approval history does not establish token or approval alerting. Hyperliquid pipeline support is not built in the MCM path and is not claimed.
+- Preview wording (TRON is separate: an experimental, opt-in TRON reader is also included, disabled by default and not live-qualified; it provides bounded reads, not complete TRON monitoring, and must not be the sole safety monitor): Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS and Solana, with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path; capability varies by network and source (see the tables).
 
 ## Chain × capability
 
@@ -131,7 +131,7 @@ Not added: Bitcoin Core `rss.xml` (593 KB) is refused by the parser's item cap. 
 | solana-mainnet | history.native_external | parsed events need HELIUS_API_KEY; examples/monitor.json leaves the source disabled | credential_missing | Helius parsed events when the key and URL are set and the source is enabled | not_verified | partial |
 | bsc-mainnet | positions.kinza | Kinza plugin over the BSC RPC, offline CLI fixtures | not_verified | no separate Kinza API key | not_verified | not_verified |
 | ethereum-mainnet | positions.kinza | Kinza plugin over the Ethereum RPC, offline fixtures | not_verified | no separate Kinza API key | not_verified | not_verified |
-| configured-evm | positions.erc4626 | caller-supplied vaults over evm_rpc; the public vault registry is empty | not_verified | no keyed vault source | not_verified | not_verified |
+| configured-evm | positions.erc4626 | opt-in pins for sDAI and Steakhouse USDC (vault exposure only) over evm_rpc, or caller-supplied vaults; off unless configured (`docs/positions-more.md`) | not_verified | no keyed vault source | not_verified | not_verified |
 | bsc-mainnet | positions.lista | Lista slisBNB plugin over BSC RPC | partial | no keyed Lista source | not_verified | partial |
 | hyperliquid-info | positions | read-only info endpoint used by the legacy doctor path | partial | no keyed Hyperliquid source in the MCM routes | not_verified | partial |
 | configured-evm | positions.aave-v3 | Aave V3 plugin over evm_rpc | not_verified | no keyed Aave source | not_verified | not_verified |
@@ -150,8 +150,10 @@ Not added: Bitcoin Core `rss.xml` (593 KB) is refused by the parser's item cap. 
 | sonic-mainnet | enabled_route | not in examples/monitor.json enabled_networks | not_verified | no keyed route in the example monitor | not_verified | not_verified |
 | unichain-mainnet | enabled_route | not in examples/monitor.json enabled_networks | not_verified | no keyed route in the example monitor | not_verified | not_verified |
 | hyperevm-mainnet | enabled_route | not in examples/monitor.json enabled_networks | not_verified | no keyed route in the example monitor | not_verified | not_verified |
-| bitcoin-mainnet | enabled_route | not in examples/monitor.json enabled_networks | not_verified | no keyed route in the example monitor | not_verified | not_verified |
-| tron-mainnet | enabled_route | not in examples/monitor.json enabled_networks | not_verified | no keyed route in the example monitor | not_verified | not_verified |
+| bitcoin-mainnet | enabled_route | listed in examples/monitor.json enabled_networks; address-set-only Esplora path (see the dated Bitcoin probe rows above) | not_verified | no keyed route in the example monitor | not_verified | not_verified |
+| tron-mainnet | experimental_reader | experimental, opt-in, disabled by default; bounded native TRX + TRC-20 history + configured balances; not live-qualified; only finalized native TRX produces alert candidates; do not use as the only safety monitor (`docs/coverage-tron.md`) | not_verified | no keyed route in the example monitor | not_verified | not_verified |
+| ethereum-mainnet | positions.compound-v3 (USDC Comet) | opt-in; stored-index present value, not accrued to now; block height is not block-hash proof; a positive oracle price is not freshness (`docs/positions-more.md`) | not_verified | no keyed source | not_verified | not_verified |
+| yield / promotions | parsers | experimental offline fixture and parser, disabled; no live fetch, scheduler or delivery; extracted terms are partial interpretations (`docs/yield-promotions.md`) | not_verified | no keyed source | not_verified | not_verified |
 | blast-mainnet | enabled_route | not in examples/monitor.json enabled_networks | not_verified | no keyed route in the example monitor | not_verified | not_verified |
 | opbnb-mainnet | enabled_route | not in examples/monitor.json enabled_networks | not_verified | no keyed route in the example monitor | not_verified | not_verified |
 | ton-mainnet | enabled_route | not in examples/monitor.json enabled_networks | not_verified | no keyed route in the example monitor | not_verified | not_verified |
@@ -221,7 +223,9 @@ Keyless sources that the routes still name:
 - BSC external history has no keyless source.
 - Avalanche deep native history is expansion_pending.
 - `guardian install-service` is a dry-run installer. No unit has been installed on a host, and the host smoke is NOT_RUN. See `docs/box-unattended.md`.
-- No git tag is created by this preview, and nothing is published.
+- Tagged previews are published only as GitLab releases. Nothing is uploaded to PyPI or any package index.
+- Deferred and not claimed: sUSDe, Morpho Blue markets, TRC-20 and approval alerting on TRON, TRON genesis identity verification, yield live fetch, scheduler and delivery.
+- Text-handling residuals (see `docs/injection-privacy-tests.md`): a double HTML escape is cosmetic; the incident matcher can miss digit-plus-letter tokens such as "Aave v3 incident"; `privacy_boundary` is a policy table, not proof of isolation; there is no claim of general prompt-injection immunity.
 - Failed reads, missing keys, plan refusals, and unrun probes are gaps. They are not zero balances and they are not a finished scan.
 
 ## Machine-readable cells
@@ -810,13 +814,14 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "id": "configured-evm/positions.erc4626",
       "network": "configured-evm",
       "capability": "positions.erc4626",
-      "no_key_path": "caller-supplied vaults over evm_rpc; the public vault registry is empty",
+      "no_key_path": "opt-in pins for sDAI and Steakhouse USDC (vault exposure only) over evm_rpc, or caller-supplied vaults; off unless configured (`docs/positions-more.md`)",
       "no_key_status": "not_verified",
       "keyed_path": "no keyed vault source",
       "keyed_status": "not_verified",
       "status": "not_verified",
       "capability_files": [
-        "config/protocols/erc4626.json"
+        "config/protocols/erc4626.json",
+        "config/protocols/erc4626-pins.json"
       ],
       "note": "With no configured vaults and no prior position the plugin returns unknown / vaults_not_configured and the cell is not required. That is not an empty position."
     },
@@ -1074,7 +1079,7 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "id": "bitcoin-mainnet/enabled-route",
       "network": "bitcoin-mainnet",
       "capability": "enabled_route",
-      "no_key_path": "not in examples/monitor.json enabled_networks",
+      "no_key_path": "listed in examples/monitor.json enabled_networks; address-set-only Esplora path (see the dated Bitcoin probe rows above)",
       "no_key_status": "not_verified",
       "keyed_path": "no keyed route in the example monitor",
       "keyed_status": "not_verified",
@@ -1082,13 +1087,13 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "capability_files": [
         "config/source-capabilities/esplora.json"
       ],
-      "note": "Bitcoin tier 1. esplora.json is the capability file. Not enabled in the example monitor. network-tiers.plan.json status is planned_not_live_verified."
+      "note": "Bitcoin tier 1. esplora.json is the capability file. Listed in the example monitor; address-set-only. network-tiers.plan.json status is planned_not_live_verified."
     },
     {
-      "id": "tron-mainnet/enabled-route",
+      "id": "tron-mainnet/experimental-reader",
       "network": "tron-mainnet",
-      "capability": "enabled_route",
-      "no_key_path": "not in examples/monitor.json enabled_networks",
+      "capability": "experimental_reader",
+      "no_key_path": "experimental, opt-in, disabled by default; bounded native TRX + TRC-20 history + configured balances; not live-qualified; only finalized native TRX produces alert candidates; do not use as the only safety monitor (`docs/coverage-tron.md`)",
       "no_key_status": "not_verified",
       "keyed_path": "no keyed route in the example monitor",
       "keyed_status": "not_verified",
@@ -1096,7 +1101,35 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "capability_files": [
         "config/source-capabilities/tron_grid.json"
       ],
-      "note": "Tron tier 1. tron_grid.json is the capability file. Not enabled in the example monitor. network-tiers.plan.json status is planned_not_live_verified."
+      "note": "Chain file stays enabled:false and planned_not_live_verified; genesis identity is not verified; no TRC-20 or approval alerting."
+    },
+    {
+      "id": "ethereum-mainnet/positions.compound-v3",
+      "network": "ethereum-mainnet",
+      "capability": "positions.compound-v3 (USDC Comet)",
+      "no_key_path": "opt-in; stored-index present value, not accrued to now; block height is not block-hash proof; a positive oracle price is not freshness (`docs/positions-more.md`)",
+      "no_key_status": "not_verified",
+      "keyed_path": "no keyed source",
+      "keyed_status": "not_verified",
+      "status": "not_verified",
+      "capability_files": [
+        "config/protocols/compound-v3.json"
+      ],
+      "note": "Opt-in only. Offline fixtures; no live verification is claimed."
+    },
+    {
+      "id": "yield-promotions/parsers",
+      "network": "yield / promotions",
+      "capability": "parsers",
+      "no_key_path": "experimental offline fixture and parser, disabled; no live fetch, scheduler or delivery; extracted terms are partial interpretations (`docs/yield-promotions.md`)",
+      "no_key_status": "not_verified",
+      "keyed_path": "no keyed source",
+      "keyed_status": "not_verified",
+      "status": "not_verified",
+      "capability_files": [
+        "config/yields/pool-mapping.v1.json"
+      ],
+      "note": "Inert package: parsers and fixtures only."
     },
     {
       "id": "blast-mainnet/enabled-route",

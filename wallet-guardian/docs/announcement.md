@@ -1,6 +1,6 @@
 # Announcement
 
-The project's GitLab Releases page: `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.2`
+The project's GitLab Releases page: `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.3`
 
 ## English
 
