@@ -15,7 +15,7 @@ from guardian.chains.evm.adapter import LOG_RANGE_MAX, evm_rpc
 from guardian.chains.evm.permissions import APPROVAL_LOG_TOPICS, approval_log_operation, scan_approvals
 from guardian.chains.evm.permits import PERMIT2_PERMIT_TOPIC
 from guardian.coverage import CoverageObservation
-from guardian.scan.window import plan_chunks, read_logs, reject_wallet_emitter, window_covers
+from guardian.scan.window import plan_chunks, read_log_leaf, read_logs, reject_wallet_emitter, window_covers
 from guardian.security.transport_policy import Operation
 from guardian.sources.alchemy import AlchemyClient
 from guardian.sources.blockscout import BlockscoutClient
@@ -23,6 +23,9 @@ from guardian.sources.budget import BootstrapStop, BudgetExhausted
 from guardian.sources.etherscan import EtherscanClient, HistoryRead
 from guardian.sources.key_guide import credential_hint
 from guardian.sources.nodereal import NodeRealClient
+
+# Used when polling.round_deadline_seconds is omitted. See docs/mcm-live-01r.md.
+DEFAULT_ROUND_DEADLINE_SECONDS = 180
 
 _INDEXERS = frozenset({"alchemy_transfers", "blockscout", "etherscan_v2", "nodereal_transfers"})
 _SOURCE_REFUSALS = frozenset({
@@ -97,6 +100,22 @@ def read_token_logs(scan: ScanContext, stored: int | None, log_done: set[str]) -
     if scan.head is None:
         _block_all(scan, wallets, capability, "head_unreadable")
         return
+
+    def walk() -> None:
+        _token_walk(scan, wallets, stored, capability)
+
+    if not _split_backfill(scan, stored):
+        walk()
+        return
+    try:
+        _quick_token_window(scan, wallets, stored)
+    except (BootstrapStop, BudgetExhausted):
+        walk()
+        return
+    scan.deferred_token = walk
+
+
+def _token_walk(scan: ScanContext, wallets: list, stored: int | None, capability: str) -> None:
     candidates = _log_plan(scan)
     wallet_set = {address.lower() for _wallet, address in wallets}
     leaves: list[tuple[int, int]] = []
@@ -141,6 +160,10 @@ def read_token_logs(scan: ScanContext, stored: int | None, log_done: set[str]) -
                 stopped = "budget_exhausted"
                 failed = True
                 break
+            except BootstrapStop as exc:
+                stopped = exc.reason
+                failed = True
+                break
             if not read.ok:
                 if read.gap:
                     gaps.append(read.gap)
@@ -148,7 +171,7 @@ def read_token_logs(scan: ScanContext, stored: int | None, log_done: set[str]) -
                     hard = read.reason or "read_error"
                 failed = True
                 break
-        if stopped == "deadline":
+        if stopped in {"deadline", "bootstrap_request_cap"}:
             break
         if not failed:
             hard = None
@@ -179,19 +202,15 @@ def read_approvals(
     wallets = {(item[1].lower(), item[0]) for item in scan.peers}
     wallet_for = {addr: wid for addr, wid in wallets}
     leaves: list[tuple[int, int]] = []
-    gaps: list[str] = []
-    hard: str | None = None
-    stopped: str | None = None
-    found = False
-    origin = 0
     reported = candidates[0]
     chosen = {"id": reported}
+    status = {"found": False}
     owners = [address] if len(scan.peers) <= 1 else [item[1] for item in scan.peers]
     # Followers still need their own state reads. The log query is shared when several wallets are on the chain.
     leader = not scan.peers or scan.peers[0][0] == wallet_id
+    advance = {"on": True}
 
     def on_leaf(start: int, end: int, logs: list[Any]) -> None:
-        nonlocal found
         if not leader:
             return
         source_id = chosen["id"]
@@ -220,27 +239,53 @@ def read_approvals(
             if any(item.category == "error" for item in scan_rows.coverage.values()):
                 raise _LeafError("read_error")
             if scan_rows.rows:
-                found = True
+                status["found"] = True
             scan.remember_approval(scan, wid, scan_rows, active, new_events)
         _note_logs(scan, logs)
-        _permit_notes(scan, owners, start, end, notes, wallet_for, source_id)
         cursors = []
-        for owner in owners:
-            wid = wallet_for.get(owner.lower(), wallet_id)
-            for capability in (
-                "permissions.erc1155_operator",
-                "permissions.erc20",
-                "permissions.erc721_operator",
-                "permissions.erc721_token",
-            ):
-                cursors.append(_cursor(wid, scan.network, capability, end))
+        if advance["on"]:
+            for owner in owners:
+                wid = wallet_for.get(owner.lower(), wallet_id)
+                for capability in (
+                    "permissions.erc1155_operator",
+                    "permissions.erc20",
+                    "permissions.erc721_operator",
+                    "permissions.erc721_token",
+                ):
+                    cursors.extend(_advancing_cursors(scan, [wid], capability, end))
         scan.database.commit_capability_cycle(
             scan.tenant, events=scan.events[before:], capability_rows=[], cursors=cursors, alerts=[],
         )
-        leaves.append((start, end))
+        if advance["on"]:
+            leaves.append((start, end))
+        _permit_notes(scan, owners, start, end, notes, wallet_for, source_id)
+
+    def walk() -> None:
+        _approval_walk(
+            scan, wallet_id, address, stored, candidates, chosen, owners, on_leaf, leaves, status,
+        )
 
     if not leader:
         return
+    # The quick windows (token, then approvals) run before either historical walk.
+    if _split_backfill(scan, stored):
+        advance["on"] = False
+        try:
+            _quick_approval_window(scan, stored, owners, on_leaf, chosen)
+        except (BootstrapStop, BudgetExhausted, _LeafError):
+            pass
+        finally:
+            advance["on"] = True
+    _flush_deferred_token(scan)
+    walk()
+
+
+def _approval_walk(scan, wallet_id, address, stored, candidates, chosen, owners, on_leaf, leaves, status) -> None:
+    gaps: list[str] = []
+    hard: str | None = None
+    stopped: str | None = None
+    origin = 0
+    reported = candidates[0]
     for index, candidate in enumerate(candidates):
         planned = _next_log_chunks(scan, index=index, candidate=candidate, stored=stored, leaves=leaves, origin=origin, per_chunk=2)
         if planned is None:
@@ -256,7 +301,7 @@ def read_approvals(
                 break
             try:
                 read = read_logs(
-                    scan.transport,
+                    _log_transport(scan),
                     candidate,
                     lambda leaf_start, leaf_end, owners=owners: _approval_operation(owners, leaf_start, leaf_end),
                     start,
@@ -271,6 +316,10 @@ def read_approvals(
                 stopped = "budget_exhausted"
                 failed = True
                 break
+            except BootstrapStop as exc:
+                stopped = exc.reason
+                failed = True
+                break
             except _LeafError as exc:
                 hard = exc.reason
                 failed = True
@@ -282,7 +331,7 @@ def read_approvals(
                     hard = read.reason or "read_error"
                 failed = True
                 break
-        if stopped == "deadline":
+        if stopped in {"deadline", "bootstrap_request_cap"}:
             break
         if not failed:
             hard = None
@@ -294,7 +343,7 @@ def read_approvals(
     targets = scan.peers if len(scan.peers) > 1 else [(wallet_id, address)]
     _finish(
         scan, "permissions.erc20", targets, origin, scan.head, leaves, gaps, hard, stopped,
-        "ok" if found else "empty", reported, permission=True,
+        "ok" if status["found"] else "empty", reported, permission=True,
     )
 
 
@@ -358,11 +407,17 @@ class _LeafError(Exception):
 
 
 def _transfer_span(scan, wallets, start, end, contract, batch, on_leaf, source_id):
+    """Read incoming and outgoing logs on the same ranges.
+
+    A leaf is committed only when both directions of that exact span succeed.
+    If either direction refuses the width, both are split at the same midpoint.
+    """
     addresses = [address for _wallet, address in wallets]
     wallet_set = {address.lower() for address in addresses}
-    incoming = _transfer_operation(start, end, addresses, 2, contract, wallet_set)
-    outgoing = _transfer_operation(start, end, addresses, 1, contract, wallet_set)
+    transport = _log_transport(scan)
     if batch:
+        incoming = _transfer_operation(start, end, addresses, 2, contract, wallet_set)
+        outgoing = _transfer_operation(start, end, addresses, 1, contract, wallet_set)
         operation = Operation(
             protocol="jsonrpc",
             adapter="evm_rpc",
@@ -372,8 +427,8 @@ def _transfer_span(scan, wallets, start, end, contract, batch, on_leaf, source_i
             ),
         )
         try:
-            result = scan.transport.request(source_id, operation, credits=2)
-        except BudgetExhausted:
+            result = transport.request(source_id, operation, credits=2)
+        except (BudgetExhausted, BootstrapStop):
             raise
         except Exception:
             result = None
@@ -382,41 +437,62 @@ def _transfer_span(scan, wallets, start, end, contract, batch, on_leaf, source_i
             on_leaf(start, end, logs)
             from guardian.scan.window import LogRead
             return LogRead(True, "", None, end)
-    bag: list[tuple[int, int, list[Any]]] = []
-
-    def stash(leaf_start: int, leaf_end: int, logs: list[Any]) -> None:
-        bag.append((leaf_start, leaf_end, logs))
-
-    first = read_logs(
-        scan.transport, source_id, lambda leaf_start, leaf_end: _transfer_operation(leaf_start, leaf_end, addresses, 2, contract, wallet_set),
-        start, end, wallets=wallet_set, retry_attempts=scan.transport.retry_attempts(source_id),
-        sleep=_sleep(scan, source_id), clock=scan.clock, on_leaf=stash,
+    return _paired_transfers(
+        scan, transport, source_id, addresses, start, end, contract, wallet_set, on_leaf,
     )
-    second = read_logs(
-        scan.transport, source_id, lambda leaf_start, leaf_end: _transfer_operation(leaf_start, leaf_end, addresses, 1, contract, wallet_set),
-        start, end, wallets=wallet_set, retry_attempts=scan.transport.retry_attempts(source_id),
-        sleep=_sleep(scan, source_id), clock=scan.clock, on_leaf=stash,
-    )
-    _flush_pairs(bag, on_leaf, require_pair=True)
-    if not first.ok:
-        return first
-    if not second.ok:
-        return second
+
+
+def _paired_transfers(scan, transport, source_id, addresses, start, end, contract, wallet_set, on_leaf):
+    """Bisect both directions together. Commit only a span both sides have read."""
     from guardian.scan.window import LogRead
-    return LogRead(True, "", None, end)
+
+    if end < start:
+        return LogRead(False, "bad_range", None, None)
+    incoming = _one_direction(scan, transport, source_id, addresses, start, end, 2, contract, wallet_set)
+    outgoing = _one_direction(scan, transport, source_id, addresses, start, end, 1, contract, wallet_set)
+    if incoming[0].ok and outgoing[0].ok:
+        on_leaf(start, end, _dedupe_logs([*incoming[1], *outgoing[1]]))
+        return LogRead(True, "", None, end)
+    gap = incoming[0].gap or outgoing[0].gap
+    if start == end:
+        if gap is None:
+            gap = f"single_block_unreadable:{start}"
+        reason = incoming[0].reason or outgoing[0].reason or "read_error"
+        return LogRead(False, reason, gap, None)
+    if gap:
+        return LogRead(False, incoming[0].reason or outgoing[0].reason or "read_error", gap, None)
+    hard_in = not incoming[0].ok and not incoming[0].refused_range
+    hard_out = not outgoing[0].ok and not outgoing[0].refused_range
+    if hard_in or hard_out:
+        reason = incoming[0].reason if hard_in and incoming[0].reason else outgoing[0].reason
+        return LogRead(False, reason or "read_error", None, None)
+    if (incoming[0].refused_range or outgoing[0].refused_range) and end > start:
+        mid = start + (end - start) // 2
+        left = _paired_transfers(
+            scan, transport, source_id, addresses, start, mid, contract, wallet_set, on_leaf,
+        )
+        if not left.ok:
+            return left
+        return _paired_transfers(
+            scan, transport, source_id, addresses, mid + 1, end, contract, wallet_set, on_leaf,
+        )
+    return LogRead(False, incoming[0].reason or outgoing[0].reason or "read_error", None, None)
 
 
-def _flush_pairs(bag, on_leaf, *, require_pair: bool) -> None:
-    grouped: dict[tuple[int, int], list[Any]] = {}
-    counts: dict[tuple[int, int], int] = {}
-    for leaf_start, leaf_end, logs in bag:
-        key = (leaf_start, leaf_end)
-        grouped.setdefault(key, []).extend(logs)
-        counts[key] = counts.get(key, 0) + 1
-    for key in sorted(grouped):
-        if require_pair and counts[key] < 2:
-            continue
-        on_leaf(key[0], key[1], _dedupe_logs(grouped[key]))
+def _one_direction(scan, transport, source_id, addresses, start, end, index, contract, wallet_set):
+    return read_log_leaf(
+        transport,
+        source_id,
+        lambda leaf_start, leaf_end, index=index: _transfer_operation(
+            leaf_start, leaf_end, addresses, index, contract, wallet_set,
+        ),
+        start,
+        end,
+        wallets=wallet_set,
+        retry_attempts=scan.transport.retry_attempts(source_id),
+        sleep=_sleep(scan, source_id),
+        clock=scan.clock,
+    )
 
 
 def _transfer_operation(start, end, addresses, index, contract, wallets):
@@ -464,7 +540,7 @@ def _run_indexer(scan, source_id, source, adapter, wallet_id, address, stored, p
             native.partial = True
         return native
     if adapter == "nodereal_transfers":
-        client = NodeRealClient(limited, source_id, network=scan.network, clock=scan.clock, sleep=lambda _seconds: None, random=lambda: 0.0)
+        client = NodeRealClient(limited, source_id, network=scan.network, clock=scan.clock, sleep=_sleep(scan, source_id), random=lambda: 0.0)
         native = _walk_pages(scan, chunks, origin, wallet_id, "history.native_external", source_id, True, lambda start, end: _nodereal_sides(client, "external", address, start, end, stored))
         if native.refusal:
             _probe_internal(scan, client, wallet_id, address, stored)
@@ -759,7 +835,7 @@ def _etherscan(scan, source_id, source, transport=None) -> EtherscanClient:
     name = source.get("credential_env") if isinstance(source.get("credential_env"), str) else "ETHERSCAN_API_KEY"
     secret = _secret(scan, name)
     return EtherscanClient(
-        transport or scan.transport, source_id, credential=secret, credential_env=name, clock=scan.clock, sleep=lambda _seconds: None,
+        transport or scan.transport, source_id, credential=secret, credential_env=name, clock=scan.clock, sleep=_sleep(scan, source_id),
     )
 
 
@@ -767,7 +843,7 @@ def _blockscout(scan, source_id, source, transport=None) -> BlockscoutClient:
     name = source.get("credential_env") if isinstance(source.get("credential_env"), str) else ""
     secret = _secret(scan, name) if name else ""
     return BlockscoutClient(
-        transport or scan.transport, source_id, clock=scan.clock, sleep=lambda _seconds: None, random=lambda: 0.0, credential=secret,
+        transport or scan.transport, source_id, clock=scan.clock, sleep=_sleep(scan, source_id), random=lambda: 0.0, credential=secret,
     )
 
 
@@ -808,11 +884,19 @@ def _finish(scan, capability, wallets, origin, target, leaves, gaps, hard, stopp
             extra = list(gaps)
             if stopped:
                 extra.append(stopped)
+            if stopped in {"bootstrap_request_cap", "deadline"}:
+                extra.append("historical_backfill_pending")
             if not extra:
                 extra.append("unread_gap")
             scan.observations[(wallet_id, scan.network, name)] = _window("partial", origin, target, source_id, False, scan.checkpoint, tuple(dict.fromkeys(extra)))
             if leaves:
-                scan.advance(scan.explicit_cursors, scan.held_cursors, wallet_id, scan.network, name, leaves[-1][1])
+                end = leaves[-1][1]
+                known = _known_cursor_block(scan, wallet_id, name)
+                if known is not None and end < known:
+                    scan.hold(scan.held_cursors, wallet_id, scan.network, name)
+                else:
+                    scan.advance(scan.explicit_cursors, scan.held_cursors, wallet_id, scan.network, name, end)
+                    _note_cursor_block(scan, wallet_id, name, end)
             else:
                 scan.hold(scan.held_cursors, wallet_id, scan.network, name)
 
@@ -853,10 +937,62 @@ def _window(category, origin, target, source_id, complete, checkpoint, gaps: tup
 def _commit_leaf(scan, rows, capability, end, wallet_ids) -> None:
     before = len(scan.events)
     scan.emit(rows, scan.candidates, scan.events, scan.seen_transfers, scan.tenant, scan.chain_id, scan.started, scan.head, scan.source_id)
-    cursors = [_cursor(wallet_id, scan.network, capability, end) for wallet_id in wallet_ids]
+    cursors = _advancing_cursors(scan, wallet_ids, capability, end)
     scan.database.commit_capability_cycle(
         scan.tenant, events=scan.events[before:], capability_rows=[], cursors=cursors, alerts=[],
     )
+
+
+def _advancing_cursors(scan, wallet_ids, capability: str, end: int) -> list[dict[str, str]]:
+    """Cursor rows that move forward. An overlap re-read must not walk the cursor backward."""
+    rows = []
+    for wallet_id in wallet_ids:
+        known = _known_cursor_block(scan, wallet_id, capability)
+        if known is not None and end < known:
+            continue
+        rows.append(_cursor(wallet_id, scan.network, capability, end))
+        _note_cursor_block(scan, wallet_id, capability, end)
+    return rows
+
+
+def _known_cursor_block(scan, wallet_id: str, capability: str) -> int | None:
+    book = _cursor_book(scan)
+    key = (wallet_id, capability)
+    if key not in book:
+        book[key] = _load_cursor_block(scan, wallet_id, capability)
+    value = book[key]
+    return value if isinstance(value, int) else None
+
+
+def _note_cursor_block(scan, wallet_id: str, capability: str, end: int) -> None:
+    book = _cursor_book(scan)
+    key = (wallet_id, capability)
+    current = book.get(key)
+    if not isinstance(current, int) or end > current:
+        book[key] = end
+
+
+def _cursor_book(scan) -> dict:
+    book = getattr(scan, "_cursor_high", None)
+    if book is None:
+        book = {}
+        scan._cursor_high = book
+    return book
+
+
+def _load_cursor_block(scan, wallet_id: str, capability: str) -> int | None:
+    rows = scan.database.capability_cursors_for(scan.tenant, wallet_id=wallet_id, network=scan.network)
+    for row in rows:
+        if row.get("capability") != capability:
+            continue
+        text = row.get("block_number")
+        if text is None:
+            text = row.get("cursor")
+        try:
+            return int(text)
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 def _cursor(wallet_id: str, network: str, capability: str, block: int) -> dict[str, str]:
@@ -989,7 +1125,9 @@ def _permit_notes(scan, owners, start, end, notes, wallet_for, source_id: str | 
                 "topics": [PERMIT2_PERMIT_TOPIC, pad_address(owner)],
             }])
             reject_wallet_emitter(operation, {item.lower() for item in owners})
-            result = scan.transport.request(label, operation)
+            result = _log_transport(scan).request(label, operation)
+        except (BudgetExhausted, BootstrapStop):
+            raise
         except Exception:
             continue
         body = getattr(result, "body", None)
@@ -1052,19 +1190,64 @@ def _dedupe_logs(logs: list[Any]) -> list[Any]:
     return found
 
 
+def _round_deadline(scan) -> int:
+    value = scan.deadline
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+        return value
+    return DEFAULT_ROUND_DEADLINE_SECONDS
+
+
+def _remaining_seconds(scan) -> float:
+    return _round_deadline(scan) - (scan.clock() - scan.started_at)
+
+
 def _past_deadline(scan) -> bool:
-    if not isinstance(scan.deadline, int) or isinstance(scan.deadline, bool) or scan.deadline < 1:
-        return False
-    return scan.clock() - scan.started_at >= scan.deadline
+    if getattr(scan, "deadline_hit", False):
+        return True
+    return _remaining_seconds(scan) <= 0
+
+
+def _sleeper_for(scan):
+    backend = getattr(scan.transport, "backend", None)
+    sleeper = getattr(backend, "sleeper", None)
+    if sleeper is None:
+        sleeper = getattr(scan.transport, "sleeper", None)
+    if sleeper is None:
+        import time
+        return time.sleep
+    return sleeper
+
+
+def _note_wait(scan, source_id: str, planned: float, actual: float) -> None:
+    ledger = getattr(scan.transport, "provenance", None)
+    if ledger is None or not hasattr(ledger, "note_backoff"):
+        return
+    ledger.note_backoff(source_id, actual)
+    book = getattr(ledger, "backoff", None)
+    if isinstance(book, list) and book and isinstance(book[-1], dict):
+        book[-1]["planned_wait_seconds"] = planned
+        book[-1]["actual_wait_seconds"] = actual
 
 
 def _sleep(scan, source_id: str | None = None):
+    """Wait for real. A wait that would pass the round deadline is not taken."""
     label = source_id or scan.source_id
 
     def pause(seconds: float) -> None:
-        ledger = getattr(scan.transport, "provenance", None)
-        if ledger is not None:
-            ledger.note_backoff(label, seconds)
+        try:
+            planned = float(seconds)
+        except (TypeError, ValueError):
+            planned = 0.0
+        if planned < 0:
+            planned = 0.0
+        remaining = _remaining_seconds(scan)
+        if planned > remaining:
+            _note_wait(scan, label, planned, 0.0)
+            scan.deadline_hit = True
+            raise BootstrapStop("deadline")
+        _note_wait(scan, label, planned, planned)
+        if planned > 0:
+            _sleeper_for(scan)(planned)
     return pause
 
 
@@ -1169,6 +1352,153 @@ def _route_ids(public_config, network: str, capability: str) -> list[str]:
                 found.append(item)
             return found
     return []
+
+
+def _split_backfill(scan, stored: int | None) -> bool:
+    """True when the historical span is more than the one chunk that ends at head."""
+    if scan.head is None:
+        return False
+    chunks, _origin, _candidate = _first_plan(scan, stored)
+    return len(chunks) > 1
+
+
+def _first_plan(scan, stored: int | None):
+    candidate = _log_plan(scan)[0]
+    limit = min(_source_int(scan, "log_range_max", LOG_RANGE_MAX, source_id=candidate), LOG_RANGE_MAX)
+    chunks, origin = plan_chunks(
+        stored,
+        int(scan.head),
+        limit=limit,
+        bootstrap_origin=scan.bootstrap_origin,
+        overlap=scan.overlap,
+    )
+    return chunks, origin, candidate
+
+
+def _quick_token_window(scan, wallets, stored: int | None) -> None:
+    """Head chunk only. Events are stored. The historical cursor stays put."""
+    chunks, _origin, candidate = _first_plan(scan, stored)
+    if len(chunks) < 2:
+        return
+    start, end = chunks[-1]
+    wallet_set = {address.lower() for _wallet, address in wallets}
+    contract = _log_contract(scan, wallet_set, candidate)
+    batch = _source_flag(scan, "batch_reads", candidate)
+
+    def on_leaf(_start: int, _end: int, logs: list[Any]) -> None:
+        rows: list[dict[str, Any]] = []
+        for wallet_id, address in wallets:
+            rows.extend(scan.movement_rows(account_logs(logs, address), wallet_id, scan.network, candidate))
+        _note_logs(scan, logs)
+        _commit_events_only(scan, rows)
+
+    _transfer_span(scan, wallets, start, end, contract, batch, on_leaf, candidate)
+
+
+def _quick_approval_window(scan, stored, owners, on_leaf, chosen) -> None:
+    chunks, _origin, candidate = _first_plan(scan, stored)
+    if len(chunks) < 2:
+        return
+    start, end = chunks[-1]
+    chosen["id"] = candidate
+    read_logs(
+        _log_transport(scan),
+        candidate,
+        lambda leaf_start, leaf_end, owners=owners: _approval_operation(owners, leaf_start, leaf_end),
+        start,
+        end,
+        wallets={item.lower() for item in owners},
+        retry_attempts=scan.transport.retry_attempts(candidate),
+        sleep=_sleep(scan, candidate),
+        clock=scan.clock,
+        on_leaf=on_leaf,
+    )
+
+
+def _flush_deferred_token(scan) -> None:
+    deferred = getattr(scan, "deferred_token", None)
+    if deferred is None:
+        return
+    scan.deferred_token = None
+    deferred()
+
+
+def _commit_events_only(scan, rows) -> None:
+    before = len(scan.events)
+    scan.emit(
+        rows, scan.candidates, scan.events, scan.seen_transfers, scan.tenant, scan.chain_id,
+        scan.started, scan.head, scan.source_id,
+    )
+    if not scan.events[before:]:
+        return
+    scan.database.commit_capability_cycle(
+        scan.tenant, events=scan.events[before:], capability_rows=[], cursors=[], alerts=[],
+    )
+
+
+def _log_transport(scan):
+    cached = getattr(scan, "_log_cap", None)
+    if cached is not None:
+        return cached
+    cached = _LogCapTransport(scan.transport, scan)
+    scan._log_cap = cached
+    return cached
+
+
+class _LogCapTransport:
+    """Counts eth_getLogs against the same per-source bootstrap cap as indexers.
+
+    A JSON-RPC batch counts as one credit per log method inside it.
+    """
+
+    def __init__(self, inner, scan) -> None:
+        self._inner = inner
+        self._scan = scan
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
+
+    def request(self, source_id: str, operation, **kwargs):
+        if _counts_as_log(operation):
+            reason = _reserve_bootstrap(self._scan, source_id, _log_credits(operation))
+            if reason:
+                raise BootstrapStop(reason)
+        return self._inner.request(source_id, operation, **kwargs)
+
+
+def _counts_as_log(operation) -> bool:
+    if getattr(operation, "method", None) == "eth_getLogs":
+        return True
+    batch = getattr(operation, "batch", None)
+    if not batch:
+        return False
+    return any(isinstance(item, dict) and item.get("method") == "eth_getLogs" for item in batch)
+
+
+def _log_credits(operation) -> int:
+    batch = getattr(operation, "batch", None)
+    if batch:
+        count = sum(1 for item in batch if isinstance(item, dict) and item.get("method") == "eth_getLogs")
+        return max(1, count)
+    return 1
+
+
+def _reserve_bootstrap(scan, source_id: str, credits: int) -> str | None:
+    if _past_deadline(scan):
+        return "deadline"
+    cap = getattr(scan.transport, "bootstrap_request_cap", None)
+    used = getattr(scan.transport, "bootstrap_requests", None)
+    if not isinstance(used, dict):
+        return None
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap < 1:
+        return None
+    count = used.get(source_id, 0)
+    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+        count = 0
+    if count >= cap or count + credits > cap:
+        return "bootstrap_request_cap"
+    used[source_id] = count + credits
+    return None
 
 
 class _LimitedTransport:

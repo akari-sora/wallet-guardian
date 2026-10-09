@@ -13,7 +13,7 @@ from typing import Any
 
 from guardian.chains.evm.adapter import LOG_RANGE_MAX
 from guardian.errors import SecurityError
-from guardian.sources.budget import BudgetExhausted
+from guardian.sources.budget import BootstrapStop, BudgetExhausted
 from guardian.sources.retry import read_with_retry
 
 _RANGE_NEEDLES = (
@@ -37,6 +37,7 @@ class LogRead:
     reason: str
     gap: str | None
     covered_end: int | None
+    refused_range: bool = False
 
 
 def plan_chunks(
@@ -115,6 +116,53 @@ def reject_wallet_emitter(operation: Any, wallets: set[str]) -> None:
             raise SecurityError("wallet_is_not_log_emitter")
 
 
+def read_log_leaf(
+    transport: Any,
+    source_id: str,
+    build: Callable[[int, int], Any],
+    start: int,
+    end: int,
+    *,
+    wallets: set[str],
+    retry_attempts: int,
+    sleep: Callable[[float], None],
+    clock: Callable[[], float],
+) -> tuple[LogRead, list[Any]]:
+    """One ``eth_getLogs`` for ``start..end``. No bisection.
+
+    A sleeper that refuses the wait raises ``BootstrapStop`` and is not swallowed.
+    """
+    if end < start:
+        return LogRead(False, "bad_range", None, None), []
+    operation = build(start, end)
+    reject_wallet_emitter(operation, wallets)
+    try:
+        result = read_with_retry(
+            lambda: transport.request(source_id, operation),
+            retry_attempts=retry_attempts,
+            sleep=sleep,
+            random=lambda: 0.0,
+            clock=clock,
+        )
+    except (SecurityError, BudgetExhausted, BootstrapStop):
+        raise
+    except Exception as exc:
+        reason = str(getattr(exc, "reason", "") or "read_error")
+        if start == end:
+            return LogRead(False, reason, f"single_block_unreadable:{start}", None), []
+        return LogRead(False, reason, None, None), []
+    logs = _logs(result)
+    if logs is not None:
+        return LogRead(True, "", None, end), logs
+    body = getattr(result, "body", None)
+    reason = str(getattr(result, "reason", "") or "read_error")
+    if start == end:
+        return LogRead(False, reason, f"single_block_unreadable:{start}", None), []
+    if range_refusal(body, reason) and end > start:
+        return LogRead(False, reason, None, None, refused_range=True), []
+    return LogRead(False, reason, None, None), []
+
+
 def read_logs(
     transport: Any,
     source_id: str,
@@ -129,35 +177,15 @@ def read_logs(
     on_leaf: Callable[[int, int, list[Any]], None] | None = None,
 ) -> LogRead:
     """Read one span. Bisect only when the endpoint says the range is too large."""
-    if end < start:
-        return LogRead(False, "bad_range", None, None)
-    operation = build(start, end)
-    reject_wallet_emitter(operation, wallets)
-    try:
-        result = read_with_retry(
-            lambda: transport.request(source_id, operation),
-            retry_attempts=retry_attempts,
-            sleep=sleep,
-            random=lambda: 0.0,
-            clock=clock,
-        )
-    except (SecurityError, BudgetExhausted):
-        raise
-    except Exception as exc:
-        reason = str(getattr(exc, "reason", "") or "read_error")
-        if start == end:
-            return LogRead(False, reason, f"single_block_unreadable:{start}", None)
-        return LogRead(False, reason, None, None)
-    logs = _logs(result)
-    if logs is not None:
+    leaf, logs = read_log_leaf(
+        transport, source_id, build, start, end,
+        wallets=wallets, retry_attempts=retry_attempts, sleep=sleep, clock=clock,
+    )
+    if leaf.ok:
         if on_leaf is not None:
             on_leaf(start, end, logs)
-        return LogRead(True, "", None, end)
-    body = getattr(result, "body", None)
-    reason = str(getattr(result, "reason", "") or "read_error")
-    if start == end:
-        return LogRead(False, reason, f"single_block_unreadable:{start}", None)
-    if range_refusal(body, reason) and end > start:
+        return leaf
+    if leaf.refused_range and end > start:
         mid = start + (end - start) // 2
         left = read_logs(
             transport, source_id, build, start, mid,
@@ -169,7 +197,7 @@ def read_logs(
             transport, source_id, build, mid + 1, end,
             wallets=wallets, retry_attempts=retry_attempts, sleep=sleep, clock=clock, on_leaf=on_leaf,
         )
-    return LogRead(False, reason, None, None)
+    return leaf
 
 
 def _logs(result: Any) -> list[Any] | None:
