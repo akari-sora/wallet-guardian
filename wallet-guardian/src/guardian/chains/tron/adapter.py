@@ -541,7 +541,7 @@ def _native_row(
         verdict, txid, "native", watch, None, asset, chain_uid, tenant_id, wallet_id, network,
         observed_at, source_id, events, verify,
     )
-    return "done"
+    return "verified"
 
 
 def _trc20_history(
@@ -599,29 +599,39 @@ def _trc20_row(
         return "pending"
     token_asset = f"tron-trc20:{token_id}"
     movement = "approval" if kind == "approval" else "transfer"
-    log_index = None
     if verdict.kind == "success":
+        # The receipt lists every real log. A later indexer copy of this row,
+        # including one fetched after a page-cap restart, is not a new log.
         used = verify.logs.setdefault(txid.lower(), set())
-        log_index = _matching_log(verdict.info, kind, token_id, sender, target, amount, used)
-        if log_index is None:
-            # A later indexer copy of a log already taken is the same identity.
+        indexes: list[int] = []
+        while True:
+            log_index = _matching_log(verdict.info, kind, token_id, sender, target, amount, used)
+            if log_index is None:
+                break
+            indexes.append(log_index)
+        if not indexes:
             if _matching_log(verdict.info, kind, token_id, sender, target, amount) is not None:
                 return "done"
             reasons.append("trc20_event_unmatched")
             _emit_fee(txid, verdict, asset, chain_uid, tenant_id, wallet_id, network, observed_at, source_id, events, verify.fees, watch)
-            return "done"
+            return "verified"
+        for log_index in indexes:
+            _emit_verified(
+                verdict, txid, movement, watch, (row, log_index, token_asset, amount), asset, chain_uid,
+                tenant_id, wallet_id, network, observed_at, source_id, events, verify,
+            )
+        return "verified"
     _emit_verified(
-        verdict, txid, movement, watch, (row, log_index, token_asset, amount), asset, chain_uid,
+        verdict, txid, movement, watch, (row, None, token_asset, amount), asset, chain_uid,
         tenant_id, wallet_id, network, observed_at, source_id, events, verify,
     )
-    return "done"
+    return "verified"
 
 
 def _history_walk(
     client, verify, cursor, solidity_head, clock, source_id, wallet_id, network, path, capability,
     declared, gaps, reasons, events, accept_row,
 ):
-    del verify
     try:
         resume = parse_resume(cursor)
     except ValueError:
@@ -632,26 +642,33 @@ def _history_walk(
     window = _window_for(resume, solidity_head, clock)
     pending = False
     allow = True
-    skip = resume.row_at if resume.kind in {"page", "window"} else 0
     page_done = 0
+    # Identity, not the saved prefix length. The same min/max can return a new
+    # or reordered row on the next read.
+    verified = [item for item in resume.verified if item.startswith("tx:")]
+    known = set(verified)
+    if capability == "history.fungible":
+        _restore_logs(verify, resume)
 
     def accept(rows) -> bool:
-        nonlocal pending, allow, skip, page_done
+        nonlocal pending, allow, page_done
         done = 0
-        skipped = 0
         for row in rows:
-            if skip > 0:
-                skip -= 1
-                skipped += 1
+            key = _resume_key(row)
+            if key is not None and key in known:
+                if not pending:
+                    done += 1
                 continue
-            if accept_row(row, allow) == "pending":
+            result = accept_row(row, allow)
+            if result == "pending":
                 pending = True
                 allow = False
             elif not pending:
                 done += 1
-        page_done = skipped + done
-        if skip > 0:
-            return False
+                if result == "verified" and key is not None and key not in known:
+                    known.add(key)
+                    verified.append(key)
+        page_done = done
         return not pending
 
     walk = client.history(path, frozen_filters(*window), resume.fingerprint, accept_page=accept)
@@ -663,7 +680,9 @@ def _history_walk(
         reasons.append("verification_pending")
     fully = walk.complete and not walk.error and not pending
     row_at = page_done if walk.reason == "verification_pending" and page_done > 0 else 0
-    logical, persisted = _history_cursors(walk, fully, solidity_head, window, row_at)
+    log_tokens = _log_tokens(verify) if capability == "history.fungible" else ()
+    saved = tuple(dict.fromkeys([*verified, *log_tokens]))
+    logical, persisted = _history_cursors(walk, fully, solidity_head, window, row_at, saved)
     hard = bool(walk.error and not walk.rows)
     observation = _history_observation(
         source_id, fully, "", gaps, reasons, logical, solidity_head, declared, hard=hard,
@@ -689,10 +708,15 @@ def _window_for(resume: Resume, head: _Head | None, clock) -> tuple[int, int]:
 
 
 def _history_cursors(
-    walk: HistoryWalk, fully: bool, head: _Head | None, window: tuple[int, int], row_at: int = 0,
+    walk: HistoryWalk,
+    fully: bool,
+    head: _Head | None,
+    window: tuple[int, int],
+    row_at: int = 0,
+    verified: tuple[str, ...] = (),
 ) -> tuple[str | None, str | None]:
     minimum, maximum = window
-    suffix = f"|row:{row_at}" if row_at > 0 else ""
+    suffix = _resume_suffix(0 if fully else row_at, () if fully else verified)
     if walk.error and not walk.rows:
         return None, None
     if fully and head is not None:
@@ -705,6 +729,54 @@ def _history_cursors(
         return None, None
     stored = f"window|min:{minimum}|max:{maximum}{suffix}"
     return "window", stored
+
+
+def _resume_suffix(row_at: int, verified: tuple[str, ...]) -> str:
+    parts: list[str] = []
+    if row_at > 0:
+        parts.append(f"row:{row_at}")
+    parts.extend(f"v:{token}" for token in verified)
+    if not parts:
+        return ""
+    return "|" + "|".join(parts)
+
+
+def _restore_logs(verify: _Verify, resume: Resume) -> None:
+    """A page-cap restart must not treat an already consumed receipt log as new."""
+    for token in resume.verified:
+        if not token.startswith("log:"):
+            continue
+        txid, _, index_text = token[4:].rpartition(":")
+        if _TXID.fullmatch(txid) is None or not index_text.isdigit():
+            continue
+        verify.logs.setdefault(txid, set()).add(int(index_text))
+
+
+def _log_tokens(verify: _Verify) -> tuple[str, ...]:
+    tokens: list[str] = []
+    for txid in sorted(verify.logs):
+        for index in sorted(verify.logs[txid]):
+            tokens.append(f"log:{txid}:{index}")
+    return tuple(tokens)
+
+
+def _resume_key(row: Mapping[str, Any]) -> str | None:
+    """Row identity independent of its position in the page."""
+    txid = _row_id(row)
+    if txid is None:
+        return None
+    label = row.get("type")
+    kind = label.casefold() if isinstance(label, str) else ""
+    if kind not in {"transfer", "approval"}:
+        return f"tx:{txid}"
+    token = row.get("token_info")
+    token_addr = token.get("address") if isinstance(token, dict) else None
+    token_id = _party(token_addr) or "missing"
+    sender = _party(row.get("from")) or "missing"
+    target = _party(row.get("to")) or "missing"
+    amount = _uint(row.get("value"))
+    amount_text = "missing" if amount is None else str(amount)
+    return f"tx:{txid}:{kind}:{token_id}:{sender}:{target}:{amount_text}"
 
 
 def _verdict(verify, txid, list_block, entry, network, solidity_head, latest_head) -> _Verdict:
