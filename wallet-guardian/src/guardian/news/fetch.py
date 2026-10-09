@@ -32,7 +32,7 @@ NEWS_STATE_NETWORK = "news"
 NEWS_STATE_CAPABILITY = "exposure_news"
 _ACCEPT = "application/rss+xml, application/atom+xml, application/xml, text/xml"
 _BUDGET = "news-feeds"
-_KEPT = ("etag", "fingerprints", "last_modified", "last_ok_at", "last_item_at", "feed_type", "last_fetch_at", "parse_status")
+_KEPT = ("etag", "fingerprints", "last_modified", "last_ok_at", "last_item_at", "feed_type", "last_fetch_at", "parse_status", "quarantined_items")
 _PARSE_REASONS = frozenset({"unparseable", "malformed_item", "dtd_or_entity_rejected", "item_cap"})
 _FRESH = frozenset({"empty", "not_modified", "ok"})
 # Linkable incidents: published within this window (stored ones included, so a
@@ -142,7 +142,11 @@ def fetch_allowlisted_news(
                 continue
             record = dict(prior)
             record["status"] = "not_modified"
-            record["reason"] = ""
+            held = prior.get("quarantined_items")
+            held = held if isinstance(held, int) and held > 0 else 0
+            record["quarantined_items"] = held
+            # A 304 reuses the cached body; it does not prove rejected items became valid.
+            record["reason"] = f"quarantined_items_{held}" if held else ""
             record["last_ok_at"] = now
             record["last_fetch_at"] = now
             record["source_id"] = source.source_id
@@ -155,7 +159,7 @@ def fetch_allowlisted_news(
             if modified:
                 record["last_modified"] = modified
             stored[feed.url] = record
-            results.append(FeedResult(source.source_id, feed.url, "not_modified", "", protocols))
+            results.append(FeedResult(source.source_id, feed.url, "not_modified", record["reason"], protocols))
             continue
         if result.status != 200 or not isinstance(result.body, (bytes, bytearray)):
             stored[feed.url] = _failed(prior, source.source_id, "http_status", now=now, feed_type=declared_type)

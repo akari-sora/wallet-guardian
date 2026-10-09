@@ -949,3 +949,40 @@ def _write_private(path: Path, text: str) -> None:
     fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(text)
+
+
+def test_mcm_safe_05_quarantine_survives_304_and_clears_on_clean_200(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A quarantined item stays visible through a 304 and clears only after a clean parse."""
+    network = "bsc-mainnet"
+    wallet = _wallet(1)
+    desk = _desk(tmp_path, monkeypatch, [_account(wallet, _addr(1), (network,))], ["kinza"], fetch=True)
+    _install_kinza(desk.backend, network)
+    good = '<item><title>Kinza pool note</title><link>https://news.example.invalid/kinza/a</link></item>'
+    bad = '<item><title>Kinza broken link</title><link>https://news.example.invalid:bad/x</link></item>'
+    mixed = f'<?xml version="1.0"?><rss version="2.0"><channel>{good}{bad}</channel></rss>'.encode()
+    clean = f'<?xml version="1.0"?><rss version="2.0"><channel>{good}</channel></rss>'.encode()
+    etag = 'W/"q-1"'
+
+    def kinza_health(report: dict) -> dict:
+        return next(row for row in report["news_health"] if row["source_id"] == "kinza")
+
+    _queue(desk.backend, _feeds(_EMPTY, RawResponse(200, {"etag": etag}, mixed), _EMPTY))
+    first = _cli(capsys, desk, _argv(desk))
+    assert _news_state(desk)["feeds"][KINZA_URL]["quarantined_items"] == 1
+    assert kinza_health(first)["quarantined_items"] == 1
+    assert kinza_health(first)["parse_status"] == "ok"
+    assert len(_news_state(desk)["incidents"]) >= 1
+    _queue(desk.backend, _feeds(_EMPTY, RawResponse(304, {}, b""), _EMPTY))
+    second = _cli(capsys, desk, _argv(desk))
+    record = _news_state(desk)["feeds"][KINZA_URL]
+    assert record["status"] == "not_modified"
+    assert record["quarantined_items"] == 1
+    assert record["reason"] == "quarantined_items_1"
+    assert kinza_health(second)["quarantined_items"] == 1
+    assert len(_news_state(desk)["incidents"]) >= 1
+    _queue(desk.backend, _feeds(_EMPTY, RawResponse(200, {"etag": 'W/"q-2"'}, clean), _EMPTY))
+    third = _cli(capsys, desk, _argv(desk))
+    assert _news_state(desk)["feeds"][KINZA_URL]["quarantined_items"] == 0
+    assert kinza_health(third)["quarantined_items"] == 0
