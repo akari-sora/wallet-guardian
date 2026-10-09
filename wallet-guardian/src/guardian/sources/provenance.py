@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Mapping
 
+from guardian.sources.resolver import egress_evidence
+
 _REMAINING = ("x-credits-remaining", "x-ratelimit-remaining", "x-ratelimit-remaining-quota")
 _RATE_HEADERS = (
     "x-credits-remaining",
@@ -24,6 +26,12 @@ class CallLedger:
     def __init__(self) -> None:
         self.providers: dict[str, dict[str, Any]] = {}
         self.backoff: list[dict[str, Any]] = []
+        self.egress = egress_evidence(
+            resolver_verified=False,
+            tls_hostname_verified=False,
+            destination_policy_enforced=False,
+            enforcement_location="unproven",
+        )
 
     def note_backoff(self, source_id: str, seconds: float) -> None:
         self.backoff.append({"seconds": seconds, "source_id": source_id})
@@ -50,6 +58,14 @@ class CallLedger:
             entry["methods"][name] += 1
         if _is_page(operation):
             entry["pages"] += 1
+        observed = getattr(result, "egress", None)
+        if isinstance(observed, dict):
+            self.egress = egress_evidence(
+                resolver_verified=bool(observed.get("resolver_verified")),
+                tls_hostname_verified=bool(observed.get("tls_hostname_verified")),
+                destination_policy_enforced=bool(observed.get("destination_policy_enforced")),
+                enforcement_location=str(observed.get("enforcement_location") or "unproven"),
+            )
         headers = getattr(result, "headers", None) or {}
         if isinstance(headers, Mapping):
             for key in _REMAINING:
@@ -75,6 +91,7 @@ class CallLedger:
             }
         return {
             "backoff": list(self.backoff),
+            "egress": dict(self.egress),
             "providers": providers,
         }
 

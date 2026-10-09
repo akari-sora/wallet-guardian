@@ -352,6 +352,13 @@ def _semantic_public(document: dict[str, Any]) -> None:
     for name in document["plugins"]:
         if not isinstance(name, str):
             raise ConfigError("plugin name is not executable data")
+    resolver = document.get("resolver")
+    if resolver is not None:
+        if not isinstance(resolver, dict):
+            raise ConfigError("resolver config is missing")
+        for field_name in ("mode_env", "endpoints_env", "bootstrap_env"):
+            if field_name in resolver:
+                _env_only(resolver[field_name], field_name)
     for route in document["routing"]:
         network = route["network"]
         if network not in enabled:

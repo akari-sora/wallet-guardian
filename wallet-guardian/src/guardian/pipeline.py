@@ -129,6 +129,7 @@ class RunReport:
     permission_notes: list[dict[str, Any]] | None = None
     runtime: dict[str, Any] | None = None
     indexer_disclosures: list[dict[str, Any]] | None = None
+    egress: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -138,6 +139,7 @@ class RunReport:
             "coverage": self.coverage,
             "decisions": self.decisions,
             "delivery_status": self.delivery_status,
+            "egress": self.egress or {},
             "finished": self.finished,
             "indexer_disclosures": self.indexer_disclosures or [],
             "live_pass": False,
@@ -350,6 +352,7 @@ def run_capability_pipeline(
             if isinstance(identity, str) and identity not in unknown:
                 unknown.append(identity)
     run_id = f"mcm-{int(started_at)}-{uuid4().hex[:8]}"
+    provenance = ledger.as_dict()
     report = RunReport(
         run_id=run_id,
         started=started,
@@ -366,7 +369,8 @@ def run_capability_pipeline(
         delivery_status=delivery.status,
         misconfigured=delivery.misconfigured,
         baseline=bool(baseline),
-        budget={**ledger.as_dict(), "kinza": kinza_cache.snapshot()},
+        budget={**provenance, "kinza": kinza_cache.snapshot()},
+        egress=provenance.get("egress"),
         checkpoints=checkpoints,
         log_evidence=log_evidence,
         permission_notes=permission_notes,
@@ -449,10 +453,22 @@ def default_backend() -> HttpxBackend:
 
 
 def _transport(public_config: PublicConfig, backend: Any, clock: Clock) -> ReadOnlyTransport:
+    from guardian.sources.resolver import HostnameResolver, load_resolver_settings
+
     secrets = _secrets(public_config)
     book = BudgetBook.from_document(public_config.document["budgets"], clock=clock, sleep=lambda _seconds: None)
     endpoints = build_endpoint_registry(public_config.document, secrets=secrets, environ=os.environ)
-    return ReadOnlyTransport(endpoints, book, backend, resolve=_resolve)
+    resolver = HostnameResolver(load_resolver_settings(public_config.document, os.environ))
+
+    def resolve(host: str) -> list[str]:
+        name = host.lower().rstrip(".")
+        if name.endswith(".invalid"):
+            return ["1.1.1.1"]
+        return resolver.resolve(name)
+
+    transport = ReadOnlyTransport(endpoints, book, backend, resolve=resolve)
+    transport.egress_resolver = resolver
+    return transport
 
 
 def _secrets(public_config: PublicConfig) -> dict[str, str]:
@@ -461,12 +477,13 @@ def _secrets(public_config: PublicConfig) -> dict[str, str]:
 
 
 def _resolve(host: str) -> list[str]:
+    """``.invalid`` stays a fixture address. Every other name goes through the resolver."""
     name = host.lower().rstrip(".")
     if name.endswith(".invalid"):
         return ["1.1.1.1"]
-    from guardian.sources.transport import _default_resolve
+    from guardian.sources.resolver import HostnameResolver, load_resolver_settings
 
-    return _default_resolve(name)
+    return HostnameResolver(load_resolver_settings(None, os.environ)).resolve(name)
 
 
 def _price_quotes(price_input: bytes | None) -> tuple[CallerQuote, ...]:

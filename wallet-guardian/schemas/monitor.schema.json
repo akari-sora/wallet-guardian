@@ -450,6 +450,24 @@
         "auto_disable_schedule"
       ]
     },
+    "resolver": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{1,95}$"
+        },
+        "endpoints_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{1,95}$"
+        },
+        "bootstrap_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{1,95}$"
+        }
+      }
+    },
     "news": {
       "type": "object",
       "additionalProperties": false,
