@@ -70,10 +70,20 @@ Each row below was run on 2026-10-09 (Taipei) from the Linux box with public tes
 
 Not added: Bitcoin Core `rss.xml` (593 KB) is refused by the parser's item cap. Every allowlisted URL is https RSS and is listed in `ALLOWLISTED_FEED_URLS`; tests assert the catalog and the allowlist match and that an HTML redirect stub is not a feed. No other protocol (Kinza apart from Medium, UXLINK, Lista beyond the blog) has automatic news.
 
+### Added in this change set, probed 2026-10-09
+
+| network / source | capability | path | status | evidence |
+| --- | --- | --- | --- | --- |
+| bitcoin-mainnet | balances.native | Esplora, keyless `https://blockstream.info/api`, CLI | partial | A public address: confirmed balance in sats matched `funded_txo_sum - spent_txo_sum` from the API; row `complete_in_declared_scope`, support partial because one address is an address set, not an HD wallet. mempool.space/api answers HTTP 200 on the address endpoint (not run through the CLI). Offline CLI tests cover pagination, dedup after restart, mempool as pending, 429/500 as errors, GET only. |
+| bitcoin-mainnet | history.native_external | Esplora, CLI | partial | A mid-size public address: 3 pages followed, then `page_cap` (`pagination_incomplete`), never complete. A very large address returned `response_too_large` (error, not zero). Not claimed: tokens, Ordinals, Runes, Lightning, xpub. |
+| ethereum-mainnet | positions.lido | pinned eth_call views | partial | Raw `eth_call` on publicnode against the pinned stETH/wstETH/WithdrawalQueue addresses (names and symbols matched): `balanceOf`, `sharesOf`, `getPooledEthByShares` agreed to 0 wei for a public contract holder, `getWithdrawalRequests` answered an empty array, `getStETHByWstETH` answered. The monitor path is covered by offline CLI tests (holdings, pending and finalized withdrawal, failed call is unknown, empty is none_observed). A full CLI run on a busy public holder did not finish inside the time box. Opt-in plugin `lido`; not listed in the example monitors. |
+| news | lido blog and research forum RSS | allowlisted GET | ok | `blog.lido.fi/rss/` HTTP 200 (about 202 KiB, 15 items) and `research.lido.fi/latest.rss` HTTP 200 (30 items) parse; offline fixtures in the news pipeline test. Same caveat as other feeds: a feed that parses is not a claim about incident coverage. |
+| ethereum, bsc, optimism, base, polygon, avalanche | no-key `run-once` (EVM) | CLI, public RPC, DoH | partial | A no-key `run-once` on a throwaway state with a one-day bootstrap window did not finish inside 15 minutes (timed out) for a public quiet address across six EVM networks, and not inside 20 minutes with Arbitrum included, because log scans are chunked to the public RPC range limits under the free request budget. Per-source results above are the evidence; no end-to-end EVM no-key CLI pass is claimed. |
+
 ### What is still not verified
-- The EVM CLI path through a real `run-once` is recorded in the next paragraph; chains not named there were not run end to end today.
-- Alchemy Base, Helius, NodeReal (keyed), GoPlus (keyed), and any chain beyond the eight above have no probe today.
-- The ruling from the independent review (`gpt/reply-all-chains.md`) suggests Bitcoin, TRON, Hyperliquid and Lido as next additions. Anything that did not merge appears below only if it did.
+- Alchemy Base, Helius, NodeReal (keyed), GoPlus (keyed), Kinza and UXLINK plugins, Aave on a live position, and any chain not named above have no probe today.
+- TRON and Hyperliquid pipeline support were recommended by the review (`gpt/reply-all-chains.md`) but not built here: they are not claimed.
+- Preview wording: Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS and Solana, with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path; capability varies by network and source (see the tables).
 
 ## Chain × capability
 
