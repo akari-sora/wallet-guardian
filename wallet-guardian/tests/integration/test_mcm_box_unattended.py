@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import threading
 from datetime import datetime, timedelta, timezone
@@ -511,3 +512,20 @@ def test_mcm_share_s3_06_cron_install_keeps_other_jobs_and_is_idempotent(tmp_pat
     assert si._run_install("cron", "monitor", tmp_path, [si._CRON_NAME], runner) is False
     assert table["now"].startswith(other) and "run-once" in table["now"]
     assert calls[0][-1] == "-l"
+
+
+def test_mcm_share_s3_07_systemctl_binary_without_running_systemd_selects_cron(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MCM-SHARE-S3-07. A systemctl binary on a host not booted with systemd must not select a systemd mode."""
+    from guardian import service_install as si
+
+    real_is_dir = Path.is_dir
+    monkeypatch.setattr(si.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(Path, "is_dir", lambda self: False if os.fspath(self) == "/run/systemd/system" else real_is_dir(self))
+    facts = si._probe("monitor", lambda argv: CommandResult(1, "", ""), systemd_present=None, cron_present=None)
+    assert facts["systemd_present"] is False and facts["cron_present"] is True
+    choice = si.classify_schedule(
+        linger=False, user_manager=False, systemd_present=facts["systemd_present"], cron_present=facts["cron_present"]
+    )
+    assert choice["schedule_mode"] == "cron" and choice["cron_fallback"] is True
