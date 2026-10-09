@@ -65,7 +65,7 @@ Keyless instances (no key, shared rate limit about 5–10 requests/second, check
 
 - Ethereum: `BLOCKSCOUT_ETH_URL` default `https://eth.blockscout.com`
 - Base: `BLOCKSCOUT_BASE_PUBLIC_URL` default `https://base.blockscout.com`
-- Optimism: `BLOCKSCOUT_OPTIMISM_PUBLIC_URL` default `https://optimism.blockscout.com`
+- Optimism: `BLOCKSCOUT_OPTIMISM_PUBLIC_URL` default `https://explorer.optimism.io` (`https://optimism.blockscout.com` answers HTTP 301 to it since at least 2026-10-09; set the final origin, a cross-host redirect is refused as redirect_host)
 - Arbitrum: `BLOCKSCOUT_ARBITRUM_URL` default `https://arbitrum.blockscout.com`
 - Polygon: `BLOCKSCOUT_POLYGON_URL` default `https://polygon.blockscout.com`
 

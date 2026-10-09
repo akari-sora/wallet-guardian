@@ -30,6 +30,7 @@ _AAVE_MIN_BYTES = 512 * 1024
 # Public GETs on 2026-10-09. Do not add a guessed /feed or /rss URL.
 ALLOWLISTED_FEED_URLS = frozenset({
     _AAVE_FEED,
+    "https://api.paragraph.com/blogs/rss/@blog.lista.org",
     "https://medium.com/feed/@kinzafinance",
     "https://status.solana.com/history.rss",
 })

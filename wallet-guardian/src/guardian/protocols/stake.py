@@ -52,7 +52,6 @@ class SolanaStake(ViewPlugin):
         manifest: Any,
         private: Mapping[str, Any] | None,
     ) -> PositionObservation:
-        del wallet
         prior = ctx.prior if isinstance(ctx.prior, Mapping) else {}
         if network not in self.networks:
             return unknown_position(
@@ -64,6 +63,12 @@ class SolanaStake(ViewPlugin):
                 plugin_id=self.plugin_id, wallet_id=wallet_id, network=network, prior=prior, reason="contract_mismatch",
             )
         accounts, authority, error = _selection(private)
+        if error == "stake_accounts_not_provided":
+            # No caller-supplied accounts: the monitored wallet itself is the
+            # authority. Read both staker and withdrawer matches (read-only gPA).
+            own = _solana(wallet)
+            if own is not None:
+                return _from_wallet(self.plugin_id, ctx, wallet_id, network, prior, own)
         if error:
             return unknown_position(
                 plugin_id=self.plugin_id, wallet_id=wallet_id, network=network, prior=prior, reason=error,
@@ -130,6 +135,41 @@ def _from_accounts(
     return _observation(plugin_id, wallet_id, network, ctx.clock(), slot, parsed)
 
 
+def _from_wallet(
+    plugin_id: str,
+    ctx: Any,
+    wallet_id: str,
+    network: str,
+    prior: Mapping[str, Any],
+    address: str,
+) -> PositionObservation:
+    """Discover stake accounts where the wallet is the staker or the withdrawer."""
+    seen: dict[str, Mapping[str, Any]] = {}
+    for role in ("staker", "withdrawer"):
+        try:
+            read = ctx.solana_program_accounts(
+                STAKE_PROGRAM, memcmp_offset=_OFFSET[role], memcmp_bytes=address,
+            )
+        except ValueError:
+            return _failed(plugin_id, wallet_id, network, prior, "not_a_read")
+        if not read.ok:
+            return _failed(plugin_id, wallet_id, network, prior, read.reason)
+        if not isinstance(read.result, list):
+            return _failed(plugin_id, wallet_id, network, prior, "malformed_result")
+        for row in read.result:
+            if not isinstance(row, Mapping):
+                return _failed(plugin_id, wallet_id, network, prior, "malformed_result")
+            pubkey = _solana(row.get("pubkey"))
+            if pubkey is None:
+                return _failed(plugin_id, wallet_id, network, prior, "malformed_result")
+            seen.setdefault(pubkey, row)
+        if len(seen) > _MAX_ACCOUNTS:
+            return unknown_position(
+                plugin_id=plugin_id, wallet_id=wallet_id, network=network, prior=prior, reason="result_exceeds_bound",
+            )
+    return _from_rows(plugin_id, ctx, wallet_id, network, prior, list(seen.values()))
+
+
 def _from_program(
     plugin_id: str,
     ctx: Any,
@@ -154,8 +194,19 @@ def _from_program(
         return unknown_position(
             plugin_id=plugin_id, wallet_id=wallet_id, network=network, prior=prior, reason="result_exceeds_bound",
         )
+    return _from_rows(plugin_id, ctx, wallet_id, network, prior, list(read.result))
+
+
+def _from_rows(
+    plugin_id: str,
+    ctx: Any,
+    wallet_id: str,
+    network: str,
+    prior: Mapping[str, Any],
+    rows: list[Any],
+) -> PositionObservation:
     parsed: list[tuple[str, int, tuple[tuple[str, str], ...]]] = []
-    for row in read.result:
+    for row in rows:
         if not isinstance(row, Mapping):
             return _failed(plugin_id, wallet_id, network, prior, "malformed_result")
         pubkey = _solana(row.get("pubkey"))
