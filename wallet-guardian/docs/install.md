@@ -4,13 +4,13 @@
 
 只安裝你從 GitLab release 下載、而且 SHA256 對過的 wheel。需要 Python 3.12 或更新的版本，以及 [uv](https://docs.astral.sh/uv/) 或 pip。Docker 不在這份說明裡。
 
-監控程式只讀。它不簽名、不組交易、不廣播。金鑰由你自己保管。設定檔只寫環境變數的名稱（`endpoint_env`、`credential_env`），不寫 key，也不寫真實監控地址。
+監控程式只讀。它不簽名、不組交易、不廣播。簽章和可選 Action Client 的差別只寫在 [docs/threat-model.md](threat-model.md#monitor-does-not-sign)。金鑰由你自己保管。設定檔只寫環境變數的名稱（`endpoint_env`、`credential_env`），不寫 key，也不寫真實監控地址。Telegram 發送器存在，但是選用；投遞預設關閉（`outbox_only`）。`--no-send` 禁止送出。標籤 `v0.4.0-rc.1` 是否已發布，see GitLab releases。
 
 ## 從 GitLab release 安裝
 
 到這個專案的 GitLab release，下載同一個版本的：
 
-- `guardian-<version>-py3-none-any.whl`
+- `wallet_guardian_monitor-0.4.0rc1-py3-none-any.whl`
 - `SHA256SUMS`
 - `constraints.txt`
 

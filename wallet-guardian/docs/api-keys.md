@@ -171,13 +171,15 @@ Free tier: check current terms. This repo does not upgrade the plan.
 
 ## OFAC SLS
 
-The sanctions list is a public feed. It does not use an API key.
+The sanctions list is a public feed. It does not use an API key. The monitor matches addresses locally and does not upload a watch address.
 
 Environment:
 
-- `OFAC_SLS_FEED` (the HTTPS URL of the list you choose to supply)
+- `OFAC_SLS_FEED` (a `file://` path of a local SDN XML file you downloaded, or the HTTPS URL of the list you choose to supply)
 
-If that variable is unset, sanctions coverage is `feed_not_supplied`. Setting the variable names the feed; it does not by itself mark a wallet as screened. Check the publisher's current file location and terms. An empty balance is not "not sanctioned."
+A `file://` value is read from disk, for example `file:///absolute/path/to/sdn.xml`. An HTTPS value is fetched with GET. The path has to be one this adapter already allows (`/api/download/`, `/api/PublicationPreview/`, or `/exports/`). No API key is added to the request.
+
+If that variable is unset, sanctions coverage is `feed_not_supplied`. Setting the variable names the feed; it does not by itself mark a wallet as screened. A list whose publish date is older than 7 days is `partial` with reason `feed_stale`, not a clear screen. A malformed list is an error, not a miss and not zero. The report records the source id, the fetch time, the publish date, the validity, and how many addresses were checked. It does not record the list body. Check the publisher's current file location and terms. An empty balance is not "not sanctioned."
 
 <a id="esplora"></a>
 

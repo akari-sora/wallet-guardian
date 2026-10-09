@@ -2,7 +2,7 @@
 
 Read-only multichain wallet monitor for one operator on a machine they control. It watches addresses you type, stores coverage locally, and leaves alerts in an outbox. It is not a hosted service. A tenant id is a label, not isolation between mutually untrusted customers.
 
-It does not sign, does not build transactions, and does not broadcast. It never asks for a seed phrase or a wallet private key. API keys stay in your environment. Config files store env var names only (`endpoint_env`, `credential_env`). What leaves the machine is described before anything is written: wallet addresses go to the RPC or indexer hosts you enable; your hostname is not added to those requests; GoPlus and Chainabuse user-address lookups stay off. See [docs/security-model.md](docs/security-model.md) and [docs/threat-model.md](docs/threat-model.md).
+It does not sign, does not build transactions, and does not broadcast. See [docs/threat-model.md](docs/threat-model.md#monitor-does-not-sign). It never asks for a seed phrase or a wallet private key. API keys stay in your environment. Config files store env var names only (`endpoint_env`, `credential_env`). What leaves the machine is described before anything is written: wallet addresses go to the RPC or indexer hosts you enable; your hostname is not added to those requests; GoPlus and Chainabuse user-address lookups stay off unless you set the key and the base. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`). `--no-send` forbids sends. See [docs/security-model.md](docs/security-model.md) and [docs/threat-model.md](docs/threat-model.md).
 
 You do not need the author's Grok session, Cloudflare, D1, a wallet login, or Node to run the monitor. The Action Client below is optional.
 
@@ -81,7 +81,7 @@ Watch-only 地址只代表「拿來觀察」，不代表這個系統可以動用
 
 ## 安裝
 
-發行 wheel 的安裝、釘選的 constraints、XDG 私人目錄、升級與降版見 [docs/install.md](docs/install.md)。發行套件名稱是 `wallet-guardian-monitor`（匯入名稱與命令仍是 `guardian`）；預覽版沒有上傳到任何套件索引，名稱也沒有被保留。
+發行 wheel 的安裝、釘選的 constraints、XDG 私人目錄、升級與降版見 [docs/install.md](docs/install.md)。發行套件名稱是 `wallet-guardian-monitor`（wheel `wallet_guardian_monitor-0.4.0rc1-py3-none-any.whl`；匯入名稱與命令仍是 `guardian`）；預覽版沒有上傳到任何套件索引，名稱也沒有被保留。標籤 `v0.4.0-rc.1` 是否已發布，see GitLab releases。
 
 在這個 checkout 裡開發：
 
