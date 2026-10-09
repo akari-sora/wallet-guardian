@@ -13,6 +13,8 @@ uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc2
 guardian --help
 ```
 
+Before the first `run-once`, export an endpoint for each chain you enabled, for example `export RPC_ETHEREUM_MAINNET_URL=<a public JSON-RPC URL you choose>`. Without it `run-once` stops with `endpoint_missing`. See [faq-troubleshooting.md](faq-troubleshooting.md).
+
 The wheel name in this tree is `wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl`. A later release uses that release's own wheel and constraints file.
 
 ## Quickstart

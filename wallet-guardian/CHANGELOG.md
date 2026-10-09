@@ -20,6 +20,7 @@ Preview channel. `published` stays false for PyPI: nothing is uploaded to a pack
 - A 429 on `eth_chainId` is retried inside the round deadline and a successful identity is reused for that run; the example NodeReal source shares the `nodereal-key` budget so one key is not burst across hosts.
 - Indexer catch-up starts at the lookback origin, uses one span per explorer, and stops at `bootstrap_request_cap` so a later round can resume. Plan refusals and successful DNS answers are cached.
 - Transfer-log directions split on the same ranges, 429 waits honor Retry-After inside the round deadline, and eth_getLogs counts toward `bootstrap_request_cap` so a no-key bootstrap stays bounded.
+- Docs: the quickstart now states that an RPC endpoint variable must be set (without it `run-once` stops with `endpoint_missing`), the resolver-mode hint, and what a bounded no-key first run looks like. Found by the clean-room smoke of this release.
 - Docs: the install page names the rc.2 wheel and tag; stale statements flagged by the external review (wheel name, tag text, signing boundary) are corrected. News-feed health, local OFAC screening and legacy compare classification are wired into `run-once`; a stale or unreadable feed is reported, never "no risk".
 
 ### Known limitations / not claimed
