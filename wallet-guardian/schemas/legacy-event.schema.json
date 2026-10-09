@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "One JSON object per line in events.jsonl. This is the sidecar event schema the comparator parses. It is not free text.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "wallet_id",
+    "label",
+    "network",
+    "chain",
+    "tx",
+    "position",
+    "kind",
+    "subject",
+    "finality",
+    "observed_at",
+    "capability"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "guardian.legacy-event.v1"
+    },
+    "wallet_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "label": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+    },
+    "network": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "chain": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]{1,32}$"
+    },
+    "tx": {
+      "type": "string",
+      "pattern": "^0x[0-9a-fA-F]{64}$"
+    },
+    "position": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "kind": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "subject": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "finality": {
+      "enum": ["confirmed", "finalized", "observed", "unknown"]
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "capability": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96
+    }
+  }
+}

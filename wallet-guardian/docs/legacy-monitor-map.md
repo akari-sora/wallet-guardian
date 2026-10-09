@@ -40,7 +40,7 @@
 - `guardian.storage:Database`
 - `guardian.domain:normalize_hyperliquid`
 
-`guardian.cli:build_parser` 註冊的指令：`doctor`、`run-once`、`snapshot`、`reconcile`、`claims`、`providers`、`wallets`、`approvals`、`explain`、`coverage`、`replay`、`alerts`、`self-check`、`diagnose`、`actions`、`action`、`rescue`、`operation-coverage`、`workbench`、`config`、`sources`、`export`、`compare-legacy`、`watchdog`、`monitor`。
+`guardian.cli:build_parser` 註冊的指令：`doctor`、`run-once`、`snapshot`、`reconcile`、`claims`、`providers`、`wallets`、`approvals`、`explain`、`coverage`、`replay`、`alerts`、`self-check`、`diagnose`、`actions`、`action`、`rescue`、`operation-coverage`、`workbench`、`config`、`sources`、`export`、`compare-legacy`、`legacy-capture`、`watchdog`、`monitor`。`legacy-capture` 只寫同機 sidecar，不開 MCM 資料庫，也不改既有指令。見 `docs/legacy-evidence.md`。
 
 和監控直接相關的行為：
 

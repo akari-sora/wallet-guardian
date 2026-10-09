@@ -15,7 +15,7 @@
 3. legacy 原本的工作與通知優先。MCM 不等待它，也不用逾時去拖延它。
 4. 以固定的程式 SHA 執行 `run-once --mcm-config <私人設定> --no-send`。stdout、stderr、退出碼與 argv 各存一檔。增量窗口是設定裡的 `polling.interval_seconds`（範例是 10800 秒），結束在這一輪的時鐘，不是行程跑了幾秒。
 5. 接著跑 `watchdog` 與 `coverage`。watchdog 讀這一輪以及持久化的 last_success，也有獨立觸發，不依賴這一輪掃描成功才跑。
-6. `compare-legacy` 對那份快照做比較。完整事件身份仍然走 `matched`。舊的 `alerted` 字串加上 `latest_seen` 與 `runs` 的 `*_since_<hhmm>`，轉成交易層列：同一 wallet、network、tx 對上時記 `matched_tx_level`；落在已確認共同區間卻沒有 MCM 事件的是 `legacy_only`；MCM 有而 legacy 沒有的是 `mcm_only`。`awaiting_finality` 與 `uncomparable` 仍分開。說明文字不猜區塊、地址或 log position。
+6. `compare-legacy` 對那份快照做比較。完整事件身份仍然走 `matched`。舊的 `alerted` 字串加上 `latest_seen` 與 `runs` 的 `*_since_<hhmm>`，轉成交易層列：同一 wallet、network、tx 對上時記 `matched_tx_level`；落在已確認共同區間卻沒有 MCM 事件的是 `legacy_only`；MCM 有而 legacy 沒有的是 `mcm_only`。`awaiting_finality` 與 `uncomparable` 仍分開。說明文字不猜區塊、地址或 log position。同機時可以加上 `--legacy-runs-dir`，只讀最新一份通過 `COMPLETE` 與 sha256 的 sidecar。`compare_valid` 只有在證據有效、而且兩邊的 required 窗口都完整蓋住這一輪時才是 true；缺目錄、缺標記、雜湊不符、過期、身份不符、窗口缺口、partial，各記自己的 reason，cutover 因此不合格。QUIET 文字、沒變的 nonce、核准筆數不是完整覆蓋。見 `docs/legacy-evidence.md`。
 7. 原始差異先寫進證據目錄的 `diffs/raw-compare.json`，然後才做既有通知去重。legacy 已通知的記號不能把 MCM 的真漏報藏起來。
 8. MCM 的重要獨有發現只有在明確加上 `--relay` 時，才寫一筆 `origin=mcm_shadow` 的私人接力紀錄，交給既有 legacy sender 路徑核對後通知一次。預設關閉。沒有新的 sender，工具與測試都不送出。同一發現的 dedup id 已存在就不再寫第二筆。技術比較留在私人檔案，不每 3 小時推給使用者。
 

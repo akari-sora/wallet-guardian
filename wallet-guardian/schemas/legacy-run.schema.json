@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Published legacy run manifest. Addresses stay outside this document; scope carries labels and address hashes only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "legacy_tool",
+    "host_id",
+    "started_at",
+    "finished_at",
+    "exit_code",
+    "scope",
+    "windows",
+    "files"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "guardian.legacy-run.v1"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "legacy_tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "hash"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "host_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "exit_code": {
+      "type": "integer"
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope_hash", "accounts"],
+      "properties": {
+        "scope_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "accounts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "address_hash"],
+            "properties": {
+              "label": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+              },
+              "address_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "windows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "network",
+          "capability",
+          "from_block",
+          "to_block",
+          "target_hash",
+          "target_timestamp",
+          "status",
+          "source"
+        ],
+        "properties": {
+          "network": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "capability": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          },
+          "from_block": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "to_block": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "target_hash": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
+          },
+          "target_timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "enum": ["complete", "partial", "error", "not_scanned"]
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          }
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "sha256", "size"],
+        "properties": {
+          "name": {
+            "enum": ["coverage.json", "events.jsonl", "state-after.json", "state-before.json"]
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  }
+}

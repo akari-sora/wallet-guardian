@@ -75,6 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--evidence-dir", required=True)
     parser.add_argument("--drill", choices=("restart", "source_failure", "rollback"))
     parser.add_argument("--relay", action="store_true", help="write one private mcm_shadow relay record (default off)")
+    parser.add_argument("--legacy-runs-dir", default=None, help="same-host legacy capture directory (read-only)")
+    parser.add_argument("--legacy-max-age-seconds", type=int, default=12600)
     return parser
 
 
@@ -96,6 +98,8 @@ def main(
             backend=backend,
             sender=sender,
             clock=time.time if clock is None else clock,
+            legacy_runs_dir=args.legacy_runs_dir,
+            legacy_max_age_seconds=args.legacy_max_age_seconds,
         )
     except ConfigError as exc:
         sys.stderr.write(json.dumps({"error": str(exc), "status": "error"}) + "\n")
@@ -113,6 +117,8 @@ def run_round(
     backend: Any,
     sender: Any,
     clock: Callable[[], float],
+    legacy_runs_dir: str | None = None,
+    legacy_max_age_seconds: int = 12600,
 ) -> dict[str, Any]:
     evidence = prepare_evidence_dir(Path(evidence_dir))
     moment = datetime.fromtimestamp(clock(), timezone.utc)
@@ -136,6 +142,15 @@ def run_round(
         "--mcm-config", mcm_config,
         "--legacy-state", snapshot["snapshot_path"],
     ]
+    if legacy_runs_dir:
+        public = load_public_config(mcm_config)
+        interval = int(public.document["polling"]["interval_seconds"])
+        compare_argv.extend([
+            "--legacy-runs-dir", legacy_runs_dir,
+            "--slot-start", _iso(moment - timedelta(seconds=interval)),
+            "--slot-end", _iso(moment),
+            "--legacy-max-age-seconds", str(legacy_max_age_seconds),
+        ])
     _compare_code, compare_out, _compare_err = _capture(
         commands, "compare-legacy", compare_argv, backend=transport, sender=guarded, clock=clock,
     )
@@ -160,6 +175,12 @@ def run_round(
     _write_json(evidence / "leak-scan.json", {"leaks": leaks})
     if relay:
         _relay(evidence, compared)
+    if legacy_runs_dir:
+        _write_json(evidence / "legacy-evidence.json", {
+            "compare_reason": compared.get("compare_reason") if isinstance(compared.get("compare_reason"), str) else "legacy_evidence_missing",
+            "compare_valid": compared.get("compare_valid") is True,
+            "legacy_run_id": compared.get("legacy_run_id") if isinstance(compared.get("legacy_run_id"), str) else "",
+        })
     record = _round_record(
         mcm_config=mcm_config,
         evidence=evidence,
@@ -173,6 +194,7 @@ def run_round(
         guarded=guarded,
         injected_backend=backend is not None,
         legacy=legacy,
+        legacy_compare=compared if legacy_runs_dir else None,
     )
     if drill == "source_failure" and "fetch_error" not in record["required_gaps"]:
         record["required_gaps"].append("fetch_error")
@@ -405,6 +427,7 @@ def _round_record(
     guarded: _GuardedSender,
     injected_backend: bool,
     legacy: Mapping[str, Any],
+    legacy_compare: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     public = load_public_config(mcm_config)
     private = resolve_private_inputs(public, os.environ)
@@ -435,7 +458,7 @@ def _round_record(
         "content_hash": content_hash(Path(__file__).resolve().parents[1]),
         "wallets": sorted(account.wallet_id for account in private.accounts.accounts),
     }
-    return {
+    record = {
         "baseline": baseline,
         "command_status": status or "missing",
         "declared_gaps": sorted(set(declared_gaps)),
@@ -463,6 +486,12 @@ def _round_record(
         "unexplained_mcm_only": _unexplained(compared.get("mcm_only")),
         "watermark": legacy.get("delivery_watermark") if isinstance(legacy.get("delivery_watermark"), str) else "",
     }
+    if legacy_compare is not None:
+        valid = legacy_compare.get("compare_valid") is True
+        reason = legacy_compare.get("compare_reason")
+        record["compare_valid"] = valid
+        record["compare_reason"] = "" if valid else reason if isinstance(reason, str) and reason else "legacy_evidence_missing"
+    return record
 
 
 def _coverage_gaps(coverage: Any, required: Mapping[str, Any]) -> tuple[list[str], list[str]]:
