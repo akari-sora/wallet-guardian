@@ -57,6 +57,7 @@ _PLUGINS = frozenset({
     "erc4626",
     "erc4626-registered",
     "kinza",
+    "lido",
     "lista-slisbnb",
     "lista_slisbnb",
     "solana-stake",

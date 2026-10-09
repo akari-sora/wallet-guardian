@@ -249,6 +249,7 @@ def test_mcm_w8_01_plugin_readonly_rejects_code_loading_and_reads_views():
         "aave_v3",
         "erc4626",
         "kinza",
+        "lido",
         "lista_slisbnb",
         "solana_stake",
         "uxlink_holdings",
@@ -291,6 +292,7 @@ def test_mcm_w8_01_plugin_readonly_rejects_code_loading_and_reads_views():
         "aave_v3",
         "erc4626",
         "kinza",
+        "lido",
         "lista_slisbnb",
         "solana_stake",
         "uxlink_holdings",
@@ -800,12 +802,14 @@ def test_mcm_w8_03_claim_and_bridge_evidence():
 def test_mcm_w8_04_exposure_news_links_positions_and_dedups_reposts():
     sources = load_news_sources()
     required = {
+        "https://blog.lido.fi/rss/",
         "https://blog.lista.org/",
         "https://blog.uxlink.io/",
         "https://docs.uxlink.io/layer/announcement/notice",
         "https://governance.aave.com/latest.rss?order=created",
         "https://kinzafinance.medium.com/",
         "https://medium.com/feed/@kinzafinance",
+        "https://research.lido.fi/latest.rss",
         "https://status.solana.com/history.rss",
         "https://x.com/UXLINKofficial",
         "https://x.com/aave",

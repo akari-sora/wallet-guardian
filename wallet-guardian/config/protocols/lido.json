@@ -1,0 +1,48 @@
+{
+  "id": "lido",
+  "version": "1",
+  "networks": [
+    "ethereum-mainnet"
+  ],
+  "contracts": {
+    "ethereum-mainnet": {
+      "steth": {
+        "address": "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84",
+        "source_url": "https://docs.lido.fi/deployed-contracts/",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "name/symbol verified by eth_call 2026-10-09"
+      },
+      "wsteth": {
+        "address": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0",
+        "source_url": "https://docs.lido.fi/deployed-contracts/",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "name/symbol verified by eth_call 2026-10-09"
+      },
+      "withdrawal_queue": {
+        "address": "0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1",
+        "source_url": "https://docs.lido.fi/deployed-contracts/",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "name/symbol verified by eth_call 2026-10-09"
+      }
+    }
+  },
+  "required_sources": [
+    "evm_rpc"
+  ],
+  "view_methods": [
+    "balanceOf(address)",
+    "getPooledEthByShares(uint256)",
+    "getStETHByWstETH(uint256)",
+    "getWithdrawalRequests(address)",
+    "getWithdrawalStatus(uint256[])",
+    "sharesOf(address)"
+  ],
+  "capabilities": [
+    "positions",
+    "withdrawals"
+  ],
+  "notes": "Public Lido stETH, wstETH, and WithdrawalQueueERC721 on ethereum-mainnet. Opt in with plugins entry lido. Not listed in examples/monitor.json. Reads are eth_call only; nothing is claimed. Quotes duplicate the receipt so shares and underlying ETH are not both counted. offline fixtures; live probe: see docs/coverage-matrix.md. No user accounts."
+}

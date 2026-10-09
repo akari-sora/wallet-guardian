@@ -81,6 +81,7 @@ _PLUGIN_IDS = {
     "lista-slisbnb": "lista_slisbnb",
     "lista_slisbnb": "lista_slisbnb",
     "kinza": "kinza",
+    "lido": "lido",
     "solana-stake": "solana_stake",
     "solana_stake": "solana_stake",
     "uxlink-holdings": "uxlink_holdings",
@@ -90,6 +91,7 @@ _PLUGIN_NEWS = {
     "aave-v3": "aave",
     "aave_v3": "aave",
     "kinza": "kinza",
+    "lido": "lido",
     "lista-slisbnb": "lista",
     "lista_slisbnb": "lista",
     "solana-stake": "solana",
@@ -100,6 +102,7 @@ _PLUGIN_NEWS = {
 _CANON_NEWS = {
     "aave_v3": "aave",
     "kinza": "kinza",
+    "lido": "lido",
     "lista_slisbnb": "lista",
     "solana_stake": "solana",
     "uxlink": "uxlink",

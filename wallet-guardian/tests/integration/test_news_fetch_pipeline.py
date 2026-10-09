@@ -41,10 +41,19 @@ DEBT = to_checksum_address("0x" + ("d2" * 20))
 TOKEN = to_checksum_address("0x" + ("ab" * 20))
 AAVE_URL = "https://governance.aave.com/latest.rss?order=created"
 KINZA_URL = "https://medium.com/feed/@kinzafinance"
+LIDO_BLOG_URL = "https://blog.lido.fi/rss/"
+LIDO_RESEARCH_URL = "https://research.lido.fi/latest.rss"
 LISTA_URL = "https://api.paragraph.com/blogs/rss/@blog.lista.org"
 SOLANA_URL = "https://status.solana.com/history.rss"
-NEWS_URLS = (AAVE_URL, KINZA_URL, LISTA_URL, SOLANA_URL)
-NEWS_HOSTS = frozenset({"api.paragraph.com", "governance.aave.com", "medium.com", "status.solana.com"})
+NEWS_URLS = (AAVE_URL, KINZA_URL, LIDO_BLOG_URL, LIDO_RESEARCH_URL, LISTA_URL, SOLANA_URL)
+NEWS_HOSTS = frozenset({
+    "api.paragraph.com",
+    "blog.lido.fi",
+    "governance.aave.com",
+    "medium.com",
+    "research.lido.fi",
+    "status.solana.com",
+})
 KINZA_LINK = "https://news.example.invalid/kinza/pool"
 AAVE_LINK = "https://news.example.invalid/aave/note"
 HOST = {
@@ -249,7 +258,7 @@ class _Desk:
 def test_mcm_live_l2_01_bounded_allowlisted_get_ssrf_xxe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Only the four allowlisted URLs are fetched, and only with GET."""
+    """Only the allowlisted URLs are fetched, and only with GET."""
     assert set(NEWS_URLS) == set(ALLOWLISTED_FEED_URLS)
     network = "bsc-mainnet"
     wallet = _wallet(1)
@@ -301,6 +310,8 @@ def test_mcm_live_l2_01_bounded_allowlisted_get_ssrf_xxe(
     poisoned = _desk(tmp_path / "dns", monkeypatch, [_account(wallet, owner, ("ethereum-mainnet",))], [], fetch=True)
     _DNS["governance.aave.com"] = ["127.0.0.1"]
     _DNS["medium.com"] = ["169.254.169.254"]
+    _DNS["blog.lido.fi"] = ["172.16.0.4"]
+    _DNS["research.lido.fi"] = ["172.16.0.5"]
     _DNS["api.paragraph.com"] = ["192.168.1.9"]
     _DNS["status.solana.com"] = ["10.0.0.8"]
     poisoned_report = _cli(capsys, poisoned, _argv(poisoned))
@@ -571,6 +582,8 @@ def test_mcm_live_l2_05_no_feed_gap_not_no_news(
     assert _news_calls(disabled.backend) == []
     assert all("governance.aave.com" not in str(getattr(call, "url", "")) for call in disabled.backend.calls)
     assert all("medium.com" not in str(getattr(call, "url", "")) for call in disabled.backend.calls)
+    assert all("blog.lido.fi" not in str(getattr(call, "url", "")) for call in disabled.backend.calls)
+    assert all("research.lido.fi" not in str(getattr(call, "url", "")) for call in disabled.backend.calls)
     assert all("status.solana.com" not in str(getattr(call, "url", "")) for call in disabled.backend.calls)
     quiet_rows = _coverage(quiet, wallet, "exposure_news")
     assert quiet_rows
@@ -612,7 +625,14 @@ def test_mcm_live_l2_05_no_feed_gap_not_no_news(
         [],
         fetch=True,
     )
-    _queue(failed.backend, _feeds(RawResponse(500, {}, b"nope"), RawResponse(500, {}, b"nope"), RawResponse(500, {}, b"nope"), RawResponse(500, {}, b"nope")))
+    _queue(failed.backend, _feeds(
+        RawResponse(500, {}, b"nope"),
+        RawResponse(500, {}, b"nope"),
+        RawResponse(500, {}, b"nope"),
+        RawResponse(500, {}, b"nope"),
+        RawResponse(500, {}, b"nope"),
+        RawResponse(500, {}, b"nope"),
+    ))
     failed_report = _cli(capsys, failed, _argv(failed))
     failed_rows = _coverage(failed_report, wallet, "exposure_news")
     assert failed_rows
@@ -695,10 +715,14 @@ def _feeds(
     kinza: RawResponse | bytes,
     solana: RawResponse | bytes,
     lista: RawResponse | bytes = _EMPTY,
+    lido_blog: RawResponse | bytes = _EMPTY,
+    lido_research: RawResponse | bytes = _EMPTY,
 ) -> dict[str, RawResponse]:
     return {
         AAVE_URL: _as_response(aave),
         KINZA_URL: _as_response(kinza),
+        LIDO_BLOG_URL: _as_response(lido_blog),
+        LIDO_RESEARCH_URL: _as_response(lido_research),
         LISTA_URL: _as_response(lista),
         SOLANA_URL: _as_response(solana),
     }

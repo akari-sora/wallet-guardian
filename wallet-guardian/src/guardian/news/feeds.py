@@ -22,6 +22,7 @@ _PROTOCOL_ALIASES = {
     "aave_v3": "aave_v3",
     "erc4626": "erc4626",
     "kinza": "kinza",
+    "lido": "lido",
     "lista": "lista_slisbnb",
     "lista_slisbnb": "lista_slisbnb",
     "solana": "solana_stake",

@@ -1,7 +1,7 @@
 """Link a news incident to a wallet only through a real position or a live approval.
 
 An unknown position becomes one deduped check item, not a loss alert. No position
-and no active approval produces no notice. Kinza, Lista, and UXLINK are not
+and no active approval produces no notice. Kinza, Lido, Lista, and UXLINK are not
 attached just because the wallet exists.
 
 Kinza approval exposure matches the Pool only. The PoolAddressesProvider is a
@@ -27,6 +27,7 @@ _CONTRACTS = {
     "aave_v3": evm_contracts("aave_v3"),
     "erc4626": frozenset(),
     "kinza": evm_contracts("kinza"),
+    "lido": evm_contracts("lido"),
     "lista_slisbnb": evm_contracts("lista_slisbnb"),
     "solana_stake": frozenset({STAKE_PROGRAM}),
     "uxlink": frozenset(),
@@ -138,6 +139,7 @@ def exposed_protocols(wallet: WalletExposure) -> frozenset[str]:
         mapped = {
             "aave_v3": "aave_v3",
             "kinza": "kinza",
+            "lido": "lido",
             "lista_slisbnb": "lista_slisbnb",
             "solana_stake": "solana_stake",
             "uxlink_holdings": "uxlink",

@@ -1,0 +1,25 @@
+{
+  "id": "lido",
+  "official": true,
+  "retrieved": "2026-10-09",
+  "protocols": [
+    "lido"
+  ],
+  "feeds": [
+    {
+      "url": "https://blog.lido.fi/rss/",
+      "kind": "rss",
+      "fetch": "allowlisted_get",
+      "verified": "2026-10-09",
+      "max_bytes": 524288
+    },
+    {
+      "url": "https://research.lido.fi/latest.rss",
+      "kind": "rss",
+      "fetch": "allowlisted_get",
+      "verified": "2026-10-09",
+      "max_bytes": 524288
+    }
+  ],
+  "notes": "Two official RSS feeds, allowlisted public GETs verified fetchable and parseable 2026-10-09: blog.lido.fi/rss (application/rss+xml, about 202 KiB) and research.lido.fi/latest.rss (Discourse RSS, about 196 KiB). Cap 512 KiB each. No API key. offline fixtures; live probe: see docs/coverage-matrix.md."
+}

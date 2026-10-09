@@ -27,8 +27,19 @@ def test_share02_allowlist_matches_catalog_and_is_https_rss_only() -> None:
     hosts = set(news_fetch_capability(sources).hosts)
     assert hosts == {urlsplit(url).hostname for url in ALLOWLISTED_FEED_URLS}
     assert "api.paragraph.com" in hosts
+    assert "blog.lido.fi" in hosts
+    assert "research.lido.fi" in hosts
     lista = sources["lista"]
     assert any(feed.url == "https://api.paragraph.com/blogs/rss/@blog.lista.org" for feed in lista.feeds)
+    lido = sources["lido"]
+    assert lido.official is True
+    assert lido.retrieved == "2026-10-09"
+    assert lido.protocols == ("lido",)
+    assert {feed.url for feed in lido.feeds} == {
+        "https://blog.lido.fi/rss/",
+        "https://research.lido.fi/latest.rss",
+    }
+    assert all(feed.kind == "rss" and feed.fetch == "allowlisted_get" and feed.max_bytes == 524288 for feed in lido.feeds)
 
 
 def test_share02_paragraph_style_feed_parses_to_a_dated_item() -> None:
@@ -39,6 +50,18 @@ def test_share02_paragraph_style_feed_parses_to_a_dated_item() -> None:
     assert item.title == "Product wind-down notice"
     assert item.published_at is not None
     assert item.published_at.year == 2026
+
+
+def test_share02_lido_feed_protocol_is_the_lido_plugin() -> None:
+    body = (
+        '<?xml version="1.0"?><rss version="2.0"><channel><item>'
+        "<title>Queue note</title><link>https://news.example.invalid/lido/queue</link>"
+        "<pubDate>Thu, 08 Oct 2026 12:00:00 GMT</pubDate><description>body</description>"
+        "</item></channel></rss>"
+    ).encode("utf-8")
+    parsed = parse_feed(body, source_id="lido", source_protocols=("lido",))
+    assert parsed.ok is True
+    assert parsed.items[0].protocols == ("lido",)
 
 
 def test_share02_html_redirect_stub_is_not_a_feed() -> None:
