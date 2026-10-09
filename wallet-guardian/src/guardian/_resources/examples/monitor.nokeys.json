@@ -130,7 +130,7 @@
       "adapter": "nodereal_transfers",
       "endpoint_env": "NODEREAL_BSC_URL",
       "credential_env": "NODEREAL_API_KEY",
-      "budget_group": "nodereal-bsc",
+      "budget_group": "nodereal-key",
       "enabled": true
     },
     "blockscout-base": {
@@ -555,8 +555,8 @@
       "max_requests_per_day": 1000,
       "retry_attempts": 2
     },
-    "nodereal-bsc": {
-      "max_rps": 2,
+    "nodereal-key": {
+      "max_rps": 1,
       "max_concurrency": 1,
       "max_requests_per_day": 20000,
       "retry_attempts": 3
