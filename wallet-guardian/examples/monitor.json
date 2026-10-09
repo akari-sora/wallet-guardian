@@ -119,6 +119,29 @@
       "credential_env": "COINGECKO_API_KEY",
       "budget_group": "price-account",
       "enabled": false
+    },
+    "nodereal-bsc": {
+      "adapter": "nodereal_transfers",
+      "endpoint_env": "NODEREAL_BSC_URL",
+      "credential_env": "NODEREAL_API_KEY",
+      "budget_group": "nodereal-bsc",
+      "enabled": true
+    },
+    "blockscout-base": {
+      "adapter": "blockscout",
+      "endpoint_env": "BLOCKSCOUT_BASE_URL",
+      "credential_env": "BLOCKSCOUT_BASE_API_KEY",
+      "budget_group": "blockscout-base",
+      "enabled": true,
+      "method_credits": 20
+    },
+    "blockscout-optimism": {
+      "adapter": "blockscout",
+      "endpoint_env": "BLOCKSCOUT_OPTIMISM_URL",
+      "credential_env": "BLOCKSCOUT_OPTIMISM_API_KEY",
+      "budget_group": "blockscout-optimism",
+      "enabled": true,
+      "method_credits": 20
     }
   },
   "routing": [
@@ -176,8 +199,7 @@
       "network": "bsc-mainnet",
       "capability": "history.native_external",
       "source_ids": [
-        "etherscan",
-        "rpc-bsc-mainnet"
+        "nodereal-bsc"
       ]
     },
     {
@@ -234,8 +256,7 @@
       "network": "base-mainnet",
       "capability": "history.native_external",
       "source_ids": [
-        "etherscan",
-        "rpc-base-mainnet"
+        "blockscout-base"
       ]
     },
     {
@@ -263,8 +284,7 @@
       "network": "optimism-mainnet",
       "capability": "history.native_external",
       "source_ids": [
-        "etherscan",
-        "rpc-optimism-mainnet"
+        "blockscout-optimism"
       ]
     },
     {
@@ -433,12 +453,32 @@
       "max_concurrency": 1,
       "max_requests_per_day": 1000,
       "retry_attempts": 2
+    },
+    "nodereal-bsc": {
+      "max_rps": 2,
+      "max_concurrency": 1,
+      "max_requests_per_day": 20000,
+      "retry_attempts": 3
+    },
+    "blockscout-base": {
+      "max_rps": 5,
+      "max_concurrency": 1,
+      "max_requests_per_day": 5000,
+      "retry_attempts": 3
+    },
+    "blockscout-optimism": {
+      "max_rps": 5,
+      "max_concurrency": 1,
+      "max_requests_per_day": 5000,
+      "retry_attempts": 3
     }
   },
   "plugins": [
     "lista-slisbnb",
     "aave-v3",
-    "erc4626-registered"
+    "erc4626-registered",
+    "kinza",
+    "uxlink-holdings"
   ],
   "sanctions_lists": [
     "us-ofac-sdn",

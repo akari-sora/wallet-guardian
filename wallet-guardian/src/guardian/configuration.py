@@ -159,7 +159,7 @@ def load_public_config(path: str | Path) -> PublicConfig:
     if not path.is_file():
         raise ConfigError("public config was not found")
     text = path.read_text(encoding="utf-8")
-    if _text_has_secret(text):
+    if _text_has_secret(_scrub_log_contracts(text)):
         raise ConfigError("forbidden value")
     document = _read_object(text, "public config")
     _validate_document(document, SCHEMAS / "monitor.schema.json", "monitor")
@@ -493,6 +493,10 @@ def _walk(value: Any) -> None:
             if not isinstance(key, str) or _norm_key(key) in _FORBIDDEN_KEYS:
                 shown = key if isinstance(key, str) else "key"
                 raise ConfigError(f"forbidden field: {shown}")
+            if key == "log_contract" and isinstance(item, str):
+                if not re.fullmatch(r"0x[0-9a-fA-F]{40}", item):
+                    raise ConfigError("forbidden value")
+                continue
             _walk(item)
         return
     if isinstance(value, list):
@@ -501,6 +505,11 @@ def _walk(value: Any) -> None:
         return
     if isinstance(value, str) and _text_has_secret(value):
         raise ConfigError("forbidden value")
+
+
+def _scrub_log_contracts(text: str) -> str:
+    """An emitting-contract filter is not a monitored wallet. The runtime still refuses a wallet."""
+    return re.sub(r'("log_contract"\s*:\s*)"0x[0-9a-fA-F]{40}"', r'\1""', text)
 
 
 def _text_has_secret(value: str) -> bool:

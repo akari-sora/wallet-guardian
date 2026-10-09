@@ -243,7 +243,11 @@ class ReadOnlyTransport:
                     raise SecurityError("redirect_host", reason="redirect_host")
                 current = target
                 continue
-            return _finish(source_id, operation.protocol, raw, self.max_response_bytes)
+            result = _finish(source_id, operation.protocol, raw, self.max_response_bytes)
+            ledger = getattr(self, "provenance", None)
+            if ledger is not None:
+                ledger.observe(source, operation, result)
+            return result
 
     def request_allowlisted_get(
         self,

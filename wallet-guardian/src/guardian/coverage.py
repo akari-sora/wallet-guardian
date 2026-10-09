@@ -282,7 +282,9 @@ def _quality(
             reasons = ["partial_result"]
         return "partial", _unique([*reasons, *extra]), now
     if observation.category in {"ok", "empty"} and not reasons:
-        return "complete_in_declared_scope", [], now
+        # Completeness labels stay visible. They do not turn a covered window into a failure.
+        kept = [code for code in extra if code in {"incremental_window_complete", "pre_origin_history_unknown"}]
+        return "complete_in_declared_scope", _unique(kept), now
     if observation.category in {"ok", "empty"}:
         return "partial", _unique([*reasons, *extra]), now
     return "unknown", _unique(["unrecognized_category", *extra]), observation.last_success_at

@@ -14,8 +14,10 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import uuid4
 
+from guardian.chains.evm.accounting import TRANSFER_TOPIC, account_logs, pad_address
 from guardian.chains.evm.adapter import LOG_RANGE_MAX, EvmAdapter, chain_id_operation, evm_rpc, hex_quantity, to_observation
-from guardian.chains.evm.permissions import _PERMISSION_CAPABILITIES, scan_approvals
+from guardian.chains.evm.permissions import APPROVAL_LOG_TOPICS, _PERMISSION_CAPABILITIES, approval_log_operation, scan_approvals
+from guardian.chains.evm.permits import PERMIT2_PERMIT_TOPIC
 from guardian.chains.solana.adapter import SolanaAdapter, genesis_hash_operation
 from guardian.configuration import (
     AccountsDocument,
@@ -39,22 +41,35 @@ from guardian.news.exposure import (
     load_caller_incidents,
 )
 from guardian.news.fetch import FetchReport, fetch_allowlisted_news, news_state_row
+from guardian.protocols.kinza_cache import KinzaMetadataCache
 from guardian.protocols.models import unknown_position
 from guardian.protocols.registry import PLUGIN_REGISTRY
 from guardian.protocols.runner import run_plugin
 from guardian.protocols.uxlink import AssetManifestError, CallerQuote, parse_price_input, public_leg
 from guardian.rules import AlertPolicy, Candidate
+from guardian.runtime_binding import assert_worktree
+from guardian.scan.window import plan_chunks, read_logs, reject_wallet_emitter, window_covers
+from guardian.security.transport_policy import Operation
+from guardian.sources.blockscout import BlockscoutClient
 from guardian.sources.budget import BudgetBook, BudgetExhausted
 from guardian.sources.capabilities import ROOT, load_source_capabilities
 from guardian.sources.etherscan import EtherscanClient
+from guardian.sources.nodereal import NodeRealClient
+from guardian.sources.plan_cache import PlanFailureCache, database_file
+from guardian.sources.provenance import CallLedger
 from guardian.sources.transport import HttpxBackend, ReadOnlyTransport, TransportError, build_endpoint_registry
 from guardian.storage import Database
 
 Clock = Callable[[], float]
 _APPLICABLE = frozenset({"implemented", "partial"})
 _CURSOR_OVERLAP = 2
-_MAX_PAGES = 2
 _INCLUSION_LAG = 12
+_INDEXER_ADAPTERS = frozenset({"etherscan_v2", "nodereal_transfers", "blockscout"})
+_FALLBACK_INDEXERS = {
+    "base-mainnet": "blockscout",
+    "bsc-mainnet": "nodereal_transfers",
+    "optimism-mainnet": "blockscout",
+}
 _APPROVAL_ALERTS = frozenset({"first_observed", "increased", "new"})
 _PLUGIN_IDS = {
     "aave-v3": "aave_v3",
@@ -106,22 +121,34 @@ class RunReport:
     delivery_status: str
     misconfigured: bool
     baseline: bool = False
+    budget: dict[str, Any] | None = None
+    checkpoints: list[dict[str, Any]] | None = None
+    log_evidence: list[dict[str, Any]] | None = None
+    permission_notes: list[dict[str, Any]] | None = None
+    runtime: dict[str, Any] | None = None
+    indexer_disclosures: list[dict[str, Any]] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "baseline": self.baseline,
+            "budget": self.budget or {},
+            "checkpoints": self.checkpoints or [],
             "coverage": self.coverage,
             "decisions": self.decisions,
             "delivery_status": self.delivery_status,
             "finished": self.finished,
+            "indexer_disclosures": self.indexer_disclosures or [],
             "live_pass": False,
             "live_verified": False,
+            "log_evidence": self.log_evidence or [],
             "misconfigured": self.misconfigured,
             "native_reads": self.native_reads,
             "outbox_written": self.outbox_written,
+            "permission_notes": self.permission_notes or [],
             "positions": self.positions,
             "required": self.required,
             "run_id": self.run_id,
+            "runtime": self.runtime or {},
             "sent": self.sent,
             "started": self.started,
             "status": self.status,
@@ -143,11 +170,24 @@ def run_capability_pipeline(
     price_input: bytes | None = None,
 ) -> RunReport:
     """Read configured wallets and commit one capability cycle."""
+    runtime = assert_worktree()
     started_at = clock()
     started = _iso(started_at)
     tenant = accounts.tenant_id
     database.upsert_tenant(tenant, tenant)
     transport = _transport(public_config, backend, clock)
+    ledger = CallLedger()
+    transport.provenance = ledger
+    disclosures: list[dict[str, Any]] = []
+    transport.indexer_disclosures = disclosures
+    kinza_cache = KinzaMetadataCache()
+    plan_cache = _plan_cache(database)
+    checkpoints: list[dict[str, Any]] = []
+    log_evidence: list[dict[str, Any]] = []
+    permission_notes: list[dict[str, Any]] = []
+    polling = public_config.document.get("polling") if isinstance(public_config.document.get("polling"), dict) else {}
+    bootstrap_origin = polling.get("bootstrap_origin") if isinstance(polling.get("bootstrap_origin"), int) else None
+    deadline = polling.get("round_deadline_seconds") if isinstance(polling.get("round_deadline_seconds"), int) else None
     registry = load_registry(ROOT / "config" / "chains")
     catalog = load_source_capabilities()
     policy = AlertPolicy.from_public(public_config.document["alerts"])
@@ -186,6 +226,10 @@ def run_capability_pipeline(
         )
     quotes = _price_quotes(price_input)
     news_coverage = _news_observation(news_input is not None, news_reason)
+    peers: dict[str, list[tuple[str, str]]] = {}
+    for account, network in enabled:
+        peers.setdefault(network, []).append((account.wallet_id, account.normalized.canonical))
+    log_done: set[str] = set()
     for account, network in enabled:
         entry = registry[network]
         family = entry.get("family")
@@ -201,6 +245,17 @@ def run_capability_pipeline(
                 held_cursors=held_cursors,
                 started=started,
                 active_approvals=approval_state,
+                database=database,
+                clock=clock,
+                started_at=started_at,
+                peers=peers.get(network, []),
+                log_done=log_done,
+                plan_cache=plan_cache,
+                checkpoints=checkpoints,
+                log_evidence=log_evidence,
+                permission_notes=permission_notes,
+                bootstrap_origin=bootstrap_origin,
+                deadline=deadline,
             )
         elif family == "solana":
             _read_solana(
@@ -215,6 +270,7 @@ def run_capability_pipeline(
             position_rows=position_rows,
             position_labels=position_labels,
             quotes=quotes,
+            kinza_cache=kinza_cache,
         )
         observations[(account.wallet_id, network, "exposure_news")] = news_coverage
         _fill_gaps(public_config, private_inputs, catalog, account.wallet_id, network, observations)
@@ -308,6 +364,12 @@ def run_capability_pipeline(
         delivery_status=delivery.status,
         misconfigured=delivery.misconfigured,
         baseline=bool(baseline),
+        budget={**ledger.as_dict(), "kinza": kinza_cache.snapshot()},
+        checkpoints=checkpoints,
+        log_evidence=log_evidence,
+        permission_notes=permission_notes,
+        runtime=runtime,
+        indexer_disclosures=disclosures,
     )
     database.save_run(tenant, run_id, {
         "baseline": report.baseline,
@@ -583,7 +645,8 @@ def _notice_network(wallet_id: str, observations: Sequence[Any], approvals: Sequ
 def _read_evm(
     public_config, private_inputs, transport, account, network, entry, observations, native_reads,
     seen, baseline, candidates, tenant, *, stored_cursors, previous_native, events, seen_transfers,
-    explicit_cursors, held_cursors, started, active_approvals,
+    explicit_cursors, held_cursors, started, active_approvals, database, clock, started_at, peers,
+    log_done, plan_cache, checkpoints, log_evidence, permission_notes, bootstrap_origin, deadline,
 ) -> None:
     wallet_id = account.wallet_id
     source_id = _family_source(public_config, private_inputs, network, "evm_rpc")
@@ -609,22 +672,21 @@ def _read_evm(
     head = _head(transport, source_id)
     chain_id = entry.get("evm_chain_id") if isinstance(entry.get("evm_chain_id"), int) else network
     native_asset = _native_asset(entry, network)
-    fungible_cursor = _cursor_block(stored_cursors, wallet_id, network, "history.fungible")
-    _read_token_logs(
-        session, address, wallet_id, network, head, fungible_cursor, source_id, chain_id, native_asset,
-        observations, seen, baseline, candidates, tenant, events, seen_transfers, explicit_cursors,
-        held_cursors, started,
+    checkpoint = _checkpoint(transport, source_id, network, head, str(entry.get("finality_policy") or ""))
+    checkpoints.append(checkpoint)
+    scan = _Scan(
+        public_config, transport, database, tenant, clock, started_at, source_id, network, chain_id,
+        native_asset, head, checkpoint, bootstrap_origin, deadline, events, seen_transfers, candidates,
+        observations, seen, baseline, explicit_cursors, held_cursors, started, log_evidence, peers,
     )
+    fungible_cursor = _cursor_block(stored_cursors, wallet_id, network, "history.fungible")
+    _read_token_logs(scan, address, wallet_id, fungible_cursor, log_done)
     approval_cursor = _cursor_block(stored_cursors, wallet_id, network, "permissions.erc20")
     _read_approvals(
-        transport, source_id, address, wallet_id, network, head, approval_cursor, chain_id,
-        observations, seen, baseline, candidates, tenant, events, explicit_cursors, held_cursors, started,
-        active_approvals,
+        scan, address, wallet_id, approval_cursor, active_approvals, permission_notes,
     )
     external_rows = _history_external(
-        public_config, private_inputs, transport, wallet_id, network, address, head, chain_id,
-        native_asset, stored_cursors, observations, explicit_cursors, held_cursors, tenant, events,
-        seen_transfers, candidates, seen, baseline, started, source_hint=source_id,
+        scan, public_config, private_inputs, wallet_id, address, stored_cursors, plan_cache,
     )
     _native_delta(
         wallet_id, network, balance.raw_wei, previous_native.get((wallet_id, network)), head, external_rows,
@@ -680,80 +742,13 @@ def _read_solana(public_config, private_inputs, transport, account, network, ent
             ))
 
 
-def _history_external(
-    public_config, private_inputs, transport, wallet_id, network, address, head, chain_id, native_asset,
-    stored_cursors, observations, explicit_cursors, held_cursors, tenant, events, seen_transfers, candidates,
-    seen, baseline, started, *, source_hint,
-) -> list[dict[str, Any]]:
+def _history_external(scan, public_config, private_inputs, wallet_id, address, stored_cursors, plan_cache) -> list[dict[str, Any]]:
     """Call a credentialed indexer. A missing key stays blocked and does not read."""
-    source_id = _routed(public_config, network, "history.native_external")
-    if source_id is None:
-        observations[(wallet_id, network, "history.native_external")] = _blocked("endpoint_missing")
-        return []
-    status = private_inputs.source_status.get(source_id)
-    source = public_config.document["sources"].get(source_id, {})
-    if isinstance(source.get("credential_env"), str) and (status is None or not status.credential_present):
-        observations[(wallet_id, network, "history.native_external")] = _blocked("credential_missing")
-        return []
-    if source.get("adapter") != "etherscan_v2" or not isinstance(chain_id, int):
-        observations[(wallet_id, network, "history.native_external")] = _blocked("unsupported_source")
-        return []
-    credential_env = source.get("credential_env")
-    secrets = _secrets(public_config)
-    credential = secrets.get(credential_env) if isinstance(credential_env, str) else None
-    if not isinstance(credential, str) or not credential.strip():
-        observations[(wallet_id, network, "history.native_external")] = _blocked("credential_missing")
-        return []
-    stored = _cursor_block(stored_cursors, wallet_id, network, "history.native_external")
-    if head is None:
-        observations[(wallet_id, network, "history.native_external")] = _blocked("head_unreadable")
-        _hold_cursor(held_cursors, wallet_id, network, "history.native_external")
-        return []
-    ranges, fully = _plan_ranges(stored, head)
-    client = EtherscanClient(
-        transport,
-        source_id,
-        credential=credential,
-        credential_env=credential_env if isinstance(credential_env, str) else "ETHERSCAN_API_KEY",
-        clock=lambda: 0.0,
-        sleep=lambda _seconds: None,
-    )
-    native_items: list[Any] = []
-    token_items: list[Any] = []
-    last = None
-    failed = False
-    for start, end in ranges:
-        native = _indexer_page(client, chain_id, "txlist", address, start, end, stored)
-        token = _indexer_page(client, chain_id, "tokentx", address, start, end, stored)
-        if native is None or token is None:
-            failed = True
-            break
-        last = native
-        if native.category == "error" or token.category == "error" or not native.pagination_complete or not token.pagination_complete:
-            failed = True
-            last = native if native.category == "error" or not native.pagination_complete else token
-            break
-        native_items.extend(native.items)
-        token_items.extend(token.items)
-    if failed or not fully or last is None:
-        if last is not None and last.category == "error":
-            observations[(wallet_id, network, "history.native_external")] = to_observation(last, source=source_id)
-        else:
-            observations[(wallet_id, network, "history.native_external")] = _gap_observation()
-        _hold_cursor(held_cursors, wallet_id, network, "history.native_external")
-        return []
-    observations[(wallet_id, network, "history.native_external")] = to_observation(
-        last, source=source_id, scope_from=str(ranges[0][0]), scope_to=str(head),
-    )
-    if last.category in {"ok", "empty", "partial"}:
-        _baseline(wallet_id, network, "history.native_external", seen, baseline, candidates, tenant)
-    _advance_cursor(explicit_cursors, held_cursors, wallet_id, network, "history.native_external", head)
-    rows = _etherscan_transfers(native_items, address, wallet_id, network, native_asset, True, source_id)
-    rows.extend(_etherscan_transfers(token_items, address, wallet_id, network, native_asset, False, source_id))
-    _emit_transfers(
-        rows, candidates, events, seen_transfers, tenant, chain_id, started, head, source_hint,
-    )
-    return rows
+    from guardian.scan.drive import history_external
+
+    del public_config
+    stored = _cursor_block(stored_cursors, wallet_id, scan.network, "history.native_external")
+    return history_external(scan, private_inputs, wallet_id, address, stored, plan_cache)
 
 
 def _fill_gaps(public_config, private_inputs, catalog, wallet_id, network, observations) -> None:
@@ -815,6 +810,28 @@ def _routed_has(public_config, network: str, source_id: str) -> bool:
         if route.get("network") == network and source_id in (route.get("source_ids") or []):
             return True
     return False
+
+
+def _hold_cursor(held: set[tuple[str, str, str]], wallet: str, network: str, capability: str) -> None:
+    held.add((wallet, network, capability))
+
+
+def _advance_cursor(explicit: list[dict[str, Any]], held: set[tuple[str, str, str]], wallet: str, network: str, capability: str, block: int) -> None:
+    held.add((wallet, network, capability))
+    explicit.append({
+        "block_number": str(block),
+        "capability": capability,
+        "cursor": str(block),
+        "network": network,
+        "wallet_id": wallet,
+    })
+
+
+def _native_asset(entry: Mapping[str, Any], network: str) -> str:
+    native = entry.get("native_asset")
+    if isinstance(native, Mapping) and isinstance(native.get("identity"), str):
+        return native["identity"]
+    return f"native:{network}"
 
 
 def _head(transport, source_id: str) -> int | None:
@@ -1017,222 +1034,210 @@ def _cursor_block(stored: Mapping[tuple[str, str, str], Mapping[str, Any]], wall
     return _raw_int(row.get("block_number")) if _raw_int(row.get("block_number")) is not None else _raw_int(row.get("cursor"))
 
 
-def _plan_ranges(stored: int | None, head: int) -> tuple[list[tuple[int, int]], bool]:
-    """Page a cursor gap. False means this run cannot reach head."""
-    if head < 0:
-        head = 0
-    if stored is None:
-        return [(max(0, head - LOG_RANGE_MAX), head)], True
-    start = max(0, stored + 1 - _CURSOR_OVERLAP)
-    if start > head:
-        return [(head, head)], True
-    ranges: list[tuple[int, int]] = []
-    cursor = start
-    while cursor <= head:
-        if len(ranges) >= _MAX_PAGES:
-            return ranges, False
-        end = min(head, cursor + LOG_RANGE_MAX)
-        ranges.append((cursor, end))
-        if end >= head:
-            return ranges, True
-        cursor = end + 1
-    return ranges, True
+def _plan_cache(database) -> PlanFailureCache | None:
+    file = database_file(database)
+    if file is None:
+        return None
+    return PlanFailureCache(file.parent / "capability-failures.json")
 
 
-def _hold_cursor(held: set[tuple[str, str, str]], wallet: str, network: str, capability: str) -> None:
-    held.add((wallet, network, capability))
-
-
-def _advance_cursor(explicit: list[dict[str, Any]], held: set[tuple[str, str, str]], wallet: str, network: str, capability: str, block: int) -> None:
-    held.add((wallet, network, capability))
-    explicit.append({
-        "block_number": str(block),
-        "capability": capability,
-        "cursor": str(block),
+def _checkpoint(transport, source_id: str, network: str, head: int | None, policy: str) -> dict[str, Any]:
+    found: dict[str, Any] = {
+        "hash": None,
+        "height": head,
         "network": network,
-        "wallet_id": wallet,
-    })
+        "policy": policy or "round_start_head",
+        "timestamp": None,
+    }
+    if head is None:
+        return found
+    try:
+        result = transport.request(source_id, evm_rpc("eth_getBlockByNumber", [hex(head), False]))
+    except Exception:
+        return found
+    body = getattr(result, "body", None)
+    block = body.get("result") if isinstance(body, dict) else None
+    if not isinstance(block, dict):
+        return found
+    digest = block.get("hash")
+    if isinstance(digest, str) and digest.startswith("0x") and len(digest) == 66:
+        found["hash"] = digest
+    found["timestamp"] = _flexible_int(block.get("timestamp"))
+    number = _flexible_int(block.get("number"))
+    if isinstance(number, int):
+        found["height"] = number
+    return found
 
 
-def _gap_observation() -> CoverageObservation:
-    return CoverageObservation(
-        category="partial",
-        pagination_complete=False,
-        gap_detection_complete=False,
-        gaps=("unread_gap",),
-        cursor=None,
-        declared="block_range",
-        reason_codes=("unread_gap",),
-        trust="unverified",
-        price_quality="not_applicable",
+def _Scan(
+    public_config, transport, database, tenant, clock, started_at, source_id, network, chain_id,
+    native_asset, head, checkpoint, bootstrap_origin, deadline, events, seen_transfers, candidates,
+    observations, seen, baseline, explicit_cursors, held_cursors, started, log_evidence, peers,
+):
+    from guardian.scan.drive import ScanContext
+
+    return ScanContext(
+        public_config=public_config,
+        transport=transport,
+        database=database,
+        tenant=tenant,
+        clock=clock,
+        started_at=started_at,
+        source_id=source_id,
+        network=network,
+        chain_id=chain_id,
+        native_asset=native_asset,
+        head=head,
+        checkpoint=checkpoint,
+        bootstrap_origin=bootstrap_origin,
+        deadline=deadline,
+        events=events,
+        seen_transfers=seen_transfers,
+        candidates=candidates,
+        observations=observations,
+        seen=seen,
+        baseline=baseline,
+        explicit_cursors=explicit_cursors,
+        held_cursors=held_cursors,
+        started=started,
+        log_evidence=log_evidence,
+        peers=list(peers),
+        emit=_emit_transfers,
+        baseline_cb=_baseline,
+        advance=_advance_cursor,
+        hold=_hold_cursor,
+        movement_rows=_movement_transfers,
+        indexer_rows=_etherscan_transfers,
+        remember_approval=_remember_approval,
+        overlap=_CURSOR_OVERLAP,
     )
 
 
-def _native_asset(entry: Mapping[str, Any], network: str) -> str:
-    native = entry.get("native_asset")
-    if isinstance(native, Mapping) and isinstance(native.get("identity"), str):
-        return native["identity"]
-    return f"native:{network}"
+def _read_token_logs(scan, address, wallet_id, stored, log_done) -> None:
+    from guardian.scan.drive import read_token_logs
+
+    del address, wallet_id
+    read_token_logs(scan, stored, log_done)
 
 
-def _read_token_logs(
-    session, address, wallet_id, network, head, stored, source_id, chain_id, native_asset,
-    observations, seen, baseline, candidates, tenant, events, seen_transfers, explicit_cursors,
-    held_cursors, started,
-) -> None:
-    capability = "history.fungible"
-    if head is None:
-        history = session.token_history_from_logs(address, 0, LOG_RANGE_MAX)
-        if history.observation is not None:
-            observations[(wallet_id, network, capability)] = history.observation
-        _hold_cursor(held_cursors, wallet_id, network, capability)
-        return
-    ranges, fully = _plan_ranges(stored, head)
-    pages = []
-    failed = False
-    for start, end in ranges:
-        try:
-            history = session.token_history_from_logs(
-                address, start, end, previous_cursor=None if stored is None else str(stored),
-            )
-        except (BudgetExhausted, TransportError, Exception):
-            failed = True
-            break
-        if history.observation is None or history.observation.category == "error" or history.refused:
-            failed = True
-            if history.observation is not None:
-                observations[(wallet_id, network, capability)] = history.observation
-            break
-        pages.append(history)
-    if failed or not fully or not pages:
-        if (wallet_id, network, capability) not in observations:
-            observations[(wallet_id, network, capability)] = _gap_observation() if not failed else _blocked("read_error")
-        _hold_cursor(held_cursors, wallet_id, network, capability)
-        return
-    last = pages[-1]
-    if last.observation is not None:
-        observations[(wallet_id, network, capability)] = last.observation
-        if last.observation.category in {"ok", "empty", "partial"}:
-            _baseline(wallet_id, network, capability, seen, baseline, candidates, tenant)
-    _advance_cursor(explicit_cursors, held_cursors, wallet_id, network, capability, head)
-    rows = []
-    for page in pages:
-        rows.extend(_movement_transfers(page.ledger, wallet_id, network, source_id))
-    _emit_transfers(rows, candidates, events, seen_transfers, tenant, chain_id, started, head, source_id)
+def _read_approvals(scan, address, wallet_id, stored, active_approvals, permission_notes) -> None:
+    from guardian.scan.drive import read_approvals
+
+    read_approvals(scan, address, wallet_id, stored, active_approvals, permission_notes)
 
 
-def _read_approvals(
-    transport, source_id, address, wallet_id, network, head, stored, chain_id,
-    observations, seen, baseline, candidates, tenant, events, explicit_cursors, held_cursors, started,
-    active_approvals,
-) -> None:
-    if head is None:
-        start, end = 0, LOG_RANGE_MAX
-        ranges, fully = [(start, end)], False
-    else:
-        ranges, fully = _plan_ranges(stored, head)
-    scans = []
-    failed = False
-    previous = None if stored is None else str(stored)
-    for start, end in ranges:
-        try:
-            scan = scan_approvals(
-                transport, source_id, address, start, end,
-                previous_cursor=previous, gap_detection_complete=False,
-            )
-        except (BudgetExhausted, TransportError, Exception):
-            failed = True
-            break
-        errored = any(item.category == "error" for item in scan.coverage.values())
-        if errored:
-            failed = True
-            for capability, observation in scan.coverage.items():
-                observations[(wallet_id, network, capability)] = observation
-            break
-        scans.append(scan)
-    if failed or not fully or not scans:
-        if not any(key[2] in _PERMISSION_CAPABILITIES for key in observations if key[0] == wallet_id and key[1] == network):
-            _block_caps(wallet_id, network, observations, _PERMISSION_CAPABILITIES, "unread_gap" if not failed else "read_error")
-        elif not failed:
-            for capability in _PERMISSION_CAPABILITIES:
-                observations[(wallet_id, network, capability)] = _gap_observation()
-        for capability in _PERMISSION_CAPABILITIES:
-            _hold_cursor(held_cursors, wallet_id, network, capability)
-        return
-    last = scans[-1]
-    for capability, observation in last.coverage.items():
-        observations[(wallet_id, network, capability)] = observation
-        if observation.category in {"ok", "empty", "partial"}:
-            _baseline(wallet_id, network, capability, seen, baseline, candidates, tenant)
-    for capability in _PERMISSION_CAPABILITIES:
-        _advance_cursor(explicit_cursors, held_cursors, wallet_id, network, capability, head if head is not None else ranges[-1][1])
-    seen_rows: set[tuple[Any, ...]] = set()
-    # active_approvals is the persisted approval state keyed by (wallet, network).
-    # Rows read this run update it: active adds, any other status removes. A failed
-    # read returns earlier and keeps the stored state untouched.
+def _remember_approval(scan, wallet_id, permission_scan, active_approvals, _new_events) -> None:
+    del _new_events
+    seen_rows = getattr(scan, "seen_approvals", None)
+    if seen_rows is None:
+        seen_rows = set()
+        scan.seen_approvals = seen_rows
     merged = {
         (str(item.get("token")), str(item.get("spender"))): dict(item)
-        for item in active_approvals.get((wallet_id, network), [])
+        for item in active_approvals.get((wallet_id, scan.network), [])
         if isinstance(item, dict)
     }
-    for scan in scans:
-        for row in scan.rows:
-            pair = (str(row.token).lower(), str(row.spender).lower())
-            if row.status == "active":
-                merged[pair] = {
-                    "network": network,
-                    "spender": pair[1],
-                    "status": "active",
-                    "token": pair[0],
-                    "wallet_id": wallet_id,
-                }
-            else:
-                merged.pop(pair, None)
-    active_approvals[(wallet_id, network)] = [merged[key] for key in sorted(merged)]
-    for scan in scans:
-        for row in scan.rows:
-            if row.status != "active":
-                continue
-            if "unlimited" not in row.flags and row.change not in _APPROVAL_ALERTS:
-                continue
-            marker = (row.tx_id, row.log_index, row.token, row.spender, row.change)
-            if marker in seen_rows:
-                continue
-            seen_rows.add(marker)
-            position = "0" if row.log_index is None else str(row.log_index)
-            tx = row.tx_id if isinstance(row.tx_id, str) else ""
-            identity = f"{network}:{tx}:{position}:approval:{row.token}:{row.spender}"
-            candidates.append(Candidate(
-                tenant_id=tenant,
+    for row in permission_scan.rows:
+        pair = (str(row.token).lower(), str(row.spender).lower())
+        if row.status == "active":
+            merged[pair] = {
+                "network": scan.network,
+                "spender": pair[1],
+                "status": "active",
+                "token": pair[0],
+                "wallet_id": wallet_id,
+            }
+        else:
+            merged.pop(pair, None)
+    active_approvals[(wallet_id, scan.network)] = [merged[key] for key in sorted(merged)]
+    for row in permission_scan.rows:
+        if row.status != "active":
+            continue
+        if "unlimited" not in row.flags and row.change not in _APPROVAL_ALERTS:
+            continue
+        marker = (row.tx_id, row.log_index, row.token, row.spender, row.change)
+        if marker in seen_rows:
+            continue
+        seen_rows.add(marker)
+        position = "0" if row.log_index is None else str(row.log_index)
+        tx = row.tx_id if isinstance(row.tx_id, str) else ""
+        identity = f"{scan.network}:{tx}:{position}:approval:{row.token}:{row.spender}"
+        scan.candidates.append(Candidate(
+            tenant_id=scan.tenant,
+            wallet_id=wallet_id,
+            network=scan.network,
+            capability=row.capability,
+            identity=identity,
+            kind="permission",
+            raw_amount=_raw_int(row.raw_amount),
+            permission_change=row.change,
+            prior_known=row.change != "first_observed",
+            explicit_risk=True,
+            tx_id=tx or None,
+        ))
+        amount = _raw_int(row.raw_amount)
+        if tx and amount is not None:
+            _remember_event(
+                scan.events,
+                tenant_id=scan.tenant,
                 wallet_id=wallet_id,
-                network=network,
-                capability=row.capability,
-                identity=identity,
-                kind="permission",
-                raw_amount=_raw_int(row.raw_amount),
-                permission_change=row.change,
-                prior_known=row.change != "first_observed",
-                explicit_risk=True,
-                tx_id=tx or None,
-            ))
-            amount = _raw_int(row.raw_amount)
-            if tx and amount is not None:
-                _remember_event(
-                    events,
-                    tenant_id=tenant,
-                    wallet_id=wallet_id,
-                    network=network,
-                    chain_id=chain_id,
-                    tx_id=tx,
-                    sub_index=position,
-                    kind="approval_set",
-                    asset=row.token,
-                    raw_amount=amount,
-                    block_number=None,
-                    head=head,
-                    source_id=source_id,
-                    observed_at=started,
-                )
+                network=scan.network,
+                chain_id=scan.chain_id,
+                tx_id=tx,
+                sub_index=position,
+                kind="approval_set",
+                asset=row.token,
+                raw_amount=amount,
+                block_number=None,
+                head=scan.head,
+                source_id=scan.source_id,
+                observed_at=scan.started,
+            )
+
+
+def _party(value: Any) -> str:
+    if isinstance(value, str):
+        return value.lower()
+    if isinstance(value, dict):
+        inner = value.get("hash") or value.get("address")
+        if isinstance(inner, str):
+            return inner.lower()
+    return ""
+
+
+def _transfer_amount(item: Mapping[str, Any]) -> int | None:
+    parsed = _flexible_int(item.get("value"))
+    if parsed is not None:
+        return parsed
+    raw = item.get("rawContract")
+    if isinstance(raw, dict):
+        return _flexible_int(raw.get("value"))
+    return None
+
+
+def _transfer_block(item: Mapping[str, Any]) -> int | None:
+    for key in ("blockNumber", "blockNum", "block_number", "block"):
+        parsed = _flexible_int(item.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _flexible_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            if text.startswith(("0x", "0X")):
+                return int(text, 16)
+            if text.isdigit():
+                return int(text)
+        except ValueError:
+            return None
+    return None
 
 
 def _indexer_page(client: EtherscanClient, chain_id: int, action: str, address: str, start: int, end: int, stored: int | None):
@@ -1294,11 +1299,11 @@ def _etherscan_transfers(items, address: str, wallet_id: str, network: str, nati
             continue
         if str(item.get("isError", "0")) not in {"0", "false", "False"}:
             continue
-        amount = _raw_int(item.get("value"))
+        amount = _transfer_amount(item)
         if amount is None:
             continue
-        sender = str(item.get("from") or "").lower()
-        receiver = str(item.get("to") or "").lower()
+        sender = _party(item.get("from"))
+        receiver = _party(item.get("to"))
         if receiver == owner:
             kind, direction = "asset_in", "in"
         elif sender == owner:
@@ -1310,15 +1315,20 @@ def _etherscan_transfers(items, address: str, wallet_id: str, network: str, nati
             position = str(item.get("traceId") or item.get("transactionIndex") or item.get("nonce") or "0")
             capability = "history.native_external"
         else:
-            token = item.get("contractAddress")
+            token = item.get("contractAddress") or item.get("tokenAddress")
+            raw_contract = item.get("rawContract")
+            if not isinstance(token, str) and isinstance(raw_contract, dict):
+                token = raw_contract.get("address")
             if not isinstance(token, str) or not token.startswith("0x"):
                 continue
             asset = token.lower()
             position = str(item.get("logIndex") if item.get("logIndex") not in (None, "") else item.get("transactionIndex") or "0")
             capability = "history.fungible"
+        block_hash = item.get("blockHash") if isinstance(item.get("blockHash"), str) else None
         rows.append({
             "asset": asset,
-            "block": _raw_int(item.get("blockNumber")),
+            "block": _transfer_block(item),
+            "block_hash": block_hash,
             "capability": capability,
             "direction": direction,
             "is_native": native,
@@ -1367,6 +1377,7 @@ def _emit_transfers(rows, candidates, events, seen_transfers, tenant, chain_id, 
             asset=asset,
             raw_amount=row["raw_amount"],
             block_number=None if block is None else str(block),
+            block_hash=row.get("block_hash"),
             head=head,
             source_id=row.get("source") or source_id,
             observed_at=started,
@@ -1414,7 +1425,7 @@ def _remember_event(events: list[ChainEvent], **kwargs: Any) -> None:
             asset=kwargs["asset"],
             raw_amount=kwargs["raw_amount"],
             block_number=kwargs.get("block_number"),
-            block_hash=None,
+            block_hash=kwargs.get("block_hash") if isinstance(kwargs.get("block_hash"), str) else None,
             tx_status="success",
             finality=finality,
             source_ids=(str(kwargs.get("source_id") or "evm-rpc"),),
@@ -1430,7 +1441,7 @@ def _remember_event(events: list[ChainEvent], **kwargs: Any) -> None:
 def _read_positions(
     public_config, private_inputs, transport, account, network, entry, clock, observations, candidates,
     position_prior, position_state, position_summaries, tenant, started, *,
-    position_rows, position_labels, quotes,
+    position_rows, position_labels, quotes, kinza_cache=None,
 ) -> None:
     del started
     family = entry.get("family")
@@ -1446,6 +1457,9 @@ def _read_positions(
         if plugin is None or network not in plugin.networks or adapter not in plugin.adapters:
             continue
         prior = position_prior.get((wallet_id, network, plugin_id))
+        plugin_transport = transport
+        if plugin_id == "kinza" and kinza_cache is not None:
+            plugin_transport = kinza_cache.wrap(transport)
         if not source_id:
             observation = unknown_position(
                 plugin_id=plugin_id, wallet_id=wallet_id, network=network, prior=prior, reason="missing_source",
@@ -1454,7 +1468,7 @@ def _read_positions(
             try:
                 observation = run_plugin(
                     plugin_id,
-                    transport=transport,
+                    transport=plugin_transport,
                     sources=sources,
                     wallet_id=wallet_id,
                     wallet=account.normalized.canonical,
@@ -1469,6 +1483,10 @@ def _read_positions(
                 )
         health = "unknown" if observation.status == "unknown" else "complete_in_declared_scope"
         reason = observation.reason_codes[0] if observation.reason_codes else ""
+        cell_required = True
+        if plugin_id == "erc4626" and observation.status == "unknown" and "vaults_not_configured" in observation.reason_codes:
+            if not _prior_position(prior):
+                cell_required = False
         legs = [public_leg(leg, quotes) for leg in observation.legs]
         position_rows.append(observation)
         position_summaries.append({
@@ -1479,6 +1497,7 @@ def _read_positions(
             "public_id": public_id,
             "reason": reason,
             "reason_codes": list(observation.reason_codes),
+            "required": cell_required,
             "status": observation.status,
             "wallet_id": wallet_id,
         })
@@ -1517,6 +1536,15 @@ def _read_positions(
             trust="unverified",
             price_quality="unknown",
         )
+
+
+def _prior_position(prior: Any) -> bool:
+    if not isinstance(prior, dict):
+        return False
+    if prior.get("status") == "observed":
+        return True
+    legs = prior.get("legs")
+    return isinstance(legs, list) and bool(legs)
 
 
 def _position_record(plugin_id: str, observation) -> dict[str, Any]:
@@ -1677,16 +1705,20 @@ def _required_map(enabled, rows, observations, position_summaries, public_config
                 observations.get((wallet, network, "history.native_external")),
             )
     for summary in position_summaries:
+        if summary.get("required") is False:
+            continue
         required[_req_key(summary["wallet_id"], summary["network"], f"positions:{summary['plugin_id']}")] = summary["health"]
     return required
 
 
 def _indexer_ready(public_config, private_inputs, network: str) -> bool:
+    if network == "avalanche-c":
+        return False
     source_id = _routed(public_config, network, "history.native_external")
     if source_id is None:
         return False
     source = public_config.document["sources"].get(source_id, {})
-    if source.get("adapter") != "etherscan_v2":
+    if source.get("adapter") not in _INDEXER_ADAPTERS:
         return False
     status = private_inputs.source_status.get(source_id)
     credential = source.get("credential_env")

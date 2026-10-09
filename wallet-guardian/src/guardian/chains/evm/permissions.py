@@ -605,11 +605,15 @@ def scan_approvals(
     now: int | None = None,
     tx_from: Mapping[str, str] | None = None,
     read_balances: bool = True,
+    prefetched_logs: tuple[Mapping[str, Any], ...] | None = None,
 ) -> PermissionScan:
     """Logs plus current allowance reads. An error keeps ``previous_cursor``."""
     scope_from = str(start_block) if isinstance(start_block, int) and not isinstance(start_block, bool) else None
     scope_to = str(end_block) if isinstance(end_block, int) and not isinstance(end_block, bool) else None
-    ok, logs, reason = read_approval_logs(transport, source_id, owner, start_block, end_block)
+    if prefetched_logs is None:
+        ok, logs, reason = read_approval_logs(transport, source_id, owner, start_block, end_block)
+    else:
+        ok, logs, reason = True, prefetched_logs, ""
     if not ok:
         return _failed_scan(previous_cursor, scope_from, scope_to, (reason,))
     parsed, _parse_reasons = parse_approval_logs(logs, owner, evidence=evidence)
