@@ -8,7 +8,7 @@ You do not need the author's Grok session, Cloudflare, D1, a wallet login, or No
 
 This is not investment advice. Building and testing it is not permission to move mainnet assets.
 
-license: pending
+授權：AGPL-3.0-only（見 `LICENSE`）。
 
 The MCM-01 scope contract is [docs/mcm-01.md](docs/mcm-01.md). That document is a plan, not a live result.
 
@@ -24,7 +24,7 @@ guardian coverage --mcm-config monitor.json
 guardian install-service --dry-run
 ```
 
-`answers.json` lists the addresses, chains, and plugins you choose. Use a synthetic address in examples, never a real watch address in this repo. `init` does not scan for other addresses, does not enable third-party user-address lookups, and does not start a sender. It prints which source would receive which data. Nothing is written until you pass `--yes` (or type `yes` at the prompt). A second run refuses to overwrite. `--force` backs up the config files first and does not touch the state database.
+`answers.json` lists the addresses, chains, and plugins you choose; start from `examples/answers.example.json` (synthetic address, `key_mode` none or byo, each account needs `label`, `family`, `address`, `networks`). Use a synthetic address in examples, never a real watch address in this repo. `init` does not scan for other addresses, does not enable third-party user-address lookups, and does not start a sender. It prints which source would receive which data. Nothing is written until you pass `--yes` (or type `yes` at the prompt). A second run refuses to overwrite. `--force` backs up the config files first and does not touch the state database.
 
 `run-once --no-send` reads with your endpoints and writes the local outbox only. `coverage` shows each capability. A missing key is `credential_missing` with a hint, not a zero balance and not a complete history. `install-service --dry-run` prints planned unit names and exits non-zero. It does not install anything. You enable a schedule later, yourself.
 
@@ -169,4 +169,4 @@ BNB Chain 官方 RPC、Lista 官方文件上的 StakeManager proxy、Hyperliquid
 
 ## License
 
-license: pending
+授權：AGPL-3.0-only（見 `LICENSE`）。

@@ -1,0 +1,14 @@
+{
+  "tenant_id": "local",
+  "key_mode": "none",
+  "plugins": ["aave-v3"],
+  "accounts": [
+    {
+      "label": "demo-wallet",
+      "family": "evm",
+      "address": "0x0000000000000000000000000000000000000001",
+      "networks": ["ethereum-mainnet"],
+      "relationship": "watch_only"
+    }
+  ]
+}

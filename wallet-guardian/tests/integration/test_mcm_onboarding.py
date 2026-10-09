@@ -380,3 +380,16 @@ def test_mcm_share_s5_05_no_auto_enable(tmp_path: Path, capsys: pytest.CaptureFi
         help_text = capsys.readouterr().out.lower()
         assert "usage" in help_text
         assert command[1] in help_text
+
+
+def test_mcm_share_s5_06_example_answers_file_initializes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Review fix: the README points at a shipped example answers file; it must really work."""
+    root = Path(__file__).resolve().parents[2]
+    example = root / "examples" / "answers.example.json"
+    assert example.is_file()
+    assert json.loads(example.read_text(encoding="utf-8"))["accounts"][0]["address"] == "0x" + "0" * 39 + "1"
+    private = tmp_path / "priv"
+    code = main(["init", "--dir", str(private), "--from", str(example), "--yes"])
+    capsys.readouterr()
+    assert code == 0
+    assert stat.S_IMODE((private / "monitor.json").stat().st_mode) == 0o600
