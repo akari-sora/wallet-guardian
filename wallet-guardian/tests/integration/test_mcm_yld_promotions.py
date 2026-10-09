@@ -1,6 +1,8 @@
-"""MCM-SHARE-01 yield promotions. Fixture transport and a fake clock only.
+"""Parser and state integration tests for yield promotions.
 
-No live fetch and no send. Socket and HTTP clients are blocked for this module.
+These tests call ``evaluate`` and the fixture parsers directly. They are not CLI
+acceptance tests. No live fetch and no send. Socket and HTTP clients are blocked
+for this module.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from guardian.jsonschema_lite import validate
 from guardian.sources.fixtures import FixtureBackend, RawResponse, request_key
 from guardian.storage import Database
 from guardian.yields import DECOMPRESSED_CAP, FETCH_URLS, MAX_RECORDS, evaluate
+from guardian.yields.parsers import bounded_json, parse_source
 from guardian.yields.models import (
     HeldPosition,
     Holdings,
@@ -100,13 +103,14 @@ def _backend(pools: list[RawResponse], catalog: list[RawResponse]) -> FixtureBac
 
 
 def _run(database: Database, clock: Clock, backend: FixtureBackend, **kwargs: object) -> dict:
+    holdings = kwargs.pop("holdings", None)
     return evaluate(
         database,
         TENANT,
         clock=clock,
         backend=backend,
         resolve=lambda _host: ["1.1.1.1"],
-        holdings=_books(),
+        holdings=_books() if holdings is None else holdings,
         **kwargs,
     )
 
@@ -128,8 +132,18 @@ def _pools_doc(rows: list[dict]) -> bytes:
     return json.dumps({"data": rows}, separators=(",", ":")).encode("utf-8")
 
 
-def _pool(pool_id: str, *, total: object = None, base: object = None, reward: object = None) -> dict:
-    return {"pool": pool_id, "apy": total, "apyBase": base, "apyReward": reward}
+def _pool(
+    pool_id: str,
+    *,
+    total: object = None,
+    base: object = None,
+    reward: object = None,
+    unit: str | None = None,
+) -> dict:
+    row: dict[str, object] = {"pool": pool_id, "apy": total, "apyBase": base, "apyReward": reward}
+    if unit is not None:
+        row["unit"] = unit
+    return row
 
 
 def _empty_catalog() -> bytes:
@@ -384,7 +398,16 @@ def test_mcm_yld_03_timezone_terms_and_spoofed_campaigns(tmp_path: Path) -> None
         report = _run(database, clock, backend, promotions=promotions)
         assert report["fetched_urls"] == (POOLS_URL, CATALOG_URL)
         assert all("articles.invalid" not in url for url in report["fetched_urls"])
-        assert not report["candidates"]
+        assert all(item["kind"] == "promotion_event" for item in report["candidates"])
+        assert {item["record_id"] for item in report["candidates"]} == {
+            "deadline-1",
+            "ambiguous-1",
+            "apr-1",
+            "high-reward-1",
+        }
+        assert {item["wallet_id"] for item in report["candidates"]} == {WALLET_HELD}
+        assert all(item["source"] == "explicit_body" for item in report["candidates"])
+        assert all(item["eligibility"] == "held_position" for item in report["candidates"])
         deadline = _record(report, "explicit_body", "deadline-1")
         ends = [item for item in deadline["terms"]["deadlines"] if item["role"] == "end"]
         assert len(ends) == 1
@@ -399,6 +422,13 @@ def test_mcm_yld_03_timezone_terms_and_spoofed_campaigns(tmp_path: Path) -> None
         assert deadline["terms"]["conditions"]["minimum_amount"] == "100"
         assert deadline["terms"]["conditions"]["minimum_unit"] == "USDT"
         assert deadline["terms"]["conditions"]["lock_days"] == 14
+        assert deadline["terms"]["residual_conditions"] == "none"
+        provenance = {item["field"]: item["quote"] for item in deadline["terms"]["provenance"]}
+        assert "locked for 14 days" in provenance["lock_days"]
+        assert "100" in provenance["minimum_amount"]
+        assert "USDT" in provenance["minimum_amount"]
+        assert "until" in provenance["deadline"]
+        assert "2026-12-01T16:00:00+08:00" in provenance["deadline"]
         assert deadline["yields"]["described_as_temporary"] is True
         assert deadline["yields"]["temporary_language"] == "publisher_stated_duration"
         assert deadline["terms"]["links_not_followed"] >= 1
@@ -608,3 +638,329 @@ def test_mcm_yld_05_zero_live_fetches_and_sends(tmp_path: Path, monkeypatch: pyt
         text = (ROOT / "src" / "guardian" / name).read_text(encoding="utf-8")
         assert "guardian.yields" not in text
         assert "yield_promotions" not in text
+
+
+def _series(tmp_path: Path, name: str, days: list[list[dict]], **kwargs: object) -> list[dict]:
+    catalog = _empty_catalog()
+    backend = _backend(
+        [_response(_pools_doc(rows)) for rows in days],
+        [_response(catalog) for _rows in days],
+    )
+    clock = Clock()
+    database = Database(tmp_path / name)
+    reports: list[dict] = []
+    try:
+        for _index in range(len(days)):
+            reports.append(_run(database, clock, backend, **kwargs))
+            clock.advance()
+    finally:
+        database.close()
+    return reports
+
+
+def test_mcm_yld_01_held_position_requires_protocol(tmp_path: Path) -> None:
+    """Parser/state integration: a hold is protocol plus chain plus a mapped contract."""
+    wrong = "00000011-0000-4000-8000-000000000011"
+    right = "00000012-0000-4000-8000-000000000012"
+    protocol_only = "00000013-0000-4000-8000-000000000013"
+    holdings = Holdings(positions=(
+        HeldPosition(wrong, "bsc-mainnet", "synthetic-other", (addr(1),), 10**18),
+        HeldPosition(right, "bsc-mainnet", "synthetic-lend", (addr(1),), 10**18),
+        HeldPosition(protocol_only, "bsc-mainnet", "synthetic-lend", (addr(3),), 10**18),
+    ))
+    backend = _backend(
+        [_response(_pools_doc([_pool(LEND, total=5), _pool(ZERO, total=1)]))],
+        [_response(_empty_catalog())],
+    )
+    database = Database(tmp_path / "yld-01-protocol.sqlite")
+    try:
+        report = _run(database, Clock(), backend, holdings=holdings)
+        lend = _matches(report, LEND)
+        zero = _matches(report, ZERO)
+        assert [item["wallet_id"] for item in lend if item["eligibility"] == "held_position"] == [right]
+        assert lend[0]["eligibility"] == "held_position"
+        assert lend[0]["via"] == "position"
+        assert lend[0]["pool_id"] == LEND
+        assert all(item["wallet_id"] != wrong for item in lend + zero)
+        assert all(item["wallet_id"] != protocol_only for item in lend + zero)
+        assert not report["candidates"]
+    finally:
+        database.close()
+
+
+def test_mcm_yld_02_refuse_unknown_or_incompatible_units(tmp_path: Path) -> None:
+    """Parser/state integration: unknown or mismatched units reset and do not emit."""
+    crossed = _series(tmp_path, "yld-02-units.sqlite", [
+        [_pool(LEND, total=8, unit="APY")],
+        [_pool(LEND, total=12, unit="APR")],
+        [_pool(LEND, total=12, unit="APR")],
+    ])
+    assert all(not item["candidates"] for item in crossed)
+    reset = _record(crossed[1], "defillama_pools", LEND)
+    assert reset["comparison_state"]["comparison"] == "baseline"
+    assert reset["comparison_state"]["pending_sample"] is None
+    assert reset["comparison_state"]["previous_valid_sample"]["unit"] == "APR"
+    assert reset["comparison_state"]["previous_valid_sample"]["reported_total_canonical"] == "12"
+    settled = _record(crossed[2], "defillama_pools", LEND)
+    assert settled["comparison_state"]["comparison"] == "not_material"
+    assert settled["yields"]["unit"] == "APR"
+    assert settled["yields"]["reported_total"] == 12
+
+    unknown = _series(tmp_path, "yld-02-unknown-unit.sqlite", [
+        [_pool(LEND, total=8, unit="unknown")],
+        [_pool(LEND, total=12, unit="unknown")],
+        [_pool(LEND, total=12, unit="unknown")],
+    ])
+    assert all(not item["candidates"] for item in unknown)
+    assert _record(unknown[2], "defillama_pools", LEND)["comparison_state"]["comparison"] == "baseline"
+    assert _record(unknown[2], "defillama_pools", LEND)["yields"]["unit"] == "unknown"
+
+    same_unit = _series(tmp_path, "yld-02-apr.sqlite", [
+        [_pool(LEND, total=8, unit="APR")],
+        [_pool(LEND, total=12, unit="APR")],
+        [_pool(LEND, total=12, unit="APR")],
+    ])
+    assert not same_unit[0]["candidates"]
+    assert not same_unit[1]["candidates"]
+    assert len(same_unit[2]["candidates"]) == 1
+    change = same_unit[2]["candidates"][0]
+    assert change["kind"] == "yield_change"
+    assert change["wallet_id"] == WALLET_HELD
+    assert change["pool_id"] == LEND
+    assert change["unit"] == "APR"
+    assert [(item["name"], item["direction"], item["previous"], item["observed"]) for item in change["components"]] == [
+        ("reported_total", "up", "8", "12"),
+    ]
+
+
+def _body(record_id: str, body: str, apy: int) -> dict[str, object]:
+    return {
+        "record_id": record_id,
+        "campaign_id": "synthetic-lend-boost-1",
+        "unit": "APY",
+        "apy": apy,
+        "body": body,
+    }
+
+
+def test_mcm_yld_02_promotion_event_separate_from_pool_yield(tmp_path: Path) -> None:
+    """Parser/state integration: announcement figures are promotion events, not pool yields."""
+    text = "Eligible until 2026-12-01T00:00:00Z."
+    revised = "Eligible until 2026-12-15T00:00:00Z."
+    days = [
+        _body("ann-1", text, 8),
+        _body("ann-1", text, 8),
+        _body("ann-1", text, 12),
+        _body("ann-1", revised, 12),
+        _body("ann-1", revised, 12),
+    ]
+    catalog = _empty_catalog()
+    pools = _pools_doc([_pool(LEND, total=5)])
+    backend = _backend(
+        [_response(pools) for _row in days],
+        [_response(catalog) for _row in days],
+    )
+    clock = Clock()
+    path = tmp_path / "yld-02-promo.sqlite"
+    database = Database(path)
+    try:
+        first = _run(database, clock, backend, promotions=json.dumps({"records": [days[0]]}).encode("utf-8"))
+        assert len(first["candidates"]) == 1
+        event = first["candidates"][0]
+        assert event["kind"] == "promotion_event"
+        assert event["source"] == "explicit_body"
+        assert event["record_id"] == "ann-1"
+        assert event["wallet_id"] == WALLET_HELD
+        assert event["pool_id"] == LEND
+        assert event["eligibility"] == "held_position"
+        assert event["unit"] == "APY"
+        assert "components" not in event
+        assert first["sent"] is False
+        assert first["scheduler"] is False
+        assert database.alerts_for(TENANT) == []
+        assert database.outbox_for(TENANT) == []
+        semantic = _record(first, "explicit_body", "ann-1")["comparison_state"]["dedupe"]["last_semantic"]
+        assert isinstance(semantic, str) and len(semantic) == 64
+        assert _record(first, "explicit_body", "ann-1")["comparison_state"]["comparison"] != "sustained"
+        assert _record(first, "defillama_pools", LEND)["comparison_state"]["comparison"] == "baseline"
+
+        clock.advance()
+        repeat = _run(database, clock, backend, promotions=json.dumps({"records": [days[1]]}).encode("utf-8"))
+        assert not repeat["candidates"]
+        assert _record(repeat, "explicit_body", "ann-1")["comparison_state"]["comparison"] == "duplicate"
+        assert _record(repeat, "explicit_body", "ann-1")["comparison_state"]["dedupe"]["last_semantic"] == semantic
+
+        clock.advance()
+        revised_rate = _run(database, clock, backend, promotions=json.dumps({"records": [days[2]]}).encode("utf-8"))
+        assert [item["kind"] for item in revised_rate["candidates"]] == ["promotion_event"]
+        assert revised_rate["candidates"][0]["record_id"] == "ann-1"
+        assert _record(revised_rate, "explicit_body", "ann-1")["comparison_state"]["comparison"] != "sustained"
+        rate_semantic = _record(revised_rate, "explicit_body", "ann-1")["comparison_state"]["dedupe"]["last_semantic"]
+        assert rate_semantic != semantic
+
+        clock.advance()
+        changed = _run(database, clock, backend, promotions=json.dumps({"records": [days[3]]}).encode("utf-8"))
+        assert [item["kind"] for item in changed["candidates"]] == ["promotion_event"]
+        assert changed["candidates"][0]["dedup_key"] != event["dedup_key"]
+        changed_semantic = _record(changed, "explicit_body", "ann-1")["comparison_state"]["dedupe"]["last_semantic"]
+        assert changed_semantic not in {semantic, rate_semantic}
+
+        database.close()
+        database = Database(path)
+        clock.advance()
+        quiet = _run(database, clock, backend, promotions=json.dumps({"records": [days[4]]}).encode("utf-8"))
+        assert not quiet["candidates"]
+        assert _record(quiet, "explicit_body", "ann-1")["comparison_state"]["dedupe"]["last_semantic"] == changed_semantic
+        assert _record(quiet, "defillama_pools", LEND)["yields"]["reported_total"] == 5
+        assert database.alerts_for(TENANT) == []
+        assert database.outbox_for(TENANT) == []
+    finally:
+        database.close()
+
+
+def test_mcm_yld_03_negated_and_unparsed_terms_stay_unknown(tmp_path: Path) -> None:
+    """Parser/state integration: negation, conflict, and unparsed limits stay unknown."""
+    stated = (
+        "Minimum 100 USDT locked for 14 days. "
+        "Eligible until 2026-12-01T16:00:00+08:00."
+    )
+    restricted = (
+        "Minimum 100 USDT locked for 14 days. New users must complete KYC. "
+        "Eligible until 2026-12-01T00:00:00Z."
+    )
+    document = {
+        "records": [
+            {"record_id": "stated-lock-1", "body": stated},
+            {"record_id": "restricted-1", "body": restricted},
+            {"record_id": "negated-lock-1", "body": "Funds are not locked for 14 days."},
+            {
+                "record_id": "conflict-lock-1",
+                "body": "Funds are locked for 14 days. Funds are not locked for 14 days.",
+            },
+            {
+                "record_id": "conflict-days-1",
+                "body": "Funds are locked for 7 days and locked for 14 days.",
+            },
+        ],
+    }
+    parsed = parse_source("explicit_body", json.dumps(document).encode("utf-8"))
+    assert parsed.ok is True
+    by_id = {item.record_id: item for item in parsed.records}
+
+    positive = by_id["stated-lock-1"]
+    assert positive.conditions["lock_days"] == 14
+    assert positive.conditions["minimum_amount"] == "100"
+    assert positive.conditions["minimum_unit"] == "USDT"
+    assert positive.residual_conditions == "none"
+    assert positive.extraction_status == "extracted"
+    quotes = {item["field"]: item["quote"] for item in positive.provenance}
+    assert "locked for 14 days" in quotes["lock_days"]
+    assert "100" in quotes["minimum_amount"] and "USDT" in quotes["minimum_amount"]
+    assert "until" in quotes["deadline"]
+    assert quotes["lock_days"].startswith('"')
+    assert {item["source"] for item in positive.provenance} == {"explicit_body"}
+
+    kyc = by_id["restricted-1"]
+    assert kyc.conditions["minimum_amount"] == "100"
+    assert kyc.conditions["lock_days"] == 14
+    assert kyc.residual_conditions == "unknown"
+    assert any(item["field"] == "lock_days" for item in kyc.provenance)
+
+    negated = by_id["negated-lock-1"]
+    assert negated.conditions["lock_days"] is None
+    assert negated.extraction_status == "unknown"
+    assert negated.residual_conditions == "unknown"
+    assert negated.duration_stated is False
+    assert negated.described_as_temporary is False
+    assert all(item["field"] != "lock_days" for item in negated.provenance)
+
+    conflict = by_id["conflict-lock-1"]
+    assert conflict.conditions["lock_days"] is None
+    assert conflict.residual_conditions == "unknown"
+    assert all(item["field"] != "lock_days" for item in conflict.provenance)
+    assert by_id["conflict-days-1"].conditions["lock_days"] is None
+    assert by_id["conflict-days-1"].residual_conditions == "unknown"
+
+    backend = _backend(
+        [_response(_pools_doc([_pool(LEND, total=5)]))],
+        [_response(_empty_catalog())],
+    )
+    database = Database(tmp_path / "yld-03-terms.sqlite")
+    try:
+        report = _run(database, Clock(), backend, promotions=json.dumps(document).encode("utf-8"))
+        stored = _record(report, "explicit_body", "restricted-1")
+        assert stored["terms"]["residual_conditions"] == "unknown"
+        assert stored["terms"]["conditions"]["lock_days"] == 14
+        kept = _record(report, "explicit_body", "negated-lock-1")
+        assert kept["terms"]["conditions"]["lock_days"] is None
+        assert kept["terms"]["residual_conditions"] == "unknown"
+        assert not any(item["kind"] == "yield_change" for item in report["candidates"])
+        assert database.alerts_for(TENANT) == []
+        assert database.outbox_for(TENANT) == []
+        validate(report["state"], state_schema())
+    finally:
+        database.close()
+
+
+def _nested(minimum: int) -> bytes:
+    nested = "0"
+    while len(nested) < minimum:
+        nested = '{"a":' + nested + "}"
+    return nested.encode("utf-8")
+
+
+def test_mcm_yld_04_gzip_completion_depth_and_prior_observation(tmp_path: Path) -> None:
+    """Parser/state integration: bad streams fail closed and keep the prior sample."""
+    catalog = _empty_catalog()
+    good = _pools_doc([_pool(LEND, total=4)])
+    gzipped = gzip.compress(good)
+    parsed_doc, parsed_reason = bounded_json(gzipped)
+    assert parsed_reason == ""
+    assert parsed_doc["data"][0]["apy"] == 4
+
+    trimmed = gzipped[:-8]
+    trimmed_doc, trimmed_reason = bounded_json(trimmed)
+    assert trimmed_doc is None
+    assert trimmed_reason == "truncated"
+
+    concatenated = gzipped + gzip.compress(_pools_doc([_pool(LEND, total=99)]))
+    extra_doc, extra_reason = bounded_json(concatenated)
+    assert extra_doc is None
+    assert extra_reason == "trailing_data"
+
+    deep = _nested(20_000)
+    assert len(deep) >= 20_000
+    deep_doc, deep_reason = bounded_json(deep)
+    assert deep_doc is None
+    assert deep_reason == "nesting_limit"
+
+    cases = [
+        (trimmed, "truncated"),
+        (concatenated, "trailing_data"),
+        (deep, "nesting_limit"),
+    ]
+    for index, (body, reason) in enumerate(cases):
+        database = Database(tmp_path / f"yld-04-keep-{index}.sqlite")
+        backend = _backend(
+            [_response(good), _response(body)],
+            [_response(catalog), _response(catalog)],
+        )
+        clock = Clock()
+        try:
+            first = _run(database, clock, backend)
+            assert _record(first, "defillama_pools", LEND)["yields"]["reported_total"] == 4
+            assert first["status"] == "ok"
+            clock.advance()
+            second = _run(database, clock, backend)
+            source = second["state"]["sources"]["defillama_pools"]
+            assert source["read_status"] == "rejected"
+            assert source["reason"] == reason
+            kept = _record(second, "defillama_pools", LEND)
+            assert kept["yields"]["reported_total"] == 4
+            assert kept["yields"]["reported_total_canonical"] == "4"
+            assert kept["comparison_state"]["comparison"] == "baseline"
+            assert kept["comparison_state"]["previous_valid_sample"]["reported_total_canonical"] == "4"
+            assert second["records"] != []
+            assert not any(item.get("reported_total") == 0 for item in second["records"])
+        finally:
+            database.close()
