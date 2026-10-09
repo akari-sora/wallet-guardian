@@ -1,16 +1,21 @@
 """Read-only TronGrid client.
 
-History forces only_confirmed=true, freezes that filter set, and carries it
-with the fingerprint. Pages stop at the documented 200-row maximum and at a
-local page cap. A repeated fingerprint or a capped window is not complete.
-links.next URLs are ignored. The optional key is sent only as
-TRON-PRO-API-KEY. One call is in flight. Six HTTP 200s are not a quota.
-Nothing here signs, builds, or broadcasts.
+History forces only_confirmed=true and a frozen min/max timestamp. TronGrid
+treats a missing max_timestamp as "now", so every page of one walk sends the
+same pair. Pages stop at the documented 200-row maximum and at a local page
+cap. A page that is not fully verified keeps the fingerprint that fetched it;
+the following fingerprint is not a resume point. A repeated fingerprint or a
+capped window is not complete. links.next URLs are ignored. The optional key
+is sent only as TRON-PRO-API-KEY. Retries sleep for Retry-After inside the
+round deadline. The shared request-rate budget is not that wait. One call is
+in flight. Six HTTP 200s are not a quota. Nothing here signs, builds, or
+broadcasts.
 """
 
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -18,7 +23,7 @@ from typing import Any
 from guardian.chains.tron.abi import READ_SELECTORS
 from guardian.errors import SecurityError
 from guardian.security.transport_policy import Operation
-from guardian.sources.budget import BudgetExhausted
+from guardian.sources.budget import BootstrapStop, BudgetExhausted
 from guardian.sources.retry import read_with_retry
 from guardian.sources.transport import TransportError
 
@@ -28,11 +33,8 @@ MAX_REQUESTS = 48
 LOCAL_MAX_RPS = 1
 LOCAL_MAX_CONCURRENCY = 1
 HEADER_NAME = "TRON-PRO-API-KEY"
-FROZEN_FILTERS = {
-    "limit": str(PAGE_LIMIT),
-    "only_confirmed": "true",
-    "order_by": "block_timestamp,desc",
-}
+# Used when polling.round_deadline_seconds is omitted. Same bound as the EVM scan.
+_DEFAULT_DEADLINE_SECONDS = 180
 _FINGERPRINT = re.compile(r"^[A-Za-z0-9+/=_-]{1,256}$")
 _BASE58 = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
 _REJECTED_BODY = frozenset({"call_value", "raw_data_hex", "signature"})
@@ -48,7 +50,12 @@ class Got:
 
 @dataclass(frozen=True)
 class HistoryWalk:
-    """One frozen window. ``cursor`` is the next fingerprint, not yet fetched."""
+    """One frozen window.
+
+    ``cursor`` is the fingerprint to send next time. After a fully processed
+    page it is the following page. After an unfinished page it is the
+    fingerprint that fetched that page, which may be None for the first page.
+    """
 
     rows: tuple[Mapping[str, Any], ...]
     complete: bool
@@ -58,13 +65,36 @@ class HistoryWalk:
     error: bool
 
 
-class TronGridClient:
-    """Sequential reader. Retries honor Retry-After and stay inside the budget."""
+@dataclass(frozen=True)
+class Resume:
+    """A stored cursor. ``page`` repeats one fingerprint and its window."""
 
-    def __init__(self, transport: Any, source_id: str) -> None:
+    fingerprint: str | None
+    min_timestamp: int | None
+    max_timestamp: int | None
+    kind: str
+
+
+class TronGridClient:
+    """Sequential reader. Retry-After is slept on the round clock, inside the deadline."""
+
+    def __init__(
+        self,
+        transport: Any,
+        source_id: str,
+        *,
+        clock: Any = None,
+        sleep: Any = None,
+        started_at: float | None = None,
+        deadline: int | None = None,
+    ) -> None:
         self.transport = transport
         self.source_id = source_id
         self.requests = 0
+        self.clock = time.time if clock is None else clock
+        self._sleep_fn = sleep
+        self.started_at = started_at
+        self.deadline = deadline
 
     def now_block(self, *, solidity: bool) -> Got:
         path = "/walletsolidity/getnowblock" if solidity else "/wallet/getnowblock"
@@ -92,20 +122,31 @@ class TronGridClient:
         payload["visible"] = True
         return self.post(path, payload)
 
-    def history(self, path: str, frozen: Mapping[str, str], resume: str | None) -> HistoryWalk:
+    def history(
+        self,
+        path: str,
+        frozen: Mapping[str, str],
+        resume: str | None,
+        *,
+        accept_page: Any = None,
+    ) -> HistoryWalk:
+        """Walk one frozen filter set.
+
+        ``accept_page(rows)`` returns false when this page is not fully
+        processed. The walk then stops on the fingerprint that fetched the
+        page and does not request the next one.
+        """
         if resume is not None and _FINGERPRINT.fullmatch(resume) is None:
             return HistoryWalk((), False, None, "bad_cursor", False, True)
         if not path.startswith("/v1/accounts/") or any(token in path for token in ("..", "%", "//", "?", "#")):
             return HistoryWalk((), False, None, "bad_path", True, True)
+        frozen_query = _freeze_query(frozen, self.clock)
         requested = resume
         seen: set[str] = set()
         rows: list[Mapping[str, Any]] = []
         pages = 0
         while pages < PAGE_CAP:
-            query = {str(key): str(value) for key, value in frozen.items()}
-            query.pop("fingerprint", None)
-            query["only_confirmed"] = "true"
-            query["limit"] = str(PAGE_LIMIT)
+            query = dict(frozen_query)
             if requested:
                 query["fingerprint"] = requested
             got = self.get(path, query)
@@ -117,6 +158,8 @@ class TronGridClient:
             batch, nxt = parsed
             pages += 1
             rows.extend(batch)
+            if batch and accept_page is not None and not accept_page(batch):
+                return HistoryWalk(tuple(rows), False, requested, "verification_pending", False, False)
             if not nxt:
                 return HistoryWalk(tuple(rows), True, None, "", False, False)
             if not batch:
@@ -181,10 +224,12 @@ class TronGridClient:
             result = read_with_retry(
                 attempt,
                 retry_attempts=attempts,
-                sleep=self._sleep,
+                sleep=self._pause,
                 random=lambda: 0.0,
-                clock=lambda: 0.0,
+                clock=self.clock,
             )
+        except BootstrapStop:
+            return Got(False, None, "deadline", True)
         except BudgetExhausted as exc:
             return Got(False, None, exc.reason or "budget", True)
         except (TransportError, SecurityError) as exc:
@@ -196,11 +241,42 @@ class TronGridClient:
             return Got(False, None, reason, bool(getattr(result, "blocked", False)))
         return Got(True, result.body, "", False)
 
-    def _sleep(self, seconds: float) -> None:
+    def _remaining(self) -> float:
+        limit = _DEFAULT_DEADLINE_SECONDS
+        if isinstance(self.deadline, int) and not isinstance(self.deadline, bool) and self.deadline >= 1:
+            limit = self.deadline
+        started = self.started_at
+        if isinstance(started, bool) or not isinstance(started, (int, float)):
+            started = self.clock()
+            self.started_at = started
+        return float(limit) - (self.clock() - float(started))
+
+    def _sleeper(self) -> Any:
+        if self._sleep_fn is not None:
+            return self._sleep_fn
+        backend = getattr(self.transport, "backend", None)
+        for owner in (backend, self.transport):
+            sleeper = getattr(owner, "sleeper", None)
+            if callable(sleeper):
+                return sleeper
+        return time.sleep
+
+    def _pause(self, seconds: float) -> None:
+        """Wait out Retry-After. A wait past the round deadline is not taken."""
+        try:
+            planned = float(seconds)
+        except (TypeError, ValueError):
+            planned = 0.0
+        if planned < 0:
+            planned = 0.0
+        if planned > self._remaining():
+            raise BootstrapStop("deadline")
+        if planned > 0:
+            self._sleeper()(planned)
         backend = getattr(self.transport, "backend", None)
         record = getattr(backend, "record_sleep", None)
         if callable(record):
-            record(float(seconds))
+            record(planned)
 
 
 class _Stopped:
@@ -218,16 +294,83 @@ class _Stopped:
         return Classification("error", "error", False, True, "request_cap")
 
 
+def frozen_filters(min_timestamp: int, max_timestamp: int) -> dict[str, str]:
+    """One pagination set. Both bounds are sent; an omitted max would mean "now"."""
+    minimum = _window_bound(min_timestamp, 0)
+    maximum = _window_bound(max_timestamp, minimum)
+    if maximum < minimum:
+        maximum = minimum
+    return {
+        "limit": str(PAGE_LIMIT),
+        "max_timestamp": str(maximum),
+        "min_timestamp": str(minimum),
+        "only_confirmed": "true",
+        "order_by": "block_timestamp,desc",
+    }
+
+
+def parse_resume(cursor: str | None) -> Resume:
+    """Split a stored cursor into a fingerprint and the window that produced it."""
+    if cursor is None or cursor == "":
+        return Resume(None, None, None, "fresh")
+    if not isinstance(cursor, str):
+        raise ValueError("bad_cursor")
+    minimum: int | None = None
+    maximum: int | None = None
+    base = cursor
+    if "|min:" in cursor or "|max:" in cursor:
+        base, _, tail = cursor.partition("|")
+        for part in tail.split("|"):
+            if part.startswith("min:"):
+                minimum = _cursor_int(part[4:])
+            elif part.startswith("max:"):
+                maximum = _cursor_int(part[4:])
+            else:
+                raise ValueError("bad_cursor")
+    if base.startswith("fp:"):
+        token = base[3:]
+        if _FINGERPRINT.fullmatch(token) is None:
+            raise ValueError("bad_cursor")
+        return Resume(token, minimum, maximum, "page")
+    if base.startswith("solidified:"):
+        height = base[len("solidified:"):]
+        if not height.isdigit():
+            raise ValueError("bad_cursor")
+        return Resume(None, minimum, maximum, "solidified")
+    if base == "window":
+        return Resume(None, minimum, maximum, "window")
+    raise ValueError("bad_cursor")
+
+
 def resume_fingerprint(cursor: str | None) -> str | None:
-    """``fp:`` retries that page. ``solidified:`` starts a new window. A bad token is refused."""
-    if not cursor or cursor.startswith("solidified:"):
-        return None
-    if not cursor.startswith("fp:"):
+    """``fp:`` retries that page. A finished window has no fingerprint. A bad token is refused."""
+    return parse_resume(cursor).fingerprint
+
+
+def _freeze_query(frozen: Mapping[str, str], clock: Any) -> dict[str, str]:
+    """Copy the caller's bounds once. Later pages cannot observe a new "now"."""
+    query = {str(key): str(value) for key, value in frozen.items()}
+    query.pop("fingerprint", None)
+    query["only_confirmed"] = "true"
+    query["limit"] = str(PAGE_LIMIT)
+    query.setdefault("order_by", "block_timestamp,desc")
+    if "max_timestamp" not in query:
+        query["max_timestamp"] = str(int(clock() * 1000))
+    if "min_timestamp" not in query:
+        query["min_timestamp"] = "0"
+    return query
+
+
+def _window_bound(value: Any, fallback: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return fallback
+    return value
+
+
+def _cursor_int(text: str) -> int:
+    if not text.isdigit():
         raise ValueError("bad_cursor")
-    token = cursor[3:]
-    if _FINGERPRINT.fullmatch(token) is None:
-        raise ValueError("bad_cursor")
-    return token
+    return int(text)
 
 
 def _parse_page(body: Any) -> tuple[list[Mapping[str, Any]], str | None] | None:

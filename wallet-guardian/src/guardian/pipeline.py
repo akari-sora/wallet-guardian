@@ -300,6 +300,7 @@ def run_capability_pipeline(
                 public_config, private_inputs, transport, account, network, entry,
                 observations, native_reads, seen, baseline, candidates, tenant, started,
                 events, explicit_cursors, held_cursors, stored_cursors,
+                clock=clock, started_at=started_at, deadline=deadline,
             )
         else:
             _block_family(account.wallet_id, network, observations, "unsupported_family")
@@ -920,6 +921,7 @@ _TRON_CAPABILITIES = (
 def _read_tron(
     public_config, private_inputs, transport, account, network, entry, observations, native_reads,
     seen, baseline, candidates, tenant, started, events, explicit_cursors, held_cursors, stored_cursors,
+    *, clock, started_at, deadline,
 ) -> None:
     """Watch-only TRON read. A failed answer is not stored as zero sun."""
     from guardian.chains.tron.adapter import read_tron_account
@@ -942,6 +944,9 @@ def _read_tron(
             spenders=account.allowance_spenders,
             native_cursor=_cursor_text(stored_cursors, wallet_id, network, "history.native_external"),
             trc20_cursor=_cursor_text(stored_cursors, wallet_id, network, "history.fungible"),
+            clock=clock,
+            started_at=started_at,
+            deadline=deadline,
         )
     except (BudgetExhausted, TransportError, SecurityError) as exc:
         reason = getattr(exc, "reason", "") or "read_error"

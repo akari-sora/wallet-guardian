@@ -9,6 +9,7 @@ stay out of scope. Nothing here signs, builds, or broadcasts.
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -17,7 +18,13 @@ from guardian.chains.tron.abi import abi_address_word, assert_read_selector
 from guardian.coverage import CoverageObservation
 from guardian.events import ChainEvent, finality_for
 from guardian.identities import IdentityError, parse_address
-from guardian.sources.tron_grid import FROZEN_FILTERS, TronGridClient, resume_fingerprint
+from guardian.sources.tron_grid import (
+    HistoryWalk,
+    Resume,
+    TronGridClient,
+    frozen_filters,
+    parse_resume,
+)
 
 _TXID = re.compile(r"^[0-9a-fA-F]{64}$")
 _BLOCK_ID = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -48,6 +55,26 @@ _DECLARED_TOKENS = "configured_tokens_only"
 _DECLARED_PAIRS = "configured_pairs_only"
 _DECLARED_PERMISSIONS = "account_permissions_observation"
 _MAX_PAIRS = 8
+_TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+_APPROVAL_TOPIC = "8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"
+_ACCOUNT_FIELDS = frozenset({
+    "account_name",
+    "account_resource",
+    "active_permission",
+    "address",
+    "allowance",
+    "asset",
+    "assetV2",
+    "balance",
+    "create_time",
+    "free_net_usage",
+    "frozen",
+    "frozenV2",
+    "net_usage",
+    "owner_permission",
+    "type",
+    "votes",
+})
 
 
 @dataclass(frozen=True)
@@ -62,6 +89,7 @@ class TronRead:
 class _Head:
     number: int
     block_id: str
+    timestamp: int | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +99,7 @@ class _Verdict:
     fee: int
     finality: str
     tx: Mapping[str, Any] | None
+    info: Mapping[str, Any] | None = None
 
 
 @dataclass
@@ -96,28 +125,35 @@ def read_tron_account(
     spenders: tuple[str, ...] = (),
     native_cursor: str | None = None,
     trc20_cursor: str | None = None,
+    clock: Any = None,
+    started_at: float | None = None,
+    deadline: int | None = None,
 ) -> TronRead:
     """One watch address. Large balances stay integers. Failed reads are not zero."""
     parsed = parse_address("tron", address)
     network = entry.get("network") if isinstance(entry.get("network"), str) else "tron-mainnet"
     asset = _native_asset(entry)
     chain_uid = _chain_uid(entry, network)
-    client = TronGridClient(transport, source_id)
+    tick = time.time if clock is None else clock
+    client = TronGridClient(
+        transport, source_id, clock=tick, started_at=started_at, deadline=deadline,
+    )
     solidity_head, latest_head, solidity_ready = _heads(client)
     account_body, account_reason, account_solid = _load_account(client, parsed.canonical, solidity_ready)
     native_sun, balance = _native_observation(
         account_body, account_reason, account_solid, solidity_head, latest_head, source_id, entry,
+        parsed.identity_key,
     )
-    permissions = _permission_observation(account_body, account_reason, source_id)
+    permissions = _permission_observation(account_body, account_reason, source_id, parsed.identity_key)
     fungible = _token_balances(client, parsed.canonical, contracts, solidity_head, source_id)
     verify = _Verify(client, {}, False, False, set(), set())
     native_events, native_obs, native_cursor_row = _native_history(
         client, verify, parsed.canonical, parsed.identity_key, native_cursor, entry, network, asset,
-        chain_uid, tenant_id, wallet_id, observed_at, source_id, solidity_head, latest_head,
+        chain_uid, tenant_id, wallet_id, observed_at, source_id, solidity_head, latest_head, tick,
     )
     trc20_events, trc20_obs, trc20_cursor_row = _trc20_history(
         client, verify, parsed.canonical, parsed.identity_key, trc20_cursor, entry, network, asset,
-        chain_uid, tenant_id, wallet_id, observed_at, source_id, solidity_head, latest_head,
+        chain_uid, tenant_id, wallet_id, observed_at, source_id, solidity_head, latest_head, tick,
     )
     allowance = _allowances(client, parsed.canonical, contracts, spenders, solidity_head, source_id)
     cursors = tuple(row for row in (native_cursor_row, trc20_cursor_row) if row is not None)
@@ -148,10 +184,11 @@ def _head(got: Any) -> _Head | None:
     header = got.body.get("block_header")
     raw = header.get("raw_data") if isinstance(header, dict) else None
     number = _uint(raw.get("number")) if isinstance(raw, dict) else None
+    timestamp = _uint(raw.get("timestamp")) if isinstance(raw, dict) else None
     block_id = got.body.get("blockID")
     if number is None or not isinstance(block_id, str) or _BLOCK_ID.fullmatch(block_id) is None:
         return None
-    return _Head(number, block_id.lower())
+    return _Head(number, block_id.lower(), timestamp)
 
 
 def _load_account(client: TronGridClient, address: str, solidity_ready: bool) -> tuple[Any, str, bool]:
@@ -175,11 +212,14 @@ def _native_observation(
     latest_head: _Head | None,
     source_id: str,
     entry: Mapping[str, Any],
+    expected: str,
 ) -> tuple[int | None, CoverageObservation]:
     evidence = _head_evidence(entry, solidity_head, latest_head)
     if reason and reason != "latest_not_solidified":
         return None, _error(source_id, reason, gaps=_HISTORY_GAPS[:0])
-    kind, amount = _account_balance(body)
+    kind, amount = _account_balance(body, expected)
+    if kind == "mismatch":
+        return None, _error(source_id, "account_mismatch", evidence=evidence)
     if kind == "malformed":
         return None, _error(source_id, "malformed_account", evidence=evidence)
     latest_only = not solidity or reason == "latest_not_solidified"
@@ -208,24 +248,51 @@ def _native_observation(
     )
 
 
-def _account_balance(body: Any) -> tuple[str, int | None]:
+def _account_balance(body: Any, expected: str) -> tuple[str, int | None]:
+    """Validate the envelope, then apply protobuf defaults for the matched account."""
     if not isinstance(body, dict):
+        return "malformed", None
+    if _error_envelope(body):
         return "malformed", None
     if not body:
         return "unactivated", 0
-    if "balance" not in body:
+    if "address" in body:
+        address = body.get("address")
+        if not isinstance(address, str) or not address.strip():
+            return "malformed", None
+        party = _party(address)
+        if party is None or party != expected:
+            return "mismatch", None
+    elif not any(key in _ACCOUNT_FIELDS for key in body):
         return "malformed", None
+    if "balance" not in body:
+        return "amount", 0
     amount = _uint(body.get("balance"))
     if amount is None:
         return "malformed", None
     return "amount", amount
 
 
-def _permission_observation(body: Any, reason: str, source_id: str) -> CoverageObservation:
+def _error_envelope(body: Mapping[str, Any]) -> bool:
+    if body.get("success") is False:
+        return True
+    for key in ("Error", "error"):
+        value = body.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+        if isinstance(value, dict) and value:
+            return True
+    return False
+
+
+def _permission_observation(body: Any, reason: str, source_id: str, expected: str) -> CoverageObservation:
     gaps = ("account_keys_not_handled",)
     if reason and reason != "latest_not_solidified":
         return _error(source_id, reason, gaps=gaps, declared=_DECLARED_PERMISSIONS)
-    if not isinstance(body, dict) or _account_balance(body)[0] == "malformed":
+    kind = _account_balance(body, expected)[0] if isinstance(body, dict) else "malformed"
+    if kind == "mismatch":
+        return _error(source_id, "account_mismatch", gaps=gaps, declared=_DECLARED_PERMISSIONS)
+    if kind == "malformed":
         return _error(source_id, "malformed_account", gaps=gaps, declared=_DECLARED_PERMISSIONS)
     counts = _permission_counts(body)
     if counts is None:
@@ -325,15 +392,22 @@ def _allowances(
     source_id: str,
 ) -> CoverageObservation:
     del solidity_head
-    pairs = [(contract, spender) for contract in contracts for spender in spenders][:_MAX_PAIRS]
+    all_pairs = [(contract, spender) for contract in contracts for spender in spenders]
+    pairs = all_pairs[:_MAX_PAIRS]
+    omitted = all_pairs[_MAX_PAIRS:]
     gaps = ("approval_history_not_indexed",)
-    if not pairs:
+    if not all_pairs:
         return _obs(
             "partial", source_id, declared=_DECLARED_PAIRS, complete=False,
             gaps=gaps, reasons=("no_configured_pairs", "approval_history_not_indexed"),
         )
     evidence: list[str] = []
     reasons = ["configured_pairs_only", "approval_history_not_indexed"]
+    for contract, spender in omitted:
+        token_id = parse_address("tron", contract).identity_key
+        spender_id = parse_address("tron", spender).identity_key
+        evidence.append(f"omitted_pair:{token_id}:{spender_id}")
+        reasons.append("allowance_scope_omitted")
     for contract, spender in pairs:
         amount, solidity, ok = _constant_uint(
             client, owner, contract, "allowance(address,address)", (owner, spender),
@@ -412,137 +486,203 @@ def _decode_uint(body: Any) -> int | None:
 
 def _native_history(
     client, verify, address, watch, cursor, entry, network, asset, chain_uid, tenant_id, wallet_id,
-    observed_at, source_id, solidity_head, latest_head,
+    observed_at, source_id, solidity_head, latest_head, clock,
 ):
     events: list[ChainEvent] = []
     reasons: list[str] = []
     gaps = list(_HISTORY_GAPS)
-    try:
-        resume = resume_fingerprint(cursor)
-    except ValueError:
-        observation = _history_observation(source_id, False, "bad_cursor", gaps, reasons, None, solidity_head, _DECLARED_TRX, hard=True)
-        return (), observation, None
-    path = f"/v1/accounts/{address}/transactions"
-    walk = client.history(path, FROZEN_FILTERS, resume)
-    if walk.reason:
-        reasons.append(walk.reason)
-        if walk.reason in {"page_cap", "repeated_fingerprint"}:
-            gaps.append(walk.reason)
-    if not walk.error:
-        for row in walk.rows:
-            _native_row(
-                row, verify, watch, entry, network, asset, chain_uid, tenant_id, wallet_id,
-                observed_at, source_id, solidity_head, latest_head, events, reasons, gaps,
-            )
-    complete = walk.complete and not walk.error and not verify.failed
-    if verify.lag:
-        reasons.append("indexer_lag")
-    if verify.failed:
-        reasons.append("verification_unread")
-    hard = bool(walk.error and not walk.rows)
-    observation = _history_observation(
-        source_id, complete, "", gaps, reasons, _cursor_token(walk, complete, solidity_head),
-        solidity_head, _DECLARED_TRX, hard=hard,
+
+    def accept(row, allow_verify: bool) -> str:
+        return _native_row(
+            row, verify, watch, entry, network, asset, chain_uid, tenant_id, wallet_id,
+            observed_at, source_id, solidity_head, latest_head, events, reasons, gaps, allow_verify,
+        )
+
+    return _history_walk(
+        client, verify, cursor, solidity_head, clock, source_id, wallet_id, network,
+        f"/v1/accounts/{address}/transactions", "history.native_external", _DECLARED_TRX, gaps, reasons,
+        events, accept,
     )
-    stored = _stored_cursor(wallet_id, network, "history.native_external", observation.cursor, solidity_head, walk.error and not walk.rows)
-    return tuple(events), observation, stored
 
 
 def _native_row(
     row, verify, watch, entry, network, asset, chain_uid, tenant_id, wallet_id, observed_at, source_id,
-    solidity_head, latest_head, events, reasons, gaps,
-) -> None:
+    solidity_head, latest_head, events, reasons, gaps, allow_verify,
+) -> str:
     kind = _contract_type(row)
     if kind in _ACTIVATION:
         reasons.append("activation_refused")
-        return
+        return "done"
     if kind in _KEY_UPDATES:
         reasons.append("account_key_update_refused")
-        return
+        return "done"
     if kind in _RESOURCE or kind == "TransferAssetContract" or kind not in {"TransferContract", "TriggerSmartContract"}:
         if kind == "TransferAssetContract":
             gaps.append("trc10_not_in_scope")
-        return
+        return "done"
     if kind == "TriggerSmartContract" and (_uint(_param(row).get("call_value")) or 0) <= 0:
-        return
+        return "done"
+    if not allow_verify:
+        return "pending"
     txid = _row_id(row)
     if txid is None:
         reasons.append("indexer_lag")
         verify.lag = True
-        return
+        return "pending"
     verdict = _verdict(verify, txid, _uint(row.get("blockNumber")), entry, network, solidity_head, latest_head)
+    if verdict.kind in {"unread", "lag", "not_success"}:
+        if verdict.kind == "lag":
+            reasons.append("indexer_lag")
+        if verdict.kind == "unread":
+            reasons.append("verification_unread")
+        return "pending"
     _emit_verified(
         verdict, txid, "native", watch, None, asset, chain_uid, tenant_id, wallet_id, network,
         observed_at, source_id, events, verify,
     )
+    return "done"
 
 
 def _trc20_history(
     client, verify, address, watch, cursor, entry, network, asset, chain_uid, tenant_id, wallet_id,
-    observed_at, source_id, solidity_head, latest_head,
+    observed_at, source_id, solidity_head, latest_head, clock,
 ):
     events: list[ChainEvent] = []
     reasons: list[str] = []
     gaps = ["approval_is_not_a_transfer", *_HISTORY_GAPS]
-    try:
-        resume = resume_fingerprint(cursor)
-    except ValueError:
-        observation = _history_observation(source_id, False, "bad_cursor", gaps, reasons, None, solidity_head, _DECLARED_TRC20, hard=True)
-        return (), observation, None
-    path = f"/v1/accounts/{address}/transactions/trc20"
-    walk = client.history(path, FROZEN_FILTERS, resume)
-    if walk.reason:
-        reasons.append(walk.reason)
-        if walk.reason in {"page_cap", "repeated_fingerprint"}:
-            gaps.append(walk.reason)
-    if not walk.error:
-        for index, row in enumerate(walk.rows):
-            _trc20_row(
-                row, index, verify, watch, entry, network, asset, chain_uid, tenant_id, wallet_id,
-                observed_at, source_id, solidity_head, latest_head, events, reasons, gaps,
-            )
-    complete = walk.complete and not walk.error and not verify.failed
-    if verify.lag:
-        reasons.append("indexer_lag")
-    if verify.failed:
-        reasons.append("verification_unread")
-    hard = bool(walk.error and not walk.rows)
-    observation = _history_observation(
-        source_id, complete, "", gaps, reasons, _cursor_token(walk, complete, solidity_head),
-        solidity_head, _DECLARED_TRC20, hard=hard,
+
+    def accept(row, allow_verify: bool) -> str:
+        return _trc20_row(
+            row, verify, watch, entry, network, asset, chain_uid, tenant_id, wallet_id,
+            observed_at, source_id, solidity_head, latest_head, events, reasons, gaps, allow_verify,
+        )
+
+    return _history_walk(
+        client, verify, cursor, solidity_head, clock, source_id, wallet_id, network,
+        f"/v1/accounts/{address}/transactions/trc20", "history.fungible", _DECLARED_TRC20, gaps, reasons,
+        events, accept,
     )
-    stored = _stored_cursor(wallet_id, network, "history.fungible", observation.cursor, solidity_head, walk.error and not walk.rows)
-    return tuple(events), observation, stored
 
 
 def _trc20_row(
-    row, index, verify, watch, entry, network, asset, chain_uid, tenant_id, wallet_id, observed_at,
-    source_id, solidity_head, latest_head, events, reasons, gaps,
-) -> None:
+    row, verify, watch, entry, network, asset, chain_uid, tenant_id, wallet_id, observed_at,
+    source_id, solidity_head, latest_head, events, reasons, gaps, allow_verify,
+) -> str:
     label = row.get("type")
     kind = label.casefold() if isinstance(label, str) else ""
     if kind not in {"transfer", "approval"}:
         gaps.append("unknown_trc20_type")
-        return
+        return "done"
     token = row.get("token_info")
     token_addr = token.get("address") if isinstance(token, dict) else None
     token_id = _party(token_addr)
     amount = _uint(row.get("value"))
+    sender = _party(row.get("from"))
+    target = _party(row.get("to"))
     if token_id is None or amount is None:
         reasons.append("bad_trc20_row")
-        return
+        return "done"
+    if not allow_verify:
+        return "pending"
     txid = _row_id(row)
     if txid is None:
         verify.lag = True
         reasons.append("indexer_lag")
-        return
+        return "pending"
     verdict = _verdict(verify, txid, _uint(row.get("blockNumber") or row.get("block")), entry, network, solidity_head, latest_head)
+    if verdict.kind in {"unread", "lag", "not_success"}:
+        if verdict.kind == "lag":
+            reasons.append("indexer_lag")
+        if verdict.kind == "unread":
+            reasons.append("verification_unread")
+        return "pending"
     token_asset = f"tron-trc20:{token_id}"
     movement = "approval" if kind == "approval" else "transfer"
+    log_index = None
+    if verdict.kind == "success":
+        log_index = _matching_log(verdict.info, kind, token_id, sender, target, amount)
+        if log_index is None:
+            reasons.append("trc20_event_unmatched")
+            _emit_fee(txid, verdict, asset, chain_uid, tenant_id, wallet_id, network, observed_at, source_id, events, verify.fees, watch)
+            return "done"
     _emit_verified(
-        verdict, txid, movement, watch, (row, index, token_asset, amount), asset, chain_uid,
+        verdict, txid, movement, watch, (row, log_index, token_asset, amount), asset, chain_uid,
         tenant_id, wallet_id, network, observed_at, source_id, events, verify,
     )
+    return "done"
+
+
+def _history_walk(
+    client, verify, cursor, solidity_head, clock, source_id, wallet_id, network, path, capability,
+    declared, gaps, reasons, events, accept_row,
+):
+    del verify
+    try:
+        resume = parse_resume(cursor)
+    except ValueError:
+        observation = _history_observation(
+            source_id, False, "bad_cursor", gaps, reasons, None, solidity_head, declared, hard=True,
+        )
+        return (), observation, None
+    window = _window_for(resume, solidity_head, clock)
+    pending = False
+    allow = True
+
+    def accept(rows) -> bool:
+        nonlocal pending, allow
+        for row in rows:
+            if accept_row(row, allow) == "pending":
+                pending = True
+                allow = False
+        return not pending
+
+    walk = client.history(path, frozen_filters(*window), resume.fingerprint, accept_page=accept)
+    if walk.reason:
+        reasons.append(walk.reason)
+        if walk.reason in {"page_cap", "repeated_fingerprint"}:
+            gaps.append(walk.reason)
+    if pending and "verification_pending" not in reasons:
+        reasons.append("verification_pending")
+    fully = walk.complete and not walk.error and not pending
+    logical, persisted = _history_cursors(walk, fully, solidity_head, window)
+    hard = bool(walk.error and not walk.rows)
+    observation = _history_observation(
+        source_id, fully, "", gaps, reasons, logical, solidity_head, declared, hard=hard,
+        evidence=(f"frozen_min_timestamp:{window[0]}", f"frozen_max_timestamp:{window[1]}"),
+        scope_from=str(window[0]), scope_to=str(window[1]),
+    )
+    blocked = bool(walk.error and not walk.rows)
+    stored = _stored_cursor(wallet_id, network, capability, persisted, solidity_head, blocked)
+    return tuple(events), observation, stored
+
+
+def _window_for(resume: Resume, head: _Head | None, clock) -> tuple[int, int]:
+    """Keep a resumed page on its saved bounds. A finished window opens the next one."""
+    head_ts = head.timestamp if head is not None and head.timestamp is not None else int(clock() * 1000)
+    if resume.kind in {"page", "window"} and resume.max_timestamp is not None:
+        minimum = 0 if resume.min_timestamp is None else resume.min_timestamp
+        return minimum, resume.max_timestamp
+    if resume.kind == "solidified" and resume.max_timestamp is not None:
+        start = resume.max_timestamp + 1
+        end = head_ts if head_ts >= start else start
+        return start, end
+    return 0, head_ts
+
+
+def _history_cursors(walk: HistoryWalk, fully: bool, head: _Head | None, window: tuple[int, int]) -> tuple[str | None, str | None]:
+    minimum, maximum = window
+    if walk.error and not walk.rows:
+        return None, None
+    if fully and head is not None:
+        stored = f"solidified:{head.number}|min:{minimum}|max:{maximum}"
+        return f"solidified:{head.number}", stored
+    if walk.cursor:
+        stored = f"fp:{walk.cursor}|min:{minimum}|max:{maximum}"
+        return f"fp:{walk.cursor}", stored
+    if fully:
+        return None, None
+    stored = f"window|min:{minimum}|max:{maximum}"
+    return "window", stored
 
 
 def _verdict(verify, txid, list_block, entry, network, solidity_head, latest_head) -> _Verdict:
@@ -554,14 +694,14 @@ def _verdict(verify, txid, list_block, entry, network, solidity_head, latest_hea
     info_got = verify.client.transaction_by_id(txid, info=True)
     if not tx_got.ok or not info_got.ok:
         verify.failed = True
-        verdict = _Verdict("unread", None, 0, "unknown", None)
+        verdict = _Verdict("unread", None, 0, "unknown", None, None)
         verify.cache[key] = verdict
         return verdict
     tx = _tx_body(tx_got.body)
     info = info_got.body if isinstance(info_got.body, dict) else {}
     if not _has_id(tx, key) or not _has_id(info, key):
         verify.lag = True
-        verdict = _Verdict("lag", None, 0, "unknown", None)
+        verdict = _Verdict("lag", None, 0, "unknown", None, info)
         verify.cache[key] = verdict
         return verdict
     codes = _status_codes(tx, info)
@@ -569,11 +709,11 @@ def _verdict(verify, txid, list_block, entry, network, solidity_head, latest_hea
     block = _uint(info.get("blockNumber"))
     finality = _finality(block, entry, network, solidity_head, latest_head)
     if codes & _FAIL:
-        verdict = _Verdict("failed", block, fee, finality, tx)
+        verdict = _Verdict("failed", block, fee, finality, tx, info)
     elif _execution_success(tx, info) and _blocks_agree(tx, info, list_block) and finality == "finalized":
-        verdict = _Verdict("success", block, fee, finality, tx)
+        verdict = _Verdict("success", block, fee, finality, tx, info)
     else:
-        verdict = _Verdict("not_success", block, fee, finality, tx)
+        verdict = _Verdict("not_success", block, fee, finality, tx, info)
     verify.cache[key] = verdict
     return verdict
 
@@ -586,9 +726,9 @@ def _emit_verified(
         return
     if verdict.kind == "failed":
         _emit_failed(txid, verdict, native_asset, chain_uid, tenant_id, wallet_id, network, observed_at, source_id, events, verify.failures)
-        _emit_fee(txid, verdict, native_asset, chain_uid, tenant_id, wallet_id, network, observed_at, source_id, events, verify.fees)
+        _emit_fee(txid, verdict, native_asset, chain_uid, tenant_id, wallet_id, network, observed_at, source_id, events, verify.fees, watch)
         return
-    _emit_fee(txid, verdict, native_asset, chain_uid, tenant_id, wallet_id, network, observed_at, source_id, events, verify.fees)
+    _emit_fee(txid, verdict, native_asset, chain_uid, tenant_id, wallet_id, network, observed_at, source_id, events, verify.fees, watch)
     if movement == "native":
         _emit_native_asset(verdict, txid, watch, native_asset, chain_uid, tenant_id, wallet_id, network, observed_at, source_id, events)
         return
@@ -621,8 +761,8 @@ def _emit_native_asset(verdict, txid, watch, asset, chain_uid, tenant_id, wallet
 
 
 def _emit_trc20_transfer(payload, txid, watch, verdict, chain_uid, tenant_id, wallet_id, network, observed_at, source_id, events) -> None:
-    row, index, token_asset, amount = payload
-    if amount <= 0:
+    row, log_index, token_asset, amount = payload
+    if amount <= 0 or log_index is None:
         return
     sender = _party(row.get("from"))
     target = _party(row.get("to"))
@@ -633,24 +773,26 @@ def _emit_trc20_transfer(payload, txid, watch, verdict, chain_uid, tenant_id, wa
     else:
         return
     events.append(_event(
-        tenant_id, wallet_id, network, chain_uid, txid, f"trc20-{index}", kind, token_asset, amount,
+        tenant_id, wallet_id, network, chain_uid, txid, f"log-{log_index}", kind, token_asset, amount,
         verdict, observed_at, source_id,
     ))
 
 
 def _emit_approval(payload, txid, verdict, chain_uid, tenant_id, wallet_id, network, observed_at, source_id, events) -> None:
-    row, index, token_asset, amount = payload
-    if _party(row.get("from")) is None:
+    row, log_index, token_asset, amount = payload
+    if log_index is None or _party(row.get("from")) is None:
         return
     kind = "approval_revoked" if amount == 0 else "approval_set"
     events.append(_event(
-        tenant_id, wallet_id, network, chain_uid, txid, f"approval-{index}", kind, token_asset, amount,
+        tenant_id, wallet_id, network, chain_uid, txid, f"log-{log_index}", kind, token_asset, amount,
         verdict, observed_at, source_id,
     ))
 
 
-def _emit_fee(txid, verdict, asset, chain_uid, tenant_id, wallet_id, network, observed_at, source_id, events, seen) -> None:
+def _emit_fee(txid, verdict, asset, chain_uid, tenant_id, wallet_id, network, observed_at, source_id, events, seen, watch) -> None:
     if verdict.fee <= 0 or txid.lower() in seen:
+        return
+    if _payer(verdict.tx) != watch:
         return
     seen.add(txid.lower())
     events.append(_event(
@@ -687,7 +829,10 @@ def _event(tenant_id, wallet_id, network, chain_uid, txid, sub_index, kind, asse
     )
 
 
-def _history_observation(source_id, complete, reason, gaps, reasons, cursor, head, declared, *, hard: bool = False) -> CoverageObservation:
+def _history_observation(
+    source_id, complete, reason, gaps, reasons, cursor, head, declared, *, hard: bool = False,
+    evidence: tuple[str, ...] = (), scope_from: str | None = None, scope_to: str | None = None,
+) -> CoverageObservation:
     codes = [item for item in reasons if item]
     if reason and reason not in codes:
         codes.append(reason)
@@ -700,23 +845,15 @@ def _history_observation(source_id, complete, reason, gaps, reasons, cursor, hea
         complete=False,
         pagination=complete,
         gaps=unique_gaps,
-        evidence=(),
+        evidence=evidence,
         reasons=tuple(dict.fromkeys(codes)),
         cursor=cursor,
         number=None if head is None else str(head.number),
         block_hash=None if head is None else head.block_id,
         status="finalized" if head is not None and complete else "observed",
+        scope_from=scope_from,
+        scope_to=scope_to,
     )
-
-
-def _cursor_token(walk, complete: bool, head: _Head | None) -> str | None:
-    if walk.error and not walk.rows:
-        return None
-    if complete and head is not None:
-        return f"solidified:{head.number}"
-    if walk.cursor:
-        return f"fp:{walk.cursor}"
-    return None
 
 
 def _stored_cursor(wallet_id, network, capability, cursor, head, blocked: bool) -> dict[str, Any] | None:
@@ -842,6 +979,77 @@ def _finality(block, entry, network, solidity_head, latest_head) -> str:
     })
 
 
+def _payer(tx: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(tx, Mapping):
+        return None
+    return _party(_param(tx).get("owner_address"))
+
+
+def _matching_log(info: Mapping[str, Any] | None, kind: str, token_id: str, sender: str | None, target: str | None, amount: int) -> int | None:
+    """Receipt log index whose contract, parties, and amount match the indexer row."""
+    if not isinstance(info, Mapping) or sender is None or target is None:
+        return None
+    logs = info.get("log")
+    if not isinstance(logs, list):
+        return None
+    topic = _TRANSFER_TOPIC if kind == "transfer" else _APPROVAL_TOPIC
+    for index, item in enumerate(logs):
+        if not isinstance(item, dict):
+            continue
+        if _log_identity(item.get("address")) != token_id:
+            continue
+        topics = item.get("topics")
+        if not isinstance(topics, list) or len(topics) < 3:
+            continue
+        if _hex_word(topics[0]) != topic:
+            continue
+        if _topic_party(topics[1]) != sender or _topic_party(topics[2]) != target:
+            continue
+        if _data_uint(item.get("data")) != amount:
+            continue
+        return index
+    return None
+
+
+def _log_identity(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().lower()
+    if text.startswith("0x"):
+        text = text[2:]
+    if text and all(char in "0123456789abcdef" for char in text):
+        if len(text) == 40:
+            return "41" + text
+        if len(text) == 42 and text.startswith("41"):
+            return text
+    return _party(value)
+
+
+def _topic_party(topic: Any) -> str | None:
+    word = _hex_word(topic)
+    if word is None or len(word) > 64:
+        return None
+    return "41" + word.rjust(64, "0")[-40:]
+
+
+def _data_uint(value: Any) -> int | None:
+    word = _hex_word(value)
+    if word is None or len(word) > 64:
+        return None
+    return int(word, 16)
+
+
+def _hex_word(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lower()
+    if text.startswith("0x"):
+        text = text[2:]
+    if not text or any(char not in "0123456789abcdef" for char in text):
+        return None
+    return text
+
+
 def _party(value: Any) -> str | None:
     if not isinstance(value, str) or not value:
         return None
@@ -909,6 +1117,8 @@ def _obs(
     block_hash: str | None = None,
     status: str | None = None,
     pagination: bool | None = None,
+    scope_from: str | None = None,
+    scope_to: str | None = None,
 ) -> CoverageObservation:
     pages = complete if pagination is None else pagination
     gap_done = pages and not gaps and category in {"ok", "empty"}
@@ -919,6 +1129,8 @@ def _obs(
         gaps=gaps,
         cursor=cursor,
         declared=declared,
+        scope_from=scope_from,
+        scope_to=scope_to,
         checkpoint_kind="block" if number or block_hash else None,
         checkpoint_number=number,
         checkpoint_hash=block_hash,
