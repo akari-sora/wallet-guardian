@@ -281,7 +281,7 @@ def test_mcm_share_s3_05_dry_run_only_no_systemctl_without_apply_and_docs(
     """MCM-SHARE-S3-05. Dry-run writes only the requested preview and does not call systemctl."""
     docs = (ROOT / "docs" / "box-unattended.md").read_text(encoding="utf-8")
     lowered = docs.lower()
-    assert "license: pending" in lowered
+    assert "agpl-3.0-only" in lowered
     assert "loginctl show-user" in lowered
     assert "user manager" in lowered
     assert "windows retirement" in lowered

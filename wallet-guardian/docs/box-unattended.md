@@ -1,6 +1,6 @@
 # Unattended box schedule (draft)
 
-license: pending
+授權：AGPL-3.0-only（見 `LICENSE`）。
 
 This file is an installer draft. It does not install a unit, enable a timer, turn on linger, or disable a Windows task. Nothing in this package starts a round by itself. The operator does that later, on a machine they control, after reading the plan from `guardian install-service --dry-run`.
 
