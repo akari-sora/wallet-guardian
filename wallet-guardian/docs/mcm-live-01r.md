@@ -63,6 +63,8 @@ Kinza 插件本身不改。同一輪裡，Pool、Provider 與準備金清單每�
 
 ## 預算
 
+NodeReal 的免費額度是一把 key 在所有主機上共用的每秒計算單位，不是每條鏈各算一份。範例把 `nodereal-bsc` 放在預算組 `nodereal-key`（`max_rps` 1、`max_concurrency` 1）。同一個 `budget_group` 的來源共用一個 token bucket。Ethereum 與 Optimism 的 RPC 來源在範例裡仍用各自的 `rpc-<chain>`：公開設定只有環境變數名稱，程式不會從主機名猜測它是不是 NodeReal。若 `RPC_ETHEREUM_MAINNET_URL` 或 `RPC_OPTIMISM_MAINNET_URL` 是你從 NodeReal Dashboard 複製的主機，把那個來源的 `budget_group` 改成 `nodereal-key`。超過額度時提供者回 429，監視器依 token bucket 與 Retry-After 在這一輪期限內等待並重試 `eth_chainId`。仍然讀不到是 partial，或 `identity_unreadable` 加上 `rate_limited`，不是 0，也不是 complete。會超過這一輪期限的等待不睡。
+
 `run-once` 的 `budget.providers` 有每個來源的邏輯方法數、HTTP 次數、credits、分頁與供應商回報的剩餘額度。Blockscout 基本方法按 20 credits 計。JSON-RPC batch 的 HTTP 是一次，方法數仍是裡面的每一筆。`budget.kinza` 有兩個錢包的 `wallets_read`、餘額讀取與共用命中，不含地址。
 
 `tools/mcm_shadow_round.py` 的 `budget.json` 保留 `kinza_eth_calls` 等原有欄位，並把這一輪的 `budget` 放進 `run_once`。起始仍留約 30% 餘裕；要改設定先拿實測，不把付費方案當預設。

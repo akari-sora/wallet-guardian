@@ -732,13 +732,9 @@ def _read_evm(
         _block_caps(wallet_id, network, observations, ("balances.native", "history.fungible", *_PERMISSION_CAPABILITIES), "endpoint_missing")
         return
     adapter = EvmAdapter(entry, transport, rpc_source_id=source_id)
-    session = adapter.open()
+    session = adapter.open(clock=clock, started_at=started_at, deadline=deadline)
     if not session.identity.ok:
-        _block_caps(
-            wallet_id, network, observations,
-            ("balances.native", "history.fungible", *_PERMISSION_CAPABILITIES),
-            session.identity.reason or "identity_unreadable",
-        )
+        _block_identity(wallet_id, network, observations, session.identity)
         return
     address = account.normalized.canonical
     balance = session.native_balance(address)
@@ -1083,6 +1079,28 @@ def _network_of(source_id: str, registry: Mapping[str, Any]) -> str | None:
         if network in registry:
             return network
     return None
+
+
+def _block_identity(wallet_id, network, observations, identity) -> None:
+    """Identity failure keeps the cause next to identity_unreadable. It is not zero."""
+    reason = getattr(identity, "reason", None) or "identity_unreadable"
+    if not isinstance(reason, str) or not reason:
+        reason = "identity_unreadable"
+    causes = tuple(
+        code for code in getattr(identity, "causes", ()) or ()
+        if isinstance(code, str) and code and code != reason
+    )
+    observation = CoverageObservation(
+        category="error",
+        pagination_complete=False,
+        gap_detection_complete=False,
+        declared="not_read",
+        reason_codes=(reason, *causes, "blocked"),
+        trust="unverified",
+        price_quality="unknown",
+    )
+    for capability in ("balances.native", "history.fungible", *_PERMISSION_CAPABILITIES):
+        observations[(wallet_id, network, capability)] = observation
 
 
 def _block_caps(wallet_id, network, observations, capabilities, reason: str) -> None:

@@ -37,7 +37,13 @@ Signup: <https://nodereal.io>. `nr_getAssetTransfers` is documented for Ethereum
 
 What it unlocks: BSC `history.native_external` (external transfers, both directions, full `pageKey`). Token categories are a separate capability. A refused method is `method_not_found` or `unauthorized` (`blocked`), not an empty wallet.
 
-Free tier: check current terms on the NodeReal dashboard. This repo does not assume a paid CU pack.
+Free tier: the limit is on the API key, shared by every host that key opens (BSC, Ethereum, Optimism, and any other chain on that same key). It is not a separate allowance per chain. NodeReal's free tier is a compute-unit-per-second limit. Check the dashboard for the current number. This repo does not assume a paid CU pack.
+
+`examples/monitor.json` and `examples/monitor.nokeys.json` put the NodeReal BSC source `nodereal-bsc` on one budget group, `nodereal-key`, with `max_rps` 1 and `max_concurrency` 1. That is a conservative default so one free key is not burst by this process. Several sources may name that same `budget_group`; they then share one token bucket.
+
+Ethereum and Optimism RPC sources stay on `rpc-ethereum-mainnet` and `rpc-optimism-mainnet` in those examples. Those endpoints are whatever you put in `RPC_ETHEREUM_MAINNET_URL` and `RPC_OPTIMISM_MAINNET_URL`. The monitor does not read the host and does not guess that a URL is NodeReal. If the URL you copied from the NodeReal dashboard is a NodeReal host, set that source's `budget_group` to `nodereal-key` (the group must exist under `budgets` with the same limits). Do this for every NodeReal host that uses the same key. Sources that share `NODEREAL_API_KEY` already have to name one budget group.
+
+When that shared limit is exceeded the provider returns HTTP 429. The monitor waits (the token bucket, and Retry-After on `eth_chainId`) inside the round deadline and retries. A row that still cannot be read is partial, or `identity_unreadable` with `rate_limited`. It is not a zero balance and it is not complete. A wait that would pass the round deadline is not taken.
 
 Environment:
 
