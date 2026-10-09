@@ -40,11 +40,12 @@
 - `guardian.storage:Database`
 - `guardian.domain:normalize_hyperliquid`
 
-`guardian.cli:build_parser` 註冊的指令：`doctor`、`run-once`、`snapshot`、`reconcile`、`claims`、`providers`、`wallets`、`approvals`、`explain`、`coverage`、`replay`、`alerts`、`self-check`、`diagnose`、`actions`、`action`、`rescue`、`operation-coverage`、`workbench`、`config`、`sources`、`export`、`compare-legacy`、`legacy-capture`、`watchdog`、`monitor`。`legacy-capture` 只寫同機 sidecar，不開 MCM 資料庫，也不改既有指令。見 `docs/legacy-evidence.md`。
+`guardian.cli:build_parser` 註冊的指令：`doctor`、`run-once`、`snapshot`、`reconcile`、`claims`、`providers`、`wallets`、`approvals`、`explain`、`coverage`、`replay`、`alerts`、`self-check`、`diagnose`、`actions`、`action`、`rescue`、`operation-coverage`、`workbench`、`config`、`sources`、`export`、`compare-legacy`、`legacy-capture`、`watchdog`、`monitor`、`egress-doctor`。`legacy-capture` 只寫同機 sidecar，不開 MCM 資料庫，也不改既有指令。見 `docs/legacy-evidence.md`。
 
 和監控直接相關的行為：
 
 - `guardian doctor` 走 `guardian.service:doctor`，再走 `guardian.service:provider_probes`。它報告環境與來源等級，不印出秘密值。`monitoring_active` 是 false。
+- `guardian egress-doctor` 是唯讀的主機出口診斷，只印一份 JSON。它不開帳戶檔，也不送交易。三種事實、判定與禁止事項在 `docs/host-network.md`。
 - `guardian run-once` 走 `guardian.service:run_once`，再走 `guardian.service:_run_once`。在任何網路讀取之前先建立 `guardian.monitoring:SnapshotCycle`。
 - `guardian coverage` 在 `guardian.cli:dispatch` 裡回傳固定的 `chains_enabled: [56]`，並附上 `guardian.service:operation_coverage`。這不是 24 條鏈的覆蓋矩陣。
 - `guardian replay` 必須帶 `--no-send`。若 fixture 的 method 是禁止的發送方法，`dispatch` 會交給既有的 action policy 拒絕。W0 沒有改這條路徑。
