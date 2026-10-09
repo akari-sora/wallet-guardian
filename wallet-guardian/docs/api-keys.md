@@ -171,6 +171,25 @@ Environment:
 
 If that variable is unset, sanctions coverage is `feed_not_supplied`. Setting the variable names the feed; it does not by itself mark a wallet as screened. Check the publisher's current file location and terms. An empty balance is not "not sanctioned."
 
+<a id="esplora"></a>
+
+## Esplora (Bitcoin)
+
+Esplora is a public, keyless HTTP API. There is no API key. Shared public instances have shared rate limits; check the operator's current terms before you depend on one.
+
+The monitor stores only the environment variable name. You supply the base URL yourself. A base is an origin, or an origin whose path is `/api`. These two public bases are keyless:
+
+- `https://blockstream.info/api`
+- `https://mempool.space/api`
+
+Environment:
+
+- `ESPLORA_API_URL` (the base you choose; no key and no query secret)
+
+Do not put that URL in `examples/` or in a commit. A failed read is not a zero balance. Mempool amounts are not added to the confirmed balance. One address is an address set, not a whole HD wallet.
+
+offline fixtures; live probe: see docs/coverage-matrix.md
+
 <a id="keys"></a>
 
 ## Where the values live

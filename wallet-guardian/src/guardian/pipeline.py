@@ -30,7 +30,7 @@ from guardian.coverage import CoverageObservation, build_coverage, resolve_suppo
 from guardian.sources.key_guide import credential_hint, hint_for_source
 from guardian.delivery import CANARY_STATUS, deliver, load_handoff
 from guardian.events import ChainEvent
-from guardian.errors import GuardianError
+from guardian.errors import GuardianError, SecurityError
 from guardian.monitoring import CapabilityCycle
 from guardian.network_registry import load_registry
 from guardian.news.exposure import (
@@ -53,6 +53,7 @@ from guardian.scan.window import plan_chunks, read_logs, reject_wallet_emitter, 
 from guardian.security.transport_policy import Operation
 from guardian.sources.blockscout import BlockscoutClient
 from guardian.sources.budget import BudgetBook, BudgetExhausted
+from guardian.sources.esplora import bitcoin_gap_observations, read_bitcoin_address
 from guardian.resources import resource_path
 from guardian.sources.capabilities import load_source_capabilities
 from guardian.sources.etherscan import EtherscanClient
@@ -273,6 +274,12 @@ def run_capability_pipeline(
             _read_solana(
                 public_config, private_inputs, transport, account, network, entry,
                 observations, native_reads, seen, baseline, candidates, tenant, started,
+            )
+        elif family == "bitcoin":
+            _read_bitcoin(
+                public_config, private_inputs, transport, account, network, entry,
+                observations, native_reads, seen, baseline, candidates, tenant, started,
+                events, explicit_cursors, held_cursors,
             )
         else:
             _block_family(account.wallet_id, network, observations, "unsupported_family")
@@ -740,6 +747,73 @@ def _read_evm(
         wallet_id, network, balance.raw_wei, previous_native.get((wallet_id, network)), head, external_rows,
         candidates, tenant, native_asset,
     )
+
+
+def _read_bitcoin(
+    public_config, private_inputs, transport, account, network, entry, observations, native_reads,
+    seen, baseline, candidates, tenant, started, events, explicit_cursors, held_cursors,
+) -> None:
+    """Watch-only Esplora read. Confirmed sats stay out of native_reads when the source did not answer."""
+    wallet_id = account.wallet_id
+    gaps = bitcoin_gap_observations()
+    source_id = _family_source(public_config, private_inputs, network, "esplora")
+    if source_id is None:
+        _block_caps(wallet_id, network, observations, ("balances.native", "history.native_external"), "endpoint_missing")
+        _stamp_gaps(observations, wallet_id, network, gaps)
+        return
+    try:
+        read = read_bitcoin_address(
+            transport,
+            source_id,
+            account.normalized.canonical,
+            entry,
+            tenant_id=tenant,
+            wallet_id=wallet_id,
+            observed_at=started,
+        )
+    except (BudgetExhausted, TransportError, SecurityError) as exc:
+        reason = getattr(exc, "reason", "") or "read_error"
+        _block_caps(wallet_id, network, observations, ("balances.native", "history.native_external"), reason)
+        _stamp_gaps(observations, wallet_id, network, gaps)
+        return
+    observations[(wallet_id, network, "balances.native")] = read.balance
+    observations[(wallet_id, network, "history.native_external")] = read.history
+    if read.confirmed_sats is not None:
+        native_reads.append({"network": network, "raw_amount": str(read.confirmed_sats), "wallet_id": wallet_id})
+        if read.balance.category in {"ok", "empty"}:
+            _baseline(wallet_id, network, "balances.native", seen, baseline, candidates, tenant)
+    if read.history.category in {"ok", "empty", "partial"}:
+        _baseline(wallet_id, network, "history.native_external", seen, baseline, candidates, tenant)
+    for event in read.events:
+        if any(item.identity == event.identity for item in events):
+            continue
+        events.append(event)
+        if event.finality != "confirmed" or event.tx_status != "success":
+            continue
+        if event.kind not in {"asset_in", "asset_out"}:
+            continue
+        candidates.append(Candidate(
+            tenant_id=tenant,
+            wallet_id=wallet_id,
+            network=network,
+            capability="history.native_external",
+            identity=event.identity,
+            kind="asset",
+            raw_amount=int(event.raw_amount),
+            is_native=True,
+            direction="in" if event.kind == "asset_in" else "out",
+            tx_id=event.tx_id,
+            symbol="BTC",
+        ))
+    if read.cursor is not None:
+        explicit_cursors.append(read.cursor)
+        held_cursors.add((wallet_id, network, "history.native_external"))
+    _stamp_gaps(observations, wallet_id, network, gaps)
+
+
+def _stamp_gaps(observations, wallet_id: str, network: str, gaps) -> None:
+    for capability, observation in gaps.items():
+        observations.setdefault((wallet_id, network, capability), observation)
 
 
 def _read_solana(public_config, private_inputs, transport, account, network, entry, observations, native_reads, seen, baseline, candidates, tenant, started) -> None:
