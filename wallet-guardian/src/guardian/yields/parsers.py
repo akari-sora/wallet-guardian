@@ -5,8 +5,9 @@ APY. Binance catalog titles are not terms: catalog 93 is undocumented here, and
 article detail is not retrieved. A failed parse is a reason, not an empty success
 and not a zero yield. A gzip member must be complete, and bytes after that member
 are rejected. Depth and decoder failures return a reason. A negated or conflicting
-clause is not an affirmative term, and an eligibility limit this parser does not
-structure stays unknown.
+clause is not an affirmative term. Negation before or after a matched expression
+blocks that field. Free text stays residual unknown unless every clause matches
+the supported grammar.
 """
 
 from __future__ import annotations
@@ -47,11 +48,18 @@ _AMBIGUOUS = re.compile(
 _MINIMUM = re.compile(r"\bminimum\s+([0-9]+(?:\.[0-9]+)?)\s+([A-Za-z]{2,12})\b", re.IGNORECASE)
 _LOCK = re.compile(r"\blocked\s+for\s+([0-9]+)\s+days\b", re.IGNORECASE)
 _NEGATION = re.compile(r"\b(?:not|no|never|without|cannot|can\s*not)\b|n['’]t\b", re.IGNORECASE)
-_UNPARSED_RESTRICTION = re.compile(
-    r"\b(?:kyc|know\s+your\s+customer|new[\s-]*users?|whitelists?|allowlists?|blacklists?|"
-    r"first[\s-]*time\s+users?|identity\s+verifications?)\b",
-    re.IGNORECASE,
+_CLAUSE_BOUNDARY = re.compile(r"[!;?\n]|\.(?=\s|$)")
+# Residual "none" means every clause matched one of these forms. Other eligibility
+# text is unknown; it is not filtered by a keyword list.
+_MINIMUM_CLAUSE = re.compile(
+    r"(?i)^(?:a\s+)?minimum\s+[0-9]+(?:\.[0-9]+)?\s+[A-Za-z]{2,12}(?:\s+locked\s+for\s+[0-9]+\s+days)?$"
 )
+_LOCK_CLAUSE = re.compile(r"(?i)^(?:funds\s+are\s+)?locked\s+for\s+[0-9]+\s+days$")
+_DEADLINE_CLAUSE = re.compile(
+    r"(?i)^(?:eligible\s+)?(?:until|through|before|deadline|ends|end|from|starts|start|beginning)"
+    r"\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
+)
+_LINK_CLAUSE = re.compile(r"(?i)^(?:see\s+)?https://\S+$")
 _LINK = re.compile(r"https://[^\s\"'<>]+")
 _DATE_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
 
@@ -446,19 +454,19 @@ def _epoch(number: int) -> str | None:
 
 
 def _terms_from_body(body: str) -> dict[str, Any]:
-    """Extract affirmative terms only. Negation, conflict, and leftover limits stay unknown."""
+    """Extract affirmative terms only. Negation, conflict, and leftover text stay unknown."""
     deadlines, deadline_dispute = _deadlines(body)
     minimum, minimum_dispute = _accepted(_MINIMUM.finditer(body), body, _minimum_key)
     lock, lock_dispute = _accepted(_LOCK.finditer(body), body, lambda match: match.group(1))
     disputed = deadline_dispute or minimum_dispute or lock_dispute
     ambiguous = _AMBIGUOUS.search(body) is not None
-    unparsed = _UNPARSED_RESTRICTION.search(body) is not None
     end = next((item for item in deadlines if item["role"] == "end"), None)
     extracted = end is not None or minimum is not None or lock is not None
+    covered = _complete_coverage(body)
     if extracted:
         extraction = "extracted"
         condition_status = "extracted"
-        residual = "unknown" if ambiguous or disputed or unparsed else "none"
+        residual = "none" if covered and not ambiguous and not disputed else "unknown"
     elif ambiguous:
         extraction = "ambiguous"
         condition_status = "ambiguous"
@@ -522,8 +530,7 @@ def _deadlines(body: str) -> tuple[list[dict[str, str]], bool]:
             role = "start"
         else:
             continue
-        role_at = max(0, match.start() - 48) + role_match.start()
-        if _negated(body, role_at) or _negated(body, match.start()):
+        if _negated(body, match.start(), match.end()):
             disputed = True
             continue
         quote = _clip(window[role_match.start():].strip())
@@ -549,8 +556,10 @@ def _accepted(
     affirmative: list[re.Match[str]] = []
     disputed = False
     for match in matches:
-        if _negated(body, match.start()):
+        if _negated(body, match.start(), match.end()):
             disputed = True
+            continue
+        if not _supported_clause(_clause_text(body, match.start(), match.end())):
             continue
         affirmative.append(match)
     values = {key(match) for match in affirmative}
@@ -565,10 +574,44 @@ def _minimum_key(match: re.Match[str]) -> tuple[str, str]:
     return match.group(1), match.group(2).upper()
 
 
-def _negated(text: str, start: int) -> bool:
-    window = text[max(0, start - 48):start]
-    clause = re.split(r"[.!;?\n]", window)[-1]
-    return _NEGATION.search(clause) is not None
+def _complete_coverage(body: str) -> bool:
+    """True when every clause is a supported term. Leftover free text is not covered."""
+    clauses = [part.strip() for part in _CLAUSE_BOUNDARY.split(body) if part.strip()]
+    if not clauses:
+        return False
+    return all(_supported_clause(clause) for clause in clauses)
+
+
+def _supported_clause(clause: str) -> bool:
+    return any(
+        pattern.fullmatch(clause) is not None
+        for pattern in (_MINIMUM_CLAUSE, _LOCK_CLAUSE, _DEADLINE_CLAUSE, _LINK_CLAUSE)
+    )
+
+
+def _negated(text: str, start: int, end: int) -> bool:
+    """True when the same clause negates the match before or after the expression."""
+    left, right = _clause_bounds(text, start, end)
+    before = text[left:start]
+    after = text[end:right]
+    return _NEGATION.search(before) is not None or _NEGATION.search(after) is not None
+
+
+def _clause_bounds(text: str, start: int, end: int) -> tuple[int, int]:
+    left = 0
+    right = len(text)
+    for boundary in _CLAUSE_BOUNDARY.finditer(text):
+        if boundary.start() < start:
+            left = boundary.end()
+        elif boundary.start() >= end:
+            right = boundary.start()
+            break
+    return left, right
+
+
+def _clause_text(text: str, start: int, end: int) -> str:
+    left, right = _clause_bounds(text, start, end)
+    return text[left:right].strip()
 
 
 def _field_quote(field: str, text: str) -> dict[str, str]:
