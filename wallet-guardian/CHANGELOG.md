@@ -12,7 +12,7 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 
 ## [0.4.0rc2] - 2026-10-09
 
-Preview channel. `published` stays false for PyPI: nothing is uploaded to a package index. The monitor is read-only: it does not sign, build a transaction, or broadcast. Wheel: `wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl`.
+Preview channel. The manifest is a pre-publication evidence snapshot: its `published: false` records that generation stage, and the GitLab release is recorded separately. No package-index upload is performed. The monitor is read-only: it does not sign, build a transaction, or broadcast. Wheel: `wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl`.
 
 ### Fixed and changed
 

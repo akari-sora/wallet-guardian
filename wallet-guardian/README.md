@@ -2,11 +2,32 @@
 
 Wallet Guardian is a read-only monitor for addresses you type, on a machine you control. It stores coverage and alerts locally. It is not a hosted service: a tenant id is a label for one operator. You can run the `guardian` command yourself, or let Grok Bot operate that same command. It does not sign, build a transaction, or broadcast, and it does not ask for a seed phrase or a private key. API keys stay in your environment. Config files store environment-variable names only (`endpoint_env`, `credential_env`). This is a preview, and it is not investment advice.
 
-It does not sign, does not build transactions, and does not broadcast. See [docs/threat-model.md](docs/threat-model.md#monitor-does-not-sign). It never asks for a seed phrase or a wallet private key. API keys stay in your environment. Config files store env var names only (`endpoint_env`, `credential_env`). What leaves the machine is described before anything is written: wallet addresses go to the RPC or indexer hosts you enable; your hostname is not added to those requests; GoPlus and Chainabuse user-address lookups stay off unless you set the key and the base. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`). `--no-send` forbids sends. See [docs/security-model.md](docs/security-model.md) and [docs/threat-model.md](docs/threat-model.md).
+It does not sign, does not build transactions, and does not broadcast. See [docs/threat-model.md](docs/threat-model.md#monitor-does-not-sign). It never asks for a seed phrase or a wallet private key. API credentials are read from your local environment or private secret profile and transmitted only to the configured provider when authentication requires them. Public configuration contains references (`endpoint_env`, `credential_env`), not credential values. What leaves the machine is described before anything is written: wallet addresses go to the RPC or indexer hosts you enable; your hostname is not added to those requests. GoPlus and Chainabuse user-address lookups require explicit local consent; configuring a key or endpoint alone is not consent. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`). `--no-send` forbids sends. See [docs/security-model.md](docs/security-model.md) and [docs/threat-model.md](docs/threat-model.md).
 
 **Status (preview rc.2).** Wallet Guardian is a self-hosted, read-only CLI preview for explicitly listed networks: Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS and Solana (partial), with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path. Coverage varies by chain, capability and data source; the dated cell-by-cell claim is [docs/coverage-matrix.md](docs/coverage-matrix.md). It runs without API keys, with explicitly reduced coverage. A rate-limited, key-less or failed read is shown as a gap, never as "no risk". Notifications are off by default. Continuous-operation (72-hour shadow) qualification is **not complete**. Evidence for rc.2 is a full local gate at the release commit, not a GitLab CI pass. There is no PyPI release: install the wheel from the project's GitLab Releases page, `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.2`.
 
-Three commands, after you download that release's wheel, `SHA256SUMS`, and `constraints.txt` and check the hash (`docs/install.md`):
+**Quickstart.** First download every file listed in that release's `SHA256SUMS` into one directory and check them (`docs/install.md`). Then create a minimal `answers.json` (the address is synthetic; replace it with an address you want to watch):
+
+```bash
+cat > answers.json <<'JSON'
+{
+  "tenant_id": "local",
+  "key_mode": "none",
+  "plugins": [],
+  "accounts": [
+    {
+      "label": "demo-wallet",
+      "family": "evm",
+      "address": "0x0000000000000000000000000000000000000001",
+      "networks": ["ethereum-mainnet"],
+      "relationship": "watch_only"
+    }
+  ]
+}
+JSON
+```
+
+Then:
 
 ```bash
 uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl
@@ -18,7 +39,7 @@ guardian coverage --mcm-config "${XDG_CONFIG_HOME:-$HOME/.config}/guardian/monit
 
 The RPC variable is required: with no endpoint set, `run-once` stops with `endpoint_missing` and reads nothing. The URL above is an example of a public endpoint, not an endorsement; public endpoints rate-limit and may refuse some calls, which shows up as a gap in `coverage`. On a host whose system resolver returns a benchmark or private address, `run-once` refuses with a resolver message; set `GUARDIAN_RESOLVER_MODE=doh` (see [docs/host-network.md](docs/host-network.md)). A first no-key run is bounded by a round deadline of about three minutes and reports what it could not finish as `partial`.
 
-Copy `examples/answers.example.json` to `answers.json` first. That file's address is synthetic. `init` writes under the XDG config directory (or `GUARDIAN_CONFIG_DIR`) and prints `private_dir`. Pass that directory's `monitor.json` if it is not the path above. `run-once --no-send` still reads the endpoints you set. It leaves alerts in the local outbox and does not send them.
+The `answers.json` above is all `init` needs. `init` writes under the XDG config directory (or `GUARDIAN_CONFIG_DIR`) and prints `private_dir`. Pass that directory's `monitor.json` if it is not the path above. `run-once --no-send` still reads the endpoints you set. It leaves alerts in the local outbox and does not send them.
 
 - Read-only monitor: addresses you choose, local coverage, local outbox. No signing and no broadcast.
 - No-key and bring-your-own-key use the same files. A missing key is `credential_missing`, with a hint, not a zero balance.
@@ -34,17 +55,17 @@ The MCM-01 scope contract is [docs/mcm-01.md](docs/mcm-01.md). That document is 
 
 ## Quickstart
 
-Install a verified wheel and pinned constraints as in [docs/install.md](docs/install.md). Then, from a machine with the `guardian` command:
+Same steps as the quick start at the top of this file, with the default private-directory config path (`init` prints `private_dir`). Install as in [docs/install.md](docs/install.md), set an RPC endpoint variable for each enabled chain, then:
 
 ```bash
 guardian init --from answers.json --yes
-guardian config validate --mcm-config monitor.json
-guardian run-once --mcm-config monitor.json --no-send
-guardian coverage --mcm-config monitor.json
+guardian config validate --mcm-config "${XDG_CONFIG_HOME:-$HOME/.config}/guardian/monitor.json"
+guardian run-once --mcm-config "${XDG_CONFIG_HOME:-$HOME/.config}/guardian/monitor.json" --no-send
+guardian coverage --mcm-config "${XDG_CONFIG_HOME:-$HOME/.config}/guardian/monitor.json"
 guardian install-service --dry-run
 ```
 
-`answers.json` lists the addresses, chains, and plugins you choose; start from `examples/answers.example.json` (synthetic address, `key_mode` none or byo, each account needs `label`, `family`, `address`, `networks`). Use a synthetic address in examples, never a real watch address in this repo. `init` does not scan for other addresses, does not enable third-party user-address lookups, and does not start a sender. It prints which source would receive which data. Nothing is written until you pass `--yes` (or type `yes` at the prompt). A second run refuses to overwrite. `--force` backs up the config files first and does not touch the state database.
+`answers.json` lists the addresses, chains, and plugins you choose; use the example above (synthetic address, `key_mode` none or byo, each account needs `label`, `family`, `address`, `networks`). Use a synthetic address in examples, never a real watch address in this repo. `init` does not scan for other addresses, does not enable third-party user-address lookups, and does not start a sender. It prints which source would receive which data. Nothing is written until you pass `--yes` (or type `yes` at the prompt). A second run refuses to overwrite. `--force` backs up the config files first and does not touch the state database.
 
 `run-once --no-send` reads with your endpoints and writes the local outbox only. `coverage` shows each capability. A missing key is `credential_missing` with a hint, not a zero balance and not a complete history. `install-service --dry-run` prints planned unit names and exits non-zero. It does not install anything. You enable a schedule later, yourself.
 

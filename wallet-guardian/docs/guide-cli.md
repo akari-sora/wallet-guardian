@@ -19,7 +19,28 @@ The wheel name in this tree is `wallet_guardian_monitor-0.4.0rc2-py3-none-any.wh
 
 ## Quickstart
 
-Copy `examples/answers.example.json` to `answers.json` outside the git checkout and edit it. The shipped example address is synthetic (`examples/answers.example.json`). Each account needs `label`, `family`, `address`, `networks`. `key_mode` is `none` or `byo`. `relationship` is `watch_only` or `owned_user_declared`. A watch address is not proof of control.
+Create `answers.json` outside any git checkout. This minimal file is complete; its address is synthetic, so replace it with an address you want to watch:
+
+```bash
+cat > answers.json <<'JSON'
+{
+  "tenant_id": "local",
+  "key_mode": "none",
+  "plugins": [],
+  "accounts": [
+    {
+      "label": "demo-wallet",
+      "family": "evm",
+      "address": "0x0000000000000000000000000000000000000001",
+      "networks": ["ethereum-mainnet"],
+      "relationship": "watch_only"
+    }
+  ]
+}
+JSON
+```
+
+(The repository also ships `examples/answers.example.json` with the same content.) Each account needs `label`, `family`, `address`, `networks`. `key_mode` is `none` or `byo`. `relationship` is `watch_only` or `owned_user_declared`. A watch address is not proof of control.
 
 ```bash
 guardian init --from answers.json --yes
