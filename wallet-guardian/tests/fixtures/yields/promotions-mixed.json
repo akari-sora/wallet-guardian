@@ -1,0 +1,60 @@
+{
+  "records": [
+    {
+      "record_id": "deadline-1",
+      "campaign_id": "synthetic-lend-boost-1",
+      "published_at": "2026-10-01T00:00:00Z",
+      "title": "until 1999-01-01T00:00:00Z",
+      "body": "Minimum 100 USDT locked for 14 days. Eligible until 2026-12-01T16:00:00+08:00. See https://articles.invalid/terms",
+      "apy": 6
+    },
+    {
+      "record_id": "ambiguous-1",
+      "campaign_id": "synthetic-lend-boost-1",
+      "body": "Boost starts next Friday and runs through Q4.",
+      "apy": 6
+    },
+    {
+      "record_id": "spoof-1",
+      "campaign_id": "synthetic-lend-boost-1",
+      "contracts": ["0x000000000000000000000000000000000000000f"],
+      "body": "Eligible until 2026-12-01T16:00:00Z.",
+      "apy": 6
+    },
+    {
+      "record_id": "protocol-only-1",
+      "body": "synthetic-lend holders earn more until 2026-12-01T16:00:00Z",
+      "apy": 6
+    },
+    {
+      "record_id": "unknown-campaign-1",
+      "campaign_id": "not-a-real-campaign",
+      "body": "Eligible until 2026-12-01T16:00:00Z.",
+      "apy": 6
+    },
+    {
+      "record_id": "rejected-claim-1",
+      "campaign_id": "synthetic-lend-boost-1",
+      "contracts": ["0x00000000000000000000000000000000000000aa"],
+      "body": "The publisher named a contract that is outside the synthetic mapping pattern.",
+      "apy": 6
+    },
+    {
+      "record_id": "apr-1",
+      "campaign_id": "synthetic-lend-boost-1",
+      "unit": "APR",
+      "apy": 12,
+      "apyBase": null,
+      "apyReward": null,
+      "body": "The publisher states 12 APR."
+    },
+    {
+      "record_id": "high-reward-1",
+      "campaign_id": "synthetic-lend-boost-1",
+      "apyBase": 1,
+      "apyReward": 9,
+      "apy": null,
+      "body": "Incentive is larger than the base. No end date is stated."
+    }
+  ]
+}
