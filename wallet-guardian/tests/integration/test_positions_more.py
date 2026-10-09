@@ -182,8 +182,9 @@ class PositionsBackend:
         self.num_assets = 3
         self.principal = 1_500_000
         self.assets_in = 1
-        self.supply_index = 1_100_000_000_000_000_000
-        self.borrow_index = 1_200_000_000_000_000_000
+        # Synthetic stored indices at 1.1x and 1.2x Comet's 10**15 index scale.
+        self.supply_index = 1_100_000_000_000_000
+        self.borrow_index = 1_200_000_000_000_000
         self.last_accrual = TIMESTAMP
         self.collateralized = True
         self.liquidatable = False
@@ -636,7 +637,9 @@ def test_mcm_pos_03_collateral_enumeration_supply_debt(
     assert balances == {ASSET_A, ASSET_B, ASSET_C}
     base = _leg(row["legs"], "receipt", COMET_L)
     assert base["labels"]["role"] == "base_supply"
-    assert base["raw_amount"] == 1_500_000
+    assert base["labels"]["principal"] == "1500000"
+    assert base["raw_amount"] == 1_650_000
+    assert base["raw_amount"] != int(base["labels"]["principal"])
     assert base["decimals"] == 6
     assert not any(leg["kind"] == "debt" for leg in row["legs"])
     first = _leg(row["legs"], "underlying", ASSET_A)
@@ -659,7 +662,9 @@ def test_mcm_pos_03_collateral_enumeration_supply_debt(
     assert debt["status"] == "observed"
     assert not any(leg["labels"].get("role") == "base_supply" for leg in debt["legs"])
     owed = _leg(debt["legs"], "debt", "compound-v3:base-debt")
-    assert owed["raw_amount"] == 2_000_000
+    assert owed["labels"]["principal"] == "-2000000"
+    assert owed["raw_amount"] == 2_400_000
+    assert owed["raw_amount"] != 2_000_000
     assert owed["decimals"] == 6
     assert owed["labels"]["role"] == "base_debt"
     still = _leg(debt["legs"], "underlying", ASSET_A)
@@ -687,14 +692,15 @@ def test_mcm_pos_03_collateral_enumeration_supply_debt(
 def test_mcm_pos_04_stale_accrual_oracle_and_named_predicates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Stored principal stays stored. Oracle failure is not a healthy predicate."""
+    """Present value uses the stored index. Oracle failure is not a healthy predicate."""
     fresh = _desk(tmp_path / "fresh", monkeypatch, ["compound-v3"])
     fresh.backend.last_accrual = TIMESTAMP
     fresh.backend.collateralized = True
     fresh.backend.liquidatable = False
     row = _position(_cli(capsys, fresh), "compound_v3")
     supply = _leg(row["legs"], "receipt", COMET_L)
-    assert supply["raw_amount"] == fresh.backend.principal
+    assert supply["raw_amount"] == 1_650_000
+    assert supply["labels"]["principal"] == str(fresh.backend.principal)
     assert supply["labels"]["accrual"] == "stored_index"
     assert supply["labels"]["last_accrual_time"] == str(TIMESTAMP)
     assert supply["labels"]["base_supply_index"] == str(fresh.backend.supply_index)
@@ -716,7 +722,8 @@ def test_mcm_pos_04_stale_accrual_oracle_and_named_predicates(
     stale.backend.liquidatable = True
     stale_row = _position(_cli(capsys, stale), "compound_v3")
     stale_supply = _leg(stale_row["legs"], "receipt", COMET_L)
-    assert stale_supply["raw_amount"] == stale.backend.principal
+    assert stale_supply["raw_amount"] == 1_650_000
+    assert stale_supply["labels"]["principal"] == str(stale.backend.principal)
     assert stale_supply["labels"]["accrual"] == "stale_stored_index"
     assert stale_supply["labels"]["is_borrow_collateralized"] == "false"
     assert stale_supply["labels"]["is_liquidatable"] == "true"
@@ -771,7 +778,8 @@ def test_mcm_pos_05_missing_reads_keep_last_known(
     assert kept_vaults["status"] == "observed"
     assert kept_comet["status"] == "observed"
     assert any(leg["raw_amount"] == desk.backend.sdai.shares for leg in kept_vaults["legs"])
-    assert any(leg["raw_amount"] == desk.backend.principal for leg in kept_comet["legs"])
+    assert any(leg["raw_amount"] == 1_650_000 for leg in kept_comet["legs"])
+    assert kept_comet["metrics"]["principal"] == "1500000"
     assert kept_comet["metrics"]["is_borrow_collateralized"] == "true"
     assert kept_comet["metrics"]["accrual"] == "stored_index"
 
@@ -793,3 +801,64 @@ def test_mcm_pos_05_missing_reads_keep_last_known(
     assert _stored(desk, "erc4626_pins") == kept_vaults
     assert _stored(desk, "compound_v3") == kept_comet
     assert "is_liquidatable" not in json.dumps(failed_comet)
+
+
+def test_mcm_pos_06_stored_index_present_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Principal stays metadata. The counted amount is principal times index over 10**15.
+
+    Equality of lastAccrualTime and the block timestamp does not skip that
+    conversion. Division rounds down. The plugin does not accrue the account.
+    """
+    desk = _desk(tmp_path / "supply", monkeypatch, ["compound-v3"])
+    for asset in desk.backend.assets:
+        asset.balance = 0
+    desk.backend.last_accrual = TIMESTAMP
+    desk.backend.principal = 1_500_000
+    desk.backend.supply_index = 1_100_000_000_000_000
+    desk.backend.borrow_index = 1_200_000_000_000_000
+    row = _position(_cli(capsys, desk), "compound_v3")
+    assert row["status"] == "observed"
+    supply = _leg(row["legs"], "receipt", COMET_L)
+    assert supply["raw_amount"] == 1_650_000
+    assert supply["labels"]["principal"] == "1500000"
+    assert supply["labels"]["role"] == "base_supply"
+    assert supply["labels"]["accrual"] == "stored_index"
+    assert supply["labels"]["last_accrual_time"] == str(TIMESTAMP)
+    assert supply["labels"]["block_timestamp"] == str(TIMESTAMP)
+    assert supply["labels"]["base_supply_index"] == "1100000000000000"
+    assert supply["raw_amount"] != 1_800_000
+    assert _calls(desk.backend, COMET_L, SEL_ACCRUE) == []
+    assert _calls(desk.backend, COMET_L, SEL_BALANCE) == []
+    assert _calls(desk.backend, COMET_L, SEL_BORROW) == []
+    _bound_block(desk.backend, COMET_L)
+
+    desk.backend.rpc.clear()
+    desk.backend.principal = -2_000_000
+    debt = _position(_cli(capsys, desk), "compound_v3")
+    owed = _leg(debt["legs"], "debt", "compound-v3:base-debt")
+    assert owed["raw_amount"] == 2_400_000
+    assert owed["labels"]["principal"] == "-2000000"
+    assert owed["labels"]["role"] == "base_debt"
+    assert owed["labels"]["base_borrow_index"] == "1200000000000000"
+    assert owed["raw_amount"] != 2_200_000
+    assert not any(leg["labels"].get("role") == "base_supply" for leg in debt["legs"])
+
+    desk.backend.rpc.clear()
+    desk.backend.principal = 5
+    desk.backend.supply_index = 1_500_000_000_000_000
+    truncated = _position(_cli(capsys, desk), "compound_v3")
+    partial = _leg(truncated["legs"], "receipt", COMET_L)
+    assert partial["raw_amount"] == 7
+    assert partial["labels"]["principal"] == "5"
+    assert partial["raw_amount"] != 8
+
+    desk.backend.rpc.clear()
+    desk.backend.principal = -5
+    desk.backend.borrow_index = 1_500_000_000_000_000
+    borrow_truncated = _position(_cli(capsys, desk), "compound_v3")
+    borrow_partial = _leg(borrow_truncated["legs"], "debt", "compound-v3:base-debt")
+    assert borrow_partial["raw_amount"] == 7
+    assert borrow_partial["labels"]["principal"] == "-5"
+    assert borrow_partial["raw_amount"] != 8
