@@ -28,6 +28,7 @@ from typing import Any, Iterator
 
 from guardian.configuration import AccountsDocument, file_permission_bits, path_inside_work_tree
 from guardian.errors import ConfigError
+from guardian.resources import read_resource_json
 from guardian.jsonschema_lite import ValidationError, validate
 
 SCHEMA_VERSION = "guardian.legacy-run.v1"
@@ -765,14 +766,12 @@ def _mtime_key(path: Path) -> str:
 def _manifest_schema() -> dict[str, Any]:
     global _SCHEMA
     if _SCHEMA is None:
-        path = Path(__file__).resolve().parents[2] / "schemas" / "legacy-run.schema.json"
-        _SCHEMA = json.loads(path.read_text(encoding="utf-8"))
+        _SCHEMA = read_resource_json("schemas", "legacy-run.schema.json")
     return _SCHEMA
 
 
 def _event_schema() -> dict[str, Any]:
     global _EVENT_SCHEMA
     if _EVENT_SCHEMA is None:
-        path = Path(__file__).resolve().parents[2] / "schemas" / "legacy-event.schema.json"
-        _EVENT_SCHEMA = json.loads(path.read_text(encoding="utf-8"))
+        _EVENT_SCHEMA = read_resource_json("schemas", "legacy-event.schema.json")
     return _EVENT_SCHEMA
