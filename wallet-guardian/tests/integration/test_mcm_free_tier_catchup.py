@@ -49,11 +49,13 @@ WEI = 10**18
 LARGE = 5 * WEI
 UINT256_MAX = 2**256 - 1
 CHAIN = {
+    "arbitrum.example.invalid": "0xa4b1",
     "avalanche.example.invalid": "0xa86a",
     "base.example.invalid": "0x2105",
     "bsc.example.invalid": "0x38",
     "ethereum.example.invalid": "0x1",
     "optimism.example.invalid": "0xa",
+    "polygon.example.invalid": "0x89",
 }
 BLOCK_HASH = "0x" + ("ab" * 32)
 
@@ -106,6 +108,12 @@ class FixtureBackend:
         self._rated = False
         self.nodereal_refused = False
         self.etherscan_plan_chains: set[str] = set()
+        self.pro_featured_chains: set[str] = set()
+        self.pro_requires_key = False
+        self.cloudflare_hosts: set[str] = set()
+        self.rate_headers = {"x-credits-remaining": "80000"}
+        self.http_log: list[dict] = []
+        self.last_authorization = ""
         self.rest_rows: dict[tuple[str, str], list[dict]] = {}
         self.answers: dict[tuple, str] = {}
         self.balances: dict[tuple[str, str, str], int] = {}
@@ -116,6 +124,8 @@ class FixtureBackend:
         url = str(getattr(call, "url", ""))
         body = getattr(call, "body", b"") or b""
         host = urlsplit(url).hostname or ""
+        self.last_authorization = _authorization(call)
+        self.http_log.append({"authorization": self.last_authorization, "url": url})
         if not body:
             return self._rest(url, host)
         payload = json.loads(body.decode("utf-8"))
@@ -162,6 +172,20 @@ class FixtureBackend:
             return self._call(host, params)
         if method == "eth_getLogs":
             return self._logs(host, params)
+        if method == "getGenesisHash":
+            return "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
+        if method == "getSlot":
+            return 9
+        if method == "getBalance":
+            return {"context": {"slot": 9}, "value": 5}
+        if method == "getTokenAccountsByOwner":
+            return {"context": {"slot": 9}, "value": []}
+        if method == "getSignaturesForAddress":
+            return []
+        if method == "getAccountInfo":
+            return {"context": {"slot": 9}, "value": None}
+        if method == "getMultipleAccounts":
+            return {"context": {"slot": 9}, "value": []}
         return []
 
     def _logs(self, host: str, params: list) -> object | None:
@@ -242,15 +266,34 @@ class FixtureBackend:
         action = (query.get("action") or [""])[0]
         page = (query.get("page") or ["1"])[0]
         chain = (query.get("chainid") or [""])[0]
+        chain_id = (query.get("chain_id") or [""])[0]
         module = (query.get("module") or [""])[0]
         self.calls.append({
             "action": action,
+            "chain_id": chain_id,
             "chainid": chain,
             "host": host,
             "kind": "rest",
             "module": module,
             "page": page,
         })
+        if host in self.cloudflare_hosts:
+            page_html = (
+                "<!DOCTYPE html><html><head><title>Just a moment...</title></head>"
+                "<body>Cloudflare</body></html>"
+            )
+            return RawResponse(403, {"content-type": "text/html"}, page_html.encode())
+        if chain_id and chain_id in self.pro_featured_chains:
+            payload = {
+                "error": (
+                    f"Featured chain {chain_id} requires one of the following plans: "
+                    "Builder, Business, Pro"
+                ),
+            }
+            return RawResponse(402, {"content-type": "application/json"}, json.dumps(payload).encode())
+        if chain_id and self.pro_requires_key and not self.last_authorization:
+            payload = {"error": "Proceed with API key or make a X402 payment"}
+            return RawResponse(402, {"content-type": "application/json"}, json.dumps(payload).encode())
         if chain in self.etherscan_plan_chains:
             body = {
                 "message": "NOTOK",
@@ -266,7 +309,7 @@ class FixtureBackend:
             body = {"message": "OK", "result": chunk, "status": "1"}
         else:
             body = {"message": "No transactions found", "result": [], "status": "0"}
-        return RawResponse(200, {"x-credits-remaining": "80000"}, json.dumps(body).encode())
+        return RawResponse(200, dict(self.rate_headers), json.dumps(body).encode())
 
 
 def _topic_match(log: dict, topics: list) -> bool:
@@ -375,6 +418,14 @@ def _write_private(path: Path, text: str) -> None:
         handle.write(text)
 
 
+def _authorization(call: object) -> str:
+    for name, value in getattr(call, "credential_headers", ()) or ():
+        if str(name).lower() != "authorization":
+            continue
+        return value.reveal() if hasattr(value, "reveal") else str(value)
+    return ""
+
+
 def _desk(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -384,9 +435,10 @@ def _desk(
     mutate=None,
     secrets_extra: dict | None = None,
     omit_secrets: tuple[str, ...] = (),
+    example: Path | None = None,
 ) -> _Desk:
     tmp_path.mkdir(parents=True, exist_ok=True)
-    document = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    document = json.loads((example or EXAMPLE).read_text(encoding="utf-8"))
     document["plugins"] = [] if plugins is None else plugins
     if mutate is not None:
         mutate(document)
@@ -446,11 +498,17 @@ def _account(wallet_id: str, address: str, networks: tuple[str, ...]) -> dict:
     }
 
 
-def _cli(capsys: pytest.CaptureFixture[str], desk: _Desk, argv: list[str] | None = None) -> dict:
+def _cli(
+    capsys: pytest.CaptureFixture[str],
+    desk: _Desk,
+    argv: list[str] | None = None,
+    sender: object | None = None,
+) -> dict:
     code = main(
         argv or ["run-once", "--mcm-config", str(desk.config), "--no-send"],
         backend=desk.backend,
         clock=lambda: 1_700_000_000.0,
+        sender=sender,
     )
     payload = json.loads(capsys.readouterr().out)
     assert code == 0, payload
@@ -892,3 +950,286 @@ def test_mcm_r1_07_fees_budget_provenance(tmp_path: Path, monkeypatch: pytest.Mo
     rpc = budget["run_once"]["providers"]["rpc-bsc-mainnet"]
     assert rpc["logical_methods"] >= rpc["http_calls"]
     assert rpc["logical_methods"] > 0
+
+
+NOKEYS = ROOT / "examples" / "monitor.nokeys.json"
+GUIDE = ROOT / "docs" / "api-keys.md"
+SOL_ADDRESS = "11111111111111111111111111111111"
+SOL_WALLET = "22222222-2222-4222-8222-222222222222"
+PUBLIC_URLS = {
+    "BLOCKSCOUT_ARBITRUM_URL": "https://arb-public.example.invalid",
+    "BLOCKSCOUT_BASE_PUBLIC_URL": "https://base-public.example.invalid",
+    "BLOCKSCOUT_ETH_URL": "https://eth-public.example.invalid",
+    "BLOCKSCOUT_OPTIMISM_PUBLIC_URL": "https://op-public.example.invalid",
+    "BLOCKSCOUT_POLYGON_URL": "https://polygon-public.example.invalid",
+    "BLOCKSCOUT_PRO_API_BASE": "https://pro.example.invalid",
+}
+KEYLESS_HOSTS = {
+    "arbitrum-one": "arb-public.example.invalid",
+    "base-mainnet": "base-public.example.invalid",
+    "ethereum-mainnet": "eth-public.example.invalid",
+    "optimism-mainnet": "op-public.example.invalid",
+    "polygon-pos": "polygon-public.example.invalid",
+}
+
+
+class _Sink:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def send(self, _message: object) -> None:
+        self.calls += 1
+
+
+def _nokeys_desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, mutate=None) -> _Desk:
+    def _quiet(document: dict) -> None:
+        document["plugins"] = []
+        if mutate is not None:
+            mutate(document)
+
+    desk = _desk(
+        tmp_path,
+        monkeypatch,
+        [
+            _account(WALLET_A, ADDRESS_A, (
+                "arbitrum-one",
+                "avalanche-c",
+                "base-mainnet",
+                "bsc-mainnet",
+                "ethereum-mainnet",
+                "optimism-mainnet",
+                "polygon-pos",
+            )),
+            {
+                "address": SOL_ADDRESS,
+                "family": "solana",
+                "label": "desk",
+                "networks": ["solana-mainnet"],
+                "own_group": "desk",
+                "relationship": "owned_user_declared",
+                "wallet_id": SOL_WALLET,
+            },
+        ],
+        mutate=_quiet,
+        secrets_extra=dict(PUBLIC_URLS),
+        omit_secrets=(
+            "BLOCKSCOUT_BASE_API_KEY",
+            "BLOCKSCOUT_OPTIMISM_API_KEY",
+            "ETHERSCAN_API_KEY",
+            "NODEREAL_API_KEY",
+        ),
+        example=NOKEYS,
+    )
+    desk.backend.balance_hex = "0x1"
+    desk.backend.pro_requires_key = True
+    desk.backend.logs = [_transfer_log(_tx(40), 4, 1, ADDRESS_A)]
+    for host in KEYLESS_HOSTS.values():
+        desk.backend.rest_rows[(host, "txlist")] = [_rest_transfer(_tx(41), ADDRESS_A, OTHER, 4)]
+    return desk
+
+
+def test_mcm_r1_08_no_key_config_runs_end_to_end_with_honest_gaps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """MCM-R1-08. No keys: keyless history is visible, and every other keyed gap stays named."""
+    desk = _nokeys_desk(tmp_path, monkeypatch)
+    sink = _Sink()
+    report = _cli(capsys, desk, sender=sink)
+    assert sink.calls == 0
+    assert report["sent"] == 0
+    assert report["status"] in {"ok", "degraded"}
+    for network, host in KEYLESS_HOSTS.items():
+        rows = [row for row in _events(desk, WALLET_A, network) if row["kind"] in {"asset_in", "asset_out"}]
+        assert rows, network
+        assert any(int(row["raw_amount"]) == LARGE for row in rows)
+        assert any(item["host"] == host and item.get("action") == "txlist" for item in desk.backend.calls)
+    bsc = _coverage(report, WALLET_A, "bsc-mainnet", "history.native_external")
+    avalanche = _coverage(report, WALLET_A, "avalanche-c", "history.native_external")
+    assert "credential_missing" in bsc["reason_codes"]
+    assert "credential_missing" in avalanche["reason_codes"]
+    assert bsc["quality"] != "complete_in_declared_scope"
+    assert avalanche["quality"] != "complete_in_declared_scope"
+    token = [row for row in _events(desk, WALLET_A, "bsc-mainnet") if row["tx_id"] == _tx(40)]
+    assert token
+    risk = _coverage(report, WALLET_A, "ethereum-mainnet", "address_risk")
+    asset = _coverage(report, WALLET_A, "ethereum-mainnet", "asset_risk")
+    assert "credential_missing" in risk["reason_codes"]
+    assert "third_party_denied" in risk["reason_codes"]
+    assert "credential_missing" in asset["reason_codes"]
+    assert risk["quality"] != "complete_in_declared_scope"
+    solana = [row for row in report["native_reads"] if row["network"] == "solana-mainnet"]
+    assert solana and int(solana[0]["raw_amount"]) == 5
+    for row in report["coverage"]:
+        if row["quality"] != "complete_in_declared_scope":
+            continue
+        if row["capability"] == "history.native_external":
+            assert _events(desk, row["wallet_id"], row["network"])
+        assert "credential_missing" not in row["reason_codes"]
+        assert "plan_not_supported" not in row["reason_codes"]
+        assert "blocked" not in row["reason_codes"]
+    blob = json.dumps(report)
+    for secret in (KEY, NODEREAL_KEY, BLOCKSCOUT_KEY):
+        assert secret not in blob
+    assert not any(item.get("kind") == "nodereal" for item in desk.backend.calls)
+
+
+def test_mcm_r1_09_blockscout_pro_plan_and_keyless_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """MCM-R1-09. PRO uses a bearer header. Base 402 falls back. A challenge page is blocked."""
+    def _routes(document: dict) -> None:
+        document["plugins"] = []
+
+    desk = _desk(
+        tmp_path / "pro",
+        monkeypatch,
+        [_account(WALLET_A, ADDRESS_A, ("base-mainnet", "optimism-mainnet"))],
+        mutate=_routes,
+        secrets_extra={
+            "BLOCKSCOUT_API_KEY": BLOCKSCOUT_KEY,
+            "BLOCKSCOUT_BASE_PUBLIC_URL": "https://base-public.example.invalid",
+            "BLOCKSCOUT_OPTIMISM_PUBLIC_URL": "https://op-public.example.invalid",
+            "BLOCKSCOUT_PRO_API_BASE": "https://pro.example.invalid",
+        },
+    )
+    desk.backend.pro_featured_chains.add("8453")
+    desk.backend.rate_headers = {"x-credits-remaining": "80000", "x-ratelimit-limit": "5"}
+    desk.backend.rest_rows[("pro.example.invalid", "txlist")] = [
+        _rest_transfer(_tx(51), ADDRESS_A, OTHER, 4),
+    ]
+    desk.backend.rest_rows[("base-public.example.invalid", "txlist")] = [
+        _rest_transfer(_tx(52), ADDRESS_A, OTHER, 5),
+    ]
+    report = _cli(capsys, desk)
+    optimism = [row for row in _events(desk, WALLET_A, "optimism-mainnet") if row["tx_id"] == _tx(51)]
+    base = [row for row in _events(desk, WALLET_A, "base-mainnet") if row["tx_id"] == _tx(52)]
+    assert optimism and base
+    pro_calls = [row for row in desk.backend.http_log if "pro.example.invalid" in row["url"]]
+    assert pro_calls
+    assert any("chain_id=10" in row["url"] and row["authorization"] == f"Bearer {BLOCKSCOUT_KEY}" for row in pro_calls)
+    assert any("chain_id=8453" in row["url"] for row in pro_calls)
+    assert all(BLOCKSCOUT_KEY not in row["url"] for row in desk.backend.http_log)
+    assert all("apikey=" not in row["url"].lower() for row in desk.backend.http_log)
+    featured = _coverage(report, WALLET_A, "base-mainnet", "history.native_external")
+    assert featured["quality"] == "complete_in_declared_scope"
+    cache = json.loads((desk.state / "capability-failures.json").read_text(encoding="utf-8"))
+    assert cache["blockscout-pro|base-mainnet"] == "plan_not_supported"
+    provider = report["budget"]["providers"]["blockscout-pro"]
+    assert provider["rate_headers"]["x-credits-remaining"] == "80000"
+    assert provider["rate_headers"]["x-ratelimit-limit"] == "5"
+    assert provider["remaining_quota"] == "80000"
+    before = sum(1 for row in desk.backend.http_log if "chain_id=8453" in row["url"])
+    assert before >= 1
+    _cli(capsys, desk)
+    after = sum(1 for row in desk.backend.http_log if "chain_id=8453" in row["url"])
+    assert after == before
+
+    missing = _desk(
+        tmp_path / "nokey",
+        monkeypatch,
+        [_account(WALLET_A, ADDRESS_A, ("optimism-mainnet",))],
+        mutate=_routes,
+        secrets_extra={
+            "BLOCKSCOUT_OPTIMISM_PUBLIC_URL": "https://op-public.example.invalid",
+            "BLOCKSCOUT_PRO_API_BASE": "https://pro.example.invalid",
+        },
+        omit_secrets=("BLOCKSCOUT_API_KEY", "BLOCKSCOUT_OPTIMISM_API_KEY"),
+    )
+    missing.backend.pro_requires_key = True
+    missing.backend.rest_rows[("op-public.example.invalid", "txlist")] = [
+        _rest_transfer(_tx(53), ADDRESS_A, OTHER, 4),
+    ]
+    missing_report = _cli(capsys, missing)
+    assert any(row["tx_id"] == _tx(53) for row in _events(missing, WALLET_A, "optimism-mainnet"))
+    unpaid = [row for row in missing.backend.http_log if "pro.example.invalid" in row["url"]]
+    assert unpaid
+    assert all(row["authorization"] == "" for row in unpaid)
+    assert all(BLOCKSCOUT_KEY not in row["url"] for row in unpaid)
+    assert _coverage(missing_report, WALLET_A, "optimism-mainnet", "history.native_external")["quality"] == "complete_in_declared_scope"
+
+    challenged = _desk(
+        tmp_path / "challenge",
+        monkeypatch,
+        [_account(WALLET_A, ADDRESS_A, ("base-mainnet",))],
+        mutate=_routes,
+        secrets_extra={
+            "BLOCKSCOUT_BASE_PUBLIC_URL": "https://base-public.example.invalid",
+            "BLOCKSCOUT_PRO_API_BASE": "https://pro.example.invalid",
+        },
+        omit_secrets=("BLOCKSCOUT_API_KEY", "BLOCKSCOUT_BASE_API_KEY"),
+    )
+    challenged.backend.pro_requires_key = True
+    challenged.backend.cloudflare_hosts.add("base-public.example.invalid")
+    challenged_report = _cli(capsys, challenged)
+    row = _coverage(challenged_report, WALLET_A, "base-mainnet", "history.native_external")
+    assert "bot_challenge" in row["reason_codes"]
+    assert "blocked" in row["reason_codes"]
+    assert row["quality"] != "complete_in_declared_scope"
+    assert row["quality"] != "empty"
+    assert not _events(challenged, WALLET_A, "base-mainnet")
+
+
+def test_mcm_r1_10_credential_hints_and_key_guide(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """MCM-R1-10. Missing credentials name the env var and a real docs anchor. Values stay hidden."""
+    desk = _nokeys_desk(tmp_path / "hints", monkeypatch)
+    secret_path = Path(os.environ["MONITOR_SECRET_PROFILE"])
+    profile = json.loads(secret_path.read_text(encoding="utf-8"))
+    profile["ETHERSCAN_API_KEY"] = KEY
+    _write_private(secret_path, json.dumps(profile) + "\n")
+    validate = _cli(capsys, desk, ["config", "validate", "--mcm-config", str(desk.config)])
+    probe = _cli(capsys, desk, ["sources", "probe", "--mcm-config", str(desk.config)])
+    report = _cli(capsys, desk)
+    guide = GUIDE.read_text(encoding="utf-8")
+    for anchor in ("alchemy", "blockscout", "coingecko", "etherscan", "goplus", "helius", "nodereal", "ofac"):
+        assert f'id="{anchor}"' in guide
+    hints = []
+    for row in validate["sources"]:
+        if row.get("blocked_reason") == "credential_missing":
+            assert "credential_hint" in row
+            hints.append(row["credential_hint"])
+    helius = next(row for row in probe["sources"] if row["id"] == "helius-parser")
+    assert helius["identity"]["reason"] == "credential_missing"
+    assert "HELIUS_API_KEY" in helius["credential_hint"]
+    assert "docs/api-keys.md#helius" in helius["credential_hint"]
+    hints.append(helius["credential_hint"])
+    covered = [
+        row for row in report["coverage"]
+        if "credential_missing" in row["reason_codes"]
+    ]
+    assert covered
+    for row in covered:
+        assert "credential_hint" in row
+        assert "see docs/api-keys.md#" in row["credential_hint"]
+        hints.append(row["credential_hint"])
+    for hint in hints:
+        assert "see docs/api-keys.md#" in hint
+        anchor = hint.split("#", 1)[1]
+        assert f'id="{anchor}"' in guide
+        assert KEY not in hint
+    blob = json.dumps({"probe": probe, "report": report, "validate": validate})
+    assert KEY not in blob
+    assert BLOCKSCOUT_KEY not in blob
+    assert NODEREAL_KEY not in blob
+
+
+def test_mcm_r1_11_content_hash_normalizes_line_endings(tmp_path: Path) -> None:
+    """MCM-R1-11. CRLF and LF of the same bytes share a content hash. A real edit does not."""
+    tool = _shadow_tool()
+    root = tmp_path / "tree"
+    source = root / "src" / "guardian" / "mod.py"
+    config = root / "config" / "sample.json"
+    source.parent.mkdir(parents=True)
+    config.parent.mkdir(parents=True)
+    body = b"alpha\nbeta\n"
+    source.write_bytes(body)
+    config.write_bytes(b'{"ok": true}\n')
+    first = tool.content_hash(root)
+    source.write_bytes(body.replace(b"\n", b"\r\n"))
+    config.write_bytes(b'{"ok": true}\r\n')
+    assert tool.content_hash(root) == first
+    source.write_bytes(b"alpha\rbeta\n")
+    assert tool.content_hash(root) == first
+    source.write_bytes(b"alpha\nbeta!\n")
+    assert tool.content_hash(root) != first
