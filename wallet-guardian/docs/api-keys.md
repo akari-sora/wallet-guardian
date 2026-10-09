@@ -8,6 +8,8 @@ Limits below are the provider's published free tier at the time this note was wr
 
 `examples/monitor.json` is the keyed profile: each provider is configured, and a missing key falls through to the keyless path when one exists. `examples/monitor.nokeys.json` is the same routes with Helius enabled (so a missing key is visible) and CoinGecko on the public tier (no `credential_env`).
 
+Lido stETH, wstETH, and the withdrawal queue (`lido`, ethereum-mainnet) need no API key: public Ethereum RPC `eth_call` only, and the plugin is opt-in (`plugins`: `lido`). offline fixtures; live probe: see docs/coverage-matrix.md.
+
 <a id="etherscan"></a>
 
 ## Etherscan
@@ -65,7 +67,7 @@ Keyless instances (no key, shared rate limit about 5–10 requests/second, check
 
 - Ethereum: `BLOCKSCOUT_ETH_URL` default `https://eth.blockscout.com`
 - Base: `BLOCKSCOUT_BASE_PUBLIC_URL` default `https://base.blockscout.com`
-- Optimism: `BLOCKSCOUT_OPTIMISM_PUBLIC_URL` default `https://optimism.blockscout.com`
+- Optimism: `BLOCKSCOUT_OPTIMISM_PUBLIC_URL` default `https://explorer.optimism.io` (`https://optimism.blockscout.com` answers HTTP 301 to it since at least 2026-10-09; set the final origin, a cross-host redirect is refused as redirect_host)
 - Arbitrum: `BLOCKSCOUT_ARBITRUM_URL` default `https://arbitrum.blockscout.com`
 - Polygon: `BLOCKSCOUT_POLYGON_URL` default `https://polygon.blockscout.com`
 
@@ -168,6 +170,25 @@ Environment:
 - `OFAC_SLS_FEED` (the HTTPS URL of the list you choose to supply)
 
 If that variable is unset, sanctions coverage is `feed_not_supplied`. Setting the variable names the feed; it does not by itself mark a wallet as screened. Check the publisher's current file location and terms. An empty balance is not "not sanctioned."
+
+<a id="esplora"></a>
+
+## Esplora (Bitcoin)
+
+Esplora is a public, keyless HTTP API. There is no API key. Shared public instances have shared rate limits; check the operator's current terms before you depend on one.
+
+The monitor stores only the environment variable name. You supply the base URL yourself. A base is an origin, or an origin whose path is `/api`. These two public bases are keyless:
+
+- `https://blockstream.info/api`
+- `https://mempool.space/api`
+
+Environment:
+
+- `ESPLORA_API_URL` (the base you choose; no key and no query secret)
+
+Do not put that URL in `examples/` or in a commit. A failed read is not a zero balance. Mempool amounts are not added to the confirmed balance. One address is an address set, not a whole HD wallet.
+
+offline fixtures; live probe: see docs/coverage-matrix.md
 
 <a id="keys"></a>
 

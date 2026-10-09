@@ -76,6 +76,14 @@ UXLINK_TOKENS = (
 
 STAKE_PROGRAM = "Stake11111111111111111111111111111111111111"
 
+# Documented public Lido deployments on ethereum-mainnet.
+# symbol() was stETH, wstETH, and unstETH on 2026-10-09. This package does not re-check them at runtime.
+# https://docs.lido.fi/deployed-contracts/
+LIDO_STETH = "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84"
+LIDO_WSTETH = "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0"
+LIDO_WITHDRAWAL_QUEUE = "0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1"
+LIDO_SOURCE = "https://docs.lido.fi/deployed-contracts/"
+
 # Documented StakeStateV2 layout, not live-verified here.
 # 4-byte Borsh tag, then Meta.rent_exempt_reserve (u64), then Authorized.staker, then withdrawer.
 STAKE_STAKER_OFFSET = 12
@@ -95,6 +103,12 @@ def evm_contracts(protocol_id: str) -> frozenset[str]:
         return frozenset(address.lower() for address in AAVE_POOLS.values())
     if protocol_id == "kinza":
         return frozenset(address.lower() for address in KINZA_POOLS.values())
+    if protocol_id == "lido":
+        return frozenset({
+            LIDO_STETH.lower(),
+            LIDO_WSTETH.lower(),
+            LIDO_WITHDRAWAL_QUEUE.lower(),
+        })
     return frozenset()
 
 

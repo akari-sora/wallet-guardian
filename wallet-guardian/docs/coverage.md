@@ -41,3 +41,15 @@
 - Base 外部與代幣轉帳：有 `ALCHEMY_API_KEY` 與 `ALCHEMY_TRANSFERS_URL` 時走 Alchemy Transfers（`from` / `to` 分開、`pageKey` 跟完、固定區塊窗口）。每次呼叫的 120 CU 是估計。沒有 key 就留下說明並改走 Blockscout。
 - Base 的 Approval、ApprovalForAll、Transfer 日誌：`tenderly_base` 的 `range_limit` 是 1000。`base-1rpc`（50）預設關閉，只有啟用且剩餘預算夠追趕才用。Alchemy 免費 `eth_getLogs`（10 個區塊）不是這條路徑。
 - 轉帳資料不會把授權能力標成 complete。
+
+## 2026-10-09 Bitcoin Esplora
+
+bitcoin-mainnet 在範例監控裡加入唯讀 Esplora。鏈登記的 `enabled` 仍是 false。讀的是呼叫端給的地址集合，不是 xpub，也不是整份 HD 錢包。
+
+- `balances.native`：confirmed 是 `chain_stats` 的 `funded_txo_sum - spent_txo_sum`，整數 satoshi。`mempool_stats` 分開記，不併進 confirmed。
+- `history.native_external`：`txs/chain` 每頁 25 筆，有硬頁數上限。沒翻完是 partial，不是 complete。vin/vout 的進出用 satoshi；fee 不算這個地址的事件。
+- 6 個確認才是告警用的 confirmed。較淺與 mempool 是 pending，可能被取代，不會標成 finalized。
+- token、Ordinals、Runes、Lightning、xpub 維持 unsupported，理由碼分別是 `no_tokens`、`no_ordinals`、`no_runes`、`no_lightning`、`no_xpub`。核准類能力是 not_applicable。
+- 讀取失敗（429、5xx、缺端點）是 error / blocked，不是 0。
+
+offline fixtures; live probe: see docs/coverage-matrix.md

@@ -12,7 +12,7 @@ Blockscout PRO 的 key 由使用者自己放在私人 secret profile 的 `BLOCKS
 | BSC | NodeReal `nr_getAssetTransfers`，類別 `external` | 沒有 key 就是 `credential_missing`，沒有 keyless 的 BSC 原生歷史。token 歷史仍走公開 RPC logs。官方只列 BSC 與 Ethereum。方法被拒是 `method_not_found` 或 `unauthorized`，不能用 `eth_call` 猜 |
 | Base 轉帳 | Alchemy Transfers（有 `ALCHEMY_API_KEY` 與 `ALCHEMY_TRANSFERS_URL`），否則 Blockscout PRO 然後 keyless | 沒有 key 是 `credential_missing`，接著走 Blockscout。Base（8453）PRO 免費方案仍是 `plan_not_supported`。keyless 的 Cloudflare 403 仍是 `blocked` / `bot_challenge`。不把缺口改成非必要 |
 | Base 日誌 | `tenderly_base`（`range_limit` 1000），然後 `base-1rpc`（50） | `base-1rpc` 預設關閉。只有啟用且剩餘每日預算夠追趕才接上。Alchemy 免費 `eth_getLogs` 一次 10 個區塊，不是這條路徑 |
-| Optimism | Blockscout PRO，然後 keyless instance | PRO：`BLOCKSCOUT_PRO_API_BASE`（預設 `https://api.blockscout.com`）加 `chain_id`。Optimism（10）在免費方案。keyless 預設 `https://optimism.blockscout.com` |
+| Optimism | Blockscout PRO，然後 keyless instance | PRO：`BLOCKSCOUT_PRO_API_BASE`（預設 `https://api.blockscout.com`）加 `chain_id`。Optimism（10）在免費方案。keyless 預設 `https://explorer.optimism.io`（`optimism.blockscout.com` 已 301 轉址到它） |
 | Avalanche | 原生餘額照讀 | 深度歷史維持 `expansion_pending`。沒有重大曝險時，不用它擋住原來六條鏈 |
 
 `plan_not_supported` 記在狀態目錄旁的 `capability-failures.json`（只有來源 id、網路、原因）。下一輪改走已核准的後備，不再重送注定失敗的請求。Blockscout PRO 對 Base 的 featured-chain 402 也走這條 cache。失敗的探針不代表這條鏈沒有資產。`x-credits-remaining` 與 `x-ratelimit-limit` 有出現在回應時，記在 `budget.providers.*.rate_headers`。

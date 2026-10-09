@@ -65,22 +65,22 @@
       "support": "unsupported"
     },
     "balances.fungible": {
-      "notes": "",
+      "notes": "沒有 token。reason: no_tokens。沒有讀到不是零。",
       "probe": "untested",
       "support": "unsupported"
     },
     "balances.native": {
-      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "notes": "離線 Esplora adapter 讀 chain_stats。confirmed 是 funded_txo_sum 減 spent_txo_sum，整數 satoshi。mempool_stats 另記，不併入 confirmed。單一地址不是 HD 錢包，沒有 xpub。offline fixtures; live probe: see docs/coverage-matrix.md",
       "probe": "documented",
       "support": "partial"
     },
     "balances.nft": {
-      "notes": "",
+      "notes": "沒有 Ordinals。reason: no_ordinals。",
       "probe": "untested",
       "support": "unsupported"
     },
     "bridges": {
-      "notes": "",
+      "notes": "不讀跨鏈。reason: unsupported。",
       "probe": "untested",
       "support": "unsupported"
     },
@@ -90,22 +90,22 @@
       "support": "unsupported"
     },
     "history.fungible": {
-      "notes": "",
+      "notes": "沒有 Runes。reason: no_runes。",
       "probe": "untested",
       "support": "unsupported"
     },
     "history.native_external": {
-      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "notes": "離線 Esplora adapter 讀 txs/chain，每頁 25，頁數有硬上限；沒翻完是 partial。vin/vout 的 satoshi 進出分開記，fee 不算地址事件。6 個確認才是告警用的 confirmed，較淺與 mempool 是 pending。offline fixtures; live probe: see docs/coverage-matrix.md",
       "probe": "documented",
       "support": "partial"
     },
     "history.native_internal": {
-      "notes": "",
+      "notes": "沒有 xpub。單一地址不是整個 HD 錢包。reason: no_xpub。",
       "probe": "untested",
       "support": "unsupported"
     },
     "history.nft": {
-      "notes": "",
+      "notes": "沒有 Ordinals。reason: no_ordinals。",
       "probe": "untested",
       "support": "unsupported"
     },
@@ -190,7 +190,7 @@
       "support": "not_applicable"
     },
     "positions": {
-      "notes": "",
+      "notes": "沒有 Lightning，也沒有協議部位。reason: no_lightning。沒有讀到不是零部位。",
       "probe": "untested",
       "support": "unsupported"
     },
@@ -200,7 +200,7 @@
       "support": "unsupported"
     },
     "withdrawals": {
-      "notes": "",
+      "notes": "沒有 xpub，不能從單一地址推出 HD 提領集合。reason: no_xpub。",
       "probe": "untested",
       "support": "unsupported"
     }
@@ -221,7 +221,7 @@
   "networks": [
     "bitcoin-mainnet"
   ],
-  "notes": "已確認歷史每 25 筆一頁。金額用 satoshi。沒有配置全部 change 地址時不宣稱全錢包總值。本包不承諾公開服務的免費吞吐，也不接 xpub、Lightning、Ordinals 或 Runes。沒有 live 驗證。",
+  "notes": "已確認歷史每 25 筆一頁，頁數有硬上限，沒翻完是 partial。金額用 satoshi。mempool 不併入 confirmed。沒有配置全部 change 地址時不宣稱全錢包總值。本包不承諾公開服務的免費吞吐，也不接 xpub、Lightning、Ordinals 或 Runes。6 個確認才當作告警用的 confirmed；較淺與 mempool 保持 pending，可能被取代。沒有 live 驗證。offline fixtures; live probe: see docs/coverage-matrix.md",
   "probe": "untested",
   "protocol": "rest"
 }

@@ -7,6 +7,7 @@ grant. Remaining quota is recorded only when the provider sends it.
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from typing import Any, Mapping
 
@@ -21,6 +22,7 @@ _RATE_HEADERS = (
     "x-ratelimit-remaining-quota",
 )
 _BLOCKSCOUT_CREDITS = 20
+_PATH_ADDRESS = re.compile(r"/(address|scripthash)/[^/]+")
 
 
 class CallLedger:
@@ -116,7 +118,8 @@ def _methods(operation: Any) -> list[str]:
         query = getattr(operation, "query", None)
         if isinstance(query, Mapping) and isinstance(query.get("action"), str):
             action = query["action"]
-        return [f"{path}:{action}" if action else path]
+        public = _PATH_ADDRESS.sub(r"/\1/{address}", path)
+        return [f"{public}:{action}" if action else public]
     return ["request"]
 
 

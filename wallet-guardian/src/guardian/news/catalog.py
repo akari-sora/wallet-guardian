@@ -28,8 +28,13 @@ _MAX_FEED_BYTES = 1_048_576
 _AAVE_FEED = "https://governance.aave.com/latest.rss?order=created"
 _AAVE_MIN_BYTES = 512 * 1024
 # Public GETs on 2026-10-09. Do not add a guessed /feed or /rss URL.
+_LIDO_BLOG = "https://blog.lido.fi/rss/"
+_LIDO_RESEARCH = "https://research.lido.fi/latest.rss"
 ALLOWLISTED_FEED_URLS = frozenset({
     _AAVE_FEED,
+    _LIDO_BLOG,
+    _LIDO_RESEARCH,
+    "https://api.paragraph.com/blogs/rss/@blog.lista.org",
     "https://medium.com/feed/@kinzafinance",
     "https://status.solana.com/history.rss",
 })

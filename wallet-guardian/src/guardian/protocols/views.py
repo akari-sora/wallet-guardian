@@ -128,4 +128,8 @@ def _coerce(kind: str, value: Any) -> Any:
         if value < 0 or value > UINT256_MAX:
             raise ValueError("not_a_view_call")
         return value
+    if kind == "uint256[]":
+        if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+            raise ValueError("not_a_view_call")
+        return [_coerce("uint256", item) for item in value]
     raise ValueError("not_a_view_call")

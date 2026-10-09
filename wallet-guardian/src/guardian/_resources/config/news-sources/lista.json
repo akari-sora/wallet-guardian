@@ -12,10 +12,17 @@
       "fetch": "not_fetched_by_monitor"
     },
     {
+      "url": "https://api.paragraph.com/blogs/rss/@blog.lista.org",
+      "kind": "rss",
+      "fetch": "allowlisted_get",
+      "verified": "2026-10-09",
+      "max_bytes": 524288
+    },
+    {
       "url": "https://x.com/lista_dao",
       "kind": "x_account",
       "fetch": "manual_not_fetched_by_monitor"
     }
   ],
-  "notes": "Blog HTML only. No machine feed was verified, so nothing here is fetched. No API key. Not a live pass."
+  "notes": "The official blog redirects its /rss to this Paragraph-hosted RSS, an allowlisted public GET verified 2026-10-09 (text/xml, about 252 KiB; cap 512 KiB; the final URL after the blog redirect is the allowlisted one). The blog HTML and the X account are not fetched. No API key. Not a live pass."
 }

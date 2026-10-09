@@ -9,7 +9,8 @@
     "optimism-mainnet",
     "polygon-pos",
     "avalanche-c",
-    "solana-mainnet"
+    "solana-mainnet",
+    "bitcoin-mainnet"
   ],
   "private_inputs": {
     "accounts_file_env": "MONITOR_ACCOUNTS_FILE",
@@ -91,6 +92,12 @@
       "adapter": "solana_rpc",
       "endpoint_env": "RPC_SOLANA_MAINNET_URL",
       "budget_group": "rpc-solana-mainnet",
+      "enabled": true
+    },
+    "esplora-bitcoin": {
+      "adapter": "esplora",
+      "endpoint_env": "ESPLORA_API_URL",
+      "budget_group": "esplora-bitcoin",
       "enabled": true
     },
     "helius-parser": {
@@ -446,6 +453,20 @@
       "source_ids": [
         "rpc-solana-mainnet"
       ]
+    },
+    {
+      "network": "bitcoin-mainnet",
+      "capability": "balances.native",
+      "source_ids": [
+        "esplora-bitcoin"
+      ]
+    },
+    {
+      "network": "bitcoin-mainnet",
+      "capability": "history.native_external",
+      "source_ids": [
+        "esplora-bitcoin"
+      ]
     }
   ],
   "budgets": {
@@ -502,6 +523,12 @@
       "max_concurrency": 1,
       "max_requests_per_day": 10000,
       "retry_attempts": 3
+    },
+    "esplora-bitcoin": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 2000,
+      "retry_attempts": 2
     },
     "helius-account": {
       "max_rps": 2,

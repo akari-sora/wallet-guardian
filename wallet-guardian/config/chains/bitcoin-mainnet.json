@@ -15,7 +15,7 @@
     "expected_value": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
     "status": "documented"
   },
-  "finality_policy": "Bitcoin 的確認數是政策門檻，不是絕對 finalized。常見的觀察深度不能寫成不可逆保證，重組仍然可能。",
+  "finality_policy": "Bitcoin 告警用的門檻是 6 個確認：達到才是 confirmed，少於 6 個確認與 mempool 是 pending，可能被取代。確認數不是絕對 finalized，重組仍然可能。",
   "sources": [
     {
       "url": "https://github.com/Blockstream/esplora/blob/master/API.md",
@@ -30,5 +30,5 @@
   ],
   "enabled": false,
   "status": "planned_not_live_verified",
-  "notes": "原生單位是 satoshi，8 位小數，符號 BTC。genesis 區塊雜湊是公開主網值，本包沒有連節點。xpub、descriptors、Lightning、Ordinals、Runes 不在範圍。單一位址不能代表整個 HD 錢包。enabled 維持 false。"
+  "notes": "原生單位是 satoshi，8 位小數，符號 BTC。genesis 區塊雜湊是公開主網值，本包沒有連節點。xpub、descriptors、Lightning、Ordinals、Runes 不在範圍。單一位址不能代表整個 HD 錢包。6 個確認才當作告警用的 confirmed；較淺與 mempool 保持 pending。enabled 維持 false。offline fixtures; live probe: see docs/coverage-matrix.md"
 }
