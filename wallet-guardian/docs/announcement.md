@@ -8,7 +8,7 @@ Wallet Guardian is a preview of a read-only wallet monitor you run on a machine 
 
 The named chains are Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS, and Solana, with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path. Coverage differs by chain and source. A missing key, a refused plan, or a failed read is a gap, not an empty wallet. The coverage matrix in the repository lists each claim.
 
-The 72h shadow validation is not complete. These preview commits were checked with a local gate, not a CI pass. Nothing is on PyPI. Install the release wheel and its constraints file from the project's GitLab Releases page at the top of this file.
+The 72h shadow validation is not complete. These preview commits were checked with a local gate, not a CI pass. Notifications are off by default; the live Telegram canary has not been run. Nothing is on PyPI. Install the release wheel and its constraints file from the project's GitLab Releases page at the top of this file.
 
 ## 繁體中文
 
@@ -16,4 +16,4 @@ Wallet Guardian 是預覽版唯讀監控，跑在你控制的機器上。它不�
 
 點名的鏈是 Ethereum、BNB Chain、Arbitrum One、Base、Optimism、Polygon PoS、Solana；Avalanche C-Chain 覆蓋有限；Bitcoin 只讀地址集合。缺金鑰、方案拒絕或讀取失敗是缺口，不是空錢包。
 
-72 小時 shadow 驗證還沒有完成。這些預覽提交只做了本地閘門，不是 CI 通過。沒有上架 PyPI。請從本檔上方的 GitLab Releases 頁安裝 wheel 與 constraints。
+72 小時 shadow 驗證還沒有完成。這些預覽提交只做了本地閘門，不是 CI 通過。通知預設關閉，Telegram 實機測試尚未執行。沒有上架 PyPI。請從本檔上方的 GitLab Releases 頁安裝 wheel 與 constraints。

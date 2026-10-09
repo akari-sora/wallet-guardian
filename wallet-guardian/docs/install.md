@@ -8,15 +8,11 @@
 
 ## 從 GitLab release 安裝
 
-到這個專案的 GitLab release，下載同一個版本的：
-
-- `wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl`
-- `SHA256SUMS`
-- `constraints.txt`
+到這個專案的 GitLab release，下載 `SHA256SUMS`，以及 `SHA256SUMS` 裡列出的每一個檔案（wheel `wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl`、sdist、`constraints.txt`、`release-manifest.json`、`release-evidence.json`），全部放在同一個目錄。
 
 sdist（`.tar.gz`）是原始碼封裝，一般安裝用 wheel。
 
-在放這三個檔案的目錄核對雜湊：
+在那個目錄核對雜湊（缺檔或雜湊不符都會失敗）：
 
 ```bash
 sha256sum -c SHA256SUMS
@@ -25,8 +21,12 @@ sha256sum -c SHA256SUMS
 Windows 沒有 `sha256sum` 時，用 Python：
 
 ```bash
-python -c "import hashlib, pathlib; p=pathlib.Path('SHA256SUMS');
-[print(n, hashlib.sha256(pathlib.Path(n).read_bytes()).hexdigest()==h) for h,n in (line.split() for line in p.read_text().splitlines())]"
+python -c "import hashlib, pathlib, sys; bad=0
+for line in pathlib.Path('SHA256SUMS').read_text().splitlines():
+    h, n = line.split(None, 1); n = n.strip().lstrip('*'); f = pathlib.Path(n)
+    ok = f.is_file() and hashlib.sha256(f.read_bytes()).hexdigest() == h
+    print(n, 'OK' if ok else 'FAILED'); bad += (not ok)
+sys.exit(1 if bad else 0)"
 ```
 
 每一行都必須是 true。不要安裝雜湊對不上的檔案。
