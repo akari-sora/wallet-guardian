@@ -23,6 +23,7 @@ _RATE_HEADERS = (
 )
 _BLOCKSCOUT_CREDITS = 20
 _PATH_ADDRESS = re.compile(r"/(address|scripthash)/[^/]+")
+_TRON_ACCOUNT = re.compile(r"/v1/accounts/[^/]+")
 
 
 class CallLedger:
@@ -118,7 +119,7 @@ def _methods(operation: Any) -> list[str]:
         query = getattr(operation, "query", None)
         if isinstance(query, Mapping) and isinstance(query.get("action"), str):
             action = query["action"]
-        public = _PATH_ADDRESS.sub(r"/\1/{address}", path)
+        public = _TRON_ACCOUNT.sub("/v1/accounts/{address}", _PATH_ADDRESS.sub(r"/\1/{address}", path))
         return [f"{public}:{action}" if action else public]
     return ["request"]
 

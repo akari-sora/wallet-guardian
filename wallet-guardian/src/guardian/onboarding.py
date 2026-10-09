@@ -524,6 +524,7 @@ def _add_family_reader(
     }
     if family == "tron":
         spec["credential_env"] = "TRON_PRO_API_KEY"
+        spec["endpoint_env"] = "TRONGRID_API_URL"
     _put_source(sources, budgets, source_id, spec)
     routing.append({"capability": "balances.native", "network": network, "source_ids": [source_id]})
 
@@ -567,7 +568,15 @@ def _share_source(source_id: str, source: Mapping[str, Any]) -> dict[str, Any]:
     credential = source.get("credential_env")
     keyed = isinstance(credential, str)
     endpoint_env = str(source.get("endpoint_env"))
-    if adapter in {"evm_rpc", "solana_rpc"}:
+    if adapter == "tron_grid":
+        recipient = "TronGrid at the host named by " + endpoint_env
+        data = (
+            "Wallet address is sent on keyless and keyed reads. "
+            "The optional TRON_PRO_API_KEY is sent only as the TRON-PRO-API-KEY header. "
+            "A missing key does not skip the read and is not credential_missing."
+        )
+        sends_addresses = True
+    elif adapter in {"evm_rpc", "solana_rpc"}:
         recipient = "the RPC host named by " + endpoint_env
         data = (
             "Wallet address is sent in balance, log, and call reads to the host you set in the endpoint variable. "

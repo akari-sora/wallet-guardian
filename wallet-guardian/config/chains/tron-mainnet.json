@@ -25,5 +25,5 @@
   ],
   "enabled": false,
   "status": "planned_not_live_verified",
-  "notes": "原生符號 TRX，6 位小數。genesis 識別值本包不確定，expected_value 是 null，identity.status 是 to_verify_by_probe。不能把缺值寫成已驗證或零。非 EVM 地址要由使用者提供。enabled 維持 false。"
+  "notes": "原生符號 TRX，6 位小數。genesis 識別值本包不確定，expected_value 是 null，identity.status 是 to_verify_by_probe。不能把缺值寫成已驗證或零。非 EVM 地址要由使用者提供。enabled 維持 false。讀取只含直接 TRX、固化流動餘額、已設定的 TRC-20，以及分開標示的帳戶權限觀察。質押、資源、內部轉帳與一般授權發現不在範圍內。六次 keyless 探測不是配額，也不是 TRON fully supported。"
 }
