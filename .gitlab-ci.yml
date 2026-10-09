@@ -66,3 +66,116 @@ pages:
       - public
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
+
+# On-demand Linux host (tag wg-box-ondemand).
+# Shared-runner jobs above are unchanged.
+# These jobs run only when WG_BOX_CI=1 on a web, api, or trigger pipeline,
+# or on a protected branch with that variable. Fork merge requests never run.
+# No secrets. Isolation is ci/box-runner.config.example.toml (concurrency 1).
+
+box-python-tests:
+  stage: test
+  tags:
+    - wg-box-ondemand
+  resource_group: wg-box-ondemand
+  allow_failure: false
+  interruptible: false
+  image: python:3.12-slim
+  timeout: 10 minutes
+  variables:
+    UV_NO_PROGRESS: "1"
+    UV_PYTHON_DOWNLOADS: "never"
+  script:
+    - test -n "$CI_COMMIT_SHA"
+    - mkdir -p gate-run
+    - 'printf %s "$CI_COMMIT_SHA" > gate-run/CI_COMMIT_SHA'
+    - python -m pip install --disable-pip-version-check uv
+    - cd wallet-guardian
+    - uv sync --frozen --group dev
+    - uv run --frozen pytest -q --junitxml=test-results/python.xml
+  artifacts:
+    when: always
+    paths:
+      - gate-run/CI_COMMIT_SHA
+    reports:
+      junit: wallet-guardian/test-results/python.xml
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_MERGE_REQUEST_PROJECT_ID'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - if: '$WG_BOX_CI == "1" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$WG_BOX_CI == "1" && $CI_PIPELINE_SOURCE == "api"'
+    - if: '$WG_BOX_CI == "1" && $CI_PIPELINE_SOURCE == "trigger"'
+    - if: '$WG_BOX_CI == "1" && $CI_COMMIT_REF_PROTECTED == "true"'
+    - when: never
+
+box-client-tests:
+  stage: test
+  tags:
+    - wg-box-ondemand
+  resource_group: wg-box-ondemand
+  allow_failure: false
+  interruptible: false
+  image: node:22.16.0-bookworm-slim
+  timeout: 10 minutes
+  script:
+    - test -n "$CI_COMMIT_SHA"
+    - mkdir -p gate-run
+    - 'printf %s "$CI_COMMIT_SHA" > gate-run/CI_COMMIT_SHA'
+    - cd wallet-guardian/action-client
+    - npm ci --ignore-scripts --no-audit --no-fund
+    - npm run test:canonical
+    - npm run test:validation
+    - npm run test:gate
+    - npm run test:api
+    - npm run build
+  artifacts:
+    when: always
+    paths:
+      - gate-run/CI_COMMIT_SHA
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_MERGE_REQUEST_PROJECT_ID'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - if: '$WG_BOX_CI == "1" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$WG_BOX_CI == "1" && $CI_PIPELINE_SOURCE == "api"'
+    - if: '$WG_BOX_CI == "1" && $CI_PIPELINE_SOURCE == "trigger"'
+    - if: '$WG_BOX_CI == "1" && $CI_COMMIT_REF_PROTECTED == "true"'
+    - when: never
+
+box-build-checks:
+  stage: test
+  tags:
+    - wg-box-ondemand
+  resource_group: wg-box-ondemand
+  allow_failure: false
+  interruptible: false
+  image: python:3.12-slim
+  timeout: 10 minutes
+  variables:
+    UV_NO_PROGRESS: "1"
+    UV_PYTHON_DOWNLOADS: "never"
+  script:
+    - test -n "$CI_COMMIT_SHA"
+    - mkdir -p gate-run
+    - 'printf %s "$CI_COMMIT_SHA" > gate-run/CI_COMMIT_SHA'
+    - python -m pip install --disable-pip-version-check uv
+    - cd wallet-guardian
+    - uv sync --frozen --group dev
+    - uv build --wheel --sdist
+  artifacts:
+    when: always
+    paths:
+      - gate-run/CI_COMMIT_SHA
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_MERGE_REQUEST_PROJECT_ID'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - if: '$WG_BOX_CI == "1" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$WG_BOX_CI == "1" && $CI_PIPELINE_SOURCE == "api"'
+    - if: '$WG_BOX_CI == "1" && $CI_PIPELINE_SOURCE == "trigger"'
+    - if: '$WG_BOX_CI == "1" && $CI_COMMIT_REF_PROTECTED == "true"'
+    - when: never

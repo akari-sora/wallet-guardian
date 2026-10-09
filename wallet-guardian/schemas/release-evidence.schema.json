@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "MCM-SHARE-01 release evidence. PASS is refused when a required step is missing, skipped, failed, or allow_failure. gitlab_runner evidence also requires runner_pause_readback and runner_cleanup_readback. Semantic cross-field checks are required; this file is not an installed validator.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_hashes",
+    "commands",
+    "content_hash",
+    "environment",
+    "execution_label",
+    "external_execution",
+    "junit",
+    "public_sample_probe",
+    "required_steps",
+    "runner_cleanup_readback",
+    "runner_pause_readback",
+    "schema_version",
+    "source_sha",
+    "status",
+    "status_reasons",
+    "tool_versions"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "guardian.release-evidence.v1"
+    },
+    "status": {
+      "enum": ["PASS", "FAIL", "SKIP", "BLOCKED", "NOT_RUN"]
+    },
+    "status_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "source_sha": {
+      "type": "string",
+      "pattern": "^([0-9a-f]{40})?$"
+    },
+    "content_hash": {
+      "type": "string",
+      "pattern": "^([0-9a-f]{64})?$"
+    },
+    "environment": {
+      "type": "string"
+    },
+    "execution_label": {
+      "type": "string",
+      "pattern": "^(gitlab_runner:[A-Za-z0-9][A-Za-z0-9_-]{0,63}|local_external)?$"
+    },
+    "external_execution": {
+      "type": "boolean"
+    },
+    "tool_versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["python", "uv", "pytest", "node", "npm"],
+      "properties": {
+        "python": {"type": "string"},
+        "uv": {"type": "string"},
+        "pytest": {"type": "string"},
+        "node": {"type": "string"},
+        "npm": {"type": "string"}
+      }
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "command", "exit_code", "allow_failure", "status"],
+        "properties": {
+          "id": {"type": "string"},
+          "command": {"type": "string"},
+          "exit_code": {"type": ["integer", "null"]},
+          "allow_failure": {"type": "boolean"},
+          "status": {"enum": ["PASS", "FAIL", "SKIP", "BLOCKED", "NOT_RUN"]}
+        }
+      }
+    },
+    "junit": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step", "path", "present", "tests", "failures", "errors", "skipped"],
+        "properties": {
+          "step": {"type": "string"},
+          "path": {"type": "string"},
+          "present": {"type": "boolean"},
+          "tests": {"type": ["integer", "null"], "minimum": 0},
+          "failures": {"type": ["integer", "null"], "minimum": 0},
+          "errors": {"type": ["integer", "null"], "minimum": 0},
+          "skipped": {"type": ["integer", "null"], "minimum": 0}
+        }
+      }
+    },
+    "artifact_hashes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "public_sample_probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "provenance", "sample_id"],
+      "properties": {
+        "status": {"enum": ["PASS", "FAIL", "SKIP", "BLOCKED", "NOT_RUN"]},
+        "provenance": {"type": "string"},
+        "sample_id": {"type": "string"}
+      }
+    },
+    "runner_pause_readback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "paused_after_use", "readback", "recorded_at", "reason"],
+      "properties": {
+        "status": {"enum": ["PASS", "FAIL", "SKIP", "BLOCKED", "NOT_RUN"]},
+        "paused_after_use": {"type": ["boolean", "null"]},
+        "readback": {"type": "string"},
+        "recorded_at": {"type": "string"},
+        "reason": {"type": "string"}
+      }
+    },
+    "runner_cleanup_readback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "cleanup_confirmed", "readback", "recorded_at", "reason"],
+      "properties": {
+        "status": {"enum": ["PASS", "FAIL", "SKIP", "BLOCKED", "NOT_RUN"]},
+        "cleanup_confirmed": {"type": ["boolean", "null"]},
+        "readback": {"type": "string"},
+        "recorded_at": {"type": "string"},
+        "reason": {"type": "string"}
+      }
+    },
+    "required_steps": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}

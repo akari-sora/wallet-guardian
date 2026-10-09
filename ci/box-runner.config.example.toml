@@ -1,0 +1,31 @@
+# MCM-SHARE-01 example for the dedicated on-demand host.
+# Placeholders only. This file is not a live runner and holds no real token.
+# Rootless Podman is reached through the Docker-compatible executor API.
+# Jobs are not privileged, do not use host networking, and mount cache only.
+
+concurrent = 1
+check_interval = 0
+
+[[runners]]
+  name = "PLACEHOLDER_RUNNER_NAME"
+  url = "https://gitlab.com/"
+  token = "PLACEHOLDER_RUNNER_TOKEN"
+  executor = "docker"
+  limit = 1
+  request_concurrency = 1
+
+  [runners.docker]
+    host = "unix://PLACEHOLDER_ROOTLESS_PODMAN_API"
+    tls_verify = false
+    image = "python:3.12-slim"
+    privileged = false
+    network_mode = "bridge"
+    volumes = ["/cache"]
+    disable_cache = false
+    cpus = "2"
+    memory = "4g"
+    memory_swap = "4g"
+    shm_size = 0
+    oom_kill_disable = false
+    cap_drop = ["ALL"]
+    security_opt = ["no-new-privileges"]
