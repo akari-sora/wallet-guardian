@@ -1,5 +1,5 @@
 [project]
-name = "guardian"
+name = "wallet-guardian-monitor"
 version = "0.4.0rc1"
 description = "Read-only wallet monitor and a fixed-version wallet-browser task workbench."
 readme = "README.md"
@@ -21,6 +21,9 @@ guardian = "guardian.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv.build-backend]
+module-name = "guardian"
 
 [build-system]
 requires = ["uv_build>=0.12.23,<0.13.0"]

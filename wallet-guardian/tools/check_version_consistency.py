@@ -107,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _lock_version(text: str) -> str | None:
     for block in text.split("[[package]]"):
-        if re.search(r'(?m)^name = "guardian"$', block) is None:
+        if re.search(r'(?m)^name = "wallet-guardian-monitor"$', block) is None:
             continue
         match = re.search(r'(?m)^version = "([^"]+)"', block)
         if match is not None:
