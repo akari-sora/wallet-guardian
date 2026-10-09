@@ -1,0 +1,18 @@
+{
+  "schema_version": "guardian.release-manifest.v1",
+  "version": "0.4.0rc1",
+  "pep440": "0.4.0rc1",
+  "git_tag_name": "v0.4.0-rc.1",
+  "tag_created": false,
+  "source_sha": null,
+  "content_hash": "f5cee9df5770b8301db6ff536d1bfc06e97591f73bd1a4a9867208b942db68ec",
+  "wheel": null,
+  "sdist": null,
+  "constraints_sha256": null,
+  "license_spdx": "AGPL-3.0-only",
+  "requires_python": ">=3.12",
+  "gate_evidence": null,
+  "channel": "preview",
+  "published": false,
+  "tag": null
+}

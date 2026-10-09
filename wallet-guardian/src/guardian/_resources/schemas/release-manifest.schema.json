@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "MCM-SHARE-01 preview manifest. published is always false and tag is always null. This file is not an installed validator. The draft tool refuses network arguments and credentialed runs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "channel",
+    "constraints_sha256",
+    "content_hash",
+    "gate_evidence",
+    "git_tag_name",
+    "license_spdx",
+    "pep440",
+    "published",
+    "requires_python",
+    "schema_version",
+    "sdist",
+    "source_sha",
+    "tag",
+    "tag_created",
+    "version",
+    "wheel"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "guardian.release-manifest.v1"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pep440": {
+      "type": "string",
+      "minLength": 1
+    },
+    "git_tag_name": {
+      "type": ["string", "null"]
+    },
+    "tag_created": {
+      "const": false
+    },
+    "source_sha": {
+      "type": ["string", "null"],
+      "pattern": "^([0-9a-f]{40})?$"
+    },
+    "content_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "wheel": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["name", "sha256"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "sdist": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["name", "sha256"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "constraints_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^([0-9a-f]{64})?$"
+    },
+    "license_spdx": {
+      "const": "AGPL-3.0-only"
+    },
+    "requires_python": {
+      "type": "string",
+      "minLength": 1
+    },
+    "gate_evidence": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["name", "sha256", "status"],
+      "properties": {
+        "name": {"const": "release-evidence.json"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "status": {"type": ["string", "null"]}
+      }
+    },
+    "channel": {
+      "const": "preview"
+    },
+    "published": {
+      "const": false
+    },
+    "tag": {
+      "type": "null"
+    }
+  }
+}
