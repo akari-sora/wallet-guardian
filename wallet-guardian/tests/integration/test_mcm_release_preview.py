@@ -376,15 +376,8 @@ def test_mcm_share_s8_04_version_consistency(tmp_path: Path) -> None:
     assert any("changelog=0.4.0rc2" in item for item in errors)
     assert any("mismatch:" in item for item in errors)
 
-    listed = subprocess.run(
-        ["git", "tag", "--list", "v0.4.0-rc.1"],
-        cwd=REPO,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert listed.returncode == 0
-    assert listed.stdout.strip() == ""
+    # The release tag may exist in a checkout that fetched tags (v0.4.0-rc.1 is
+    # published). The invariant is that this tool never creates or reads one.
     source = _text(WG / "tools" / "check_version_consistency.py")
     assert "git tag" not in source
     assert "subprocess" not in source
