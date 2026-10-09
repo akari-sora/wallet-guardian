@@ -40,7 +40,9 @@
 - `guardian.storage:Database`
 - `guardian.domain:normalize_hyperliquid`
 
-`guardian.cli:build_parser` 註冊的指令：`doctor`、`run-once`、`snapshot`、`reconcile`、`claims`、`providers`、`wallets`、`approvals`、`explain`、`coverage`、`replay`、`alerts`、`self-check`、`diagnose`、`actions`、`action`、`rescue`、`operation-coverage`、`workbench`、`config`、`sources`、`export`、`compare-legacy`、`legacy-capture`、`watchdog`、`monitor`、`egress-doctor`。`legacy-capture` 只寫同機 sidecar，不開 MCM 資料庫，也不改既有指令。見 `docs/legacy-evidence.md`。
+`guardian.cli:build_parser` 註冊的指令：`doctor`、`run-once`、`snapshot`、`reconcile`、`claims`、`providers`、`wallets`、`approvals`、`explain`、`coverage`、`replay`、`alerts`、`self-check`、`diagnose`、`actions`、`action`、`rescue`、`operation-coverage`、`workbench`、`config`、`sources`、`export`、`compare-legacy`、`legacy-capture`、`watchdog`、`monitor`、`egress-doctor`、`init`、`install-service`。`legacy-capture` 只寫同機 sidecar，不開 MCM 資料庫，也不改既有指令。見 `docs/legacy-evidence.md`。
+
+`guardian init` 寫單一操作者的唯讀設定。它不掃描可推導地址、不開啟 GoPlus 或 Chainabuse 的地址查詢，也不啟動 sender。`guardian install-service` 只印出計畫中的 unit 名稱並以非 0 結束，不安裝服務。
 
 和監控直接相關的行為：
 

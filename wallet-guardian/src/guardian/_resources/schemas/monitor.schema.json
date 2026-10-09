@@ -468,6 +468,34 @@
         }
       }
     },
+    "operator_consent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "data_sharing_acknowledged": {
+          "const": true
+        },
+        "recorded_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "third_party_user_address_lookups": {
+          "const": "off"
+        },
+        "key_mode": {
+          "enum": [
+            "none",
+            "byo"
+          ]
+        }
+      },
+      "required": [
+        "data_sharing_acknowledged",
+        "recorded_at",
+        "third_party_user_address_lookups",
+        "key_mode"
+      ]
+    },
     "news": {
       "type": "object",
       "additionalProperties": false,

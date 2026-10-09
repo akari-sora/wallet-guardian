@@ -175,6 +175,15 @@ def build_parser() -> argparse.ArgumentParser:
     egress.add_argument("--egress-config", default=None)
     egress.add_argument("--qualification", choices=("formal", "preview"), default="formal")
     egress.add_argument("--mode", choices=("system", "doh"), default=None)
+    init = sub.add_parser("init", parents=[common], help="write a read-only monitor profile")
+    init.add_argument("--dir", dest="directory", default=None, help="private directory (default: XDG config dir)")
+    init.add_argument("--from", dest="answers_from", default=None, help="non-interactive answers JSON")
+    init.add_argument("--yes", action="store_true", help="record data-sharing consent and write files")
+    init.add_argument("--force", action="store_true", help="back up existing files first; does not touch the state database")
+
+    service = sub.add_parser("install-service", parents=[common], help="print planned units; does not install them")
+    service.add_argument("--dry-run", action="store_true", help="print planned units and exit")
+    service.add_argument("--mcm-config", default=None)
     return parser
 
 
@@ -270,6 +279,23 @@ def dispatch(
         return _mcm_watchdog(args, clock)
     if args.command == "monitor":
         return _mcm_plan(args)
+    if args.command == "init":
+        from guardian.onboarding import execute_init
+
+        return execute_init(
+            directory=getattr(args, "directory", None),
+            answers_path=getattr(args, "answers_from", None),
+            yes=bool(getattr(args, "yes", False)),
+            force=bool(getattr(args, "force", False)),
+            environ=os.environ,
+        )
+    if args.command == "install-service":
+        from guardian.onboarding import install_service_plan
+
+        return install_service_plan(
+            dry_run=bool(getattr(args, "dry_run", False)),
+            mcm_config=getattr(args, "mcm_config", None),
+        ), 1
     raise GuardianError("unknown command")
 
 
