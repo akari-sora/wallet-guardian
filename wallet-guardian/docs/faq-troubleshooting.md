@@ -1,6 +1,6 @@
 # FAQ and troubleshooting
 
-Package version in this tree: `0.4.0rc1`. The monitor is a read-only preview. The named chains are Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS, and Solana, with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path. The 72h shadow validation is not complete. A failed read is a gap. It is not a zero balance, not a complete history, and not an all-clear.
+Package version in this tree: `0.4.0rc2`. The monitor is a read-only preview. The named chains are Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS, and Solana, with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path. The 72h shadow validation is not complete. A failed read is a gap. It is not a zero balance, not a complete history, and not an all-clear.
 
 Commands and flags: [cli-reference.md](cli-reference.md). How to install and how to read a coverage row: [guide-cli.md](guide-cli.md).
 

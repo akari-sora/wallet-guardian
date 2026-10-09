@@ -1,6 +1,6 @@
 # Security and privacy
 
-The monitor is a read-only program for one operator on a machine they control. Package version in this tree: `0.4.0rc1`. It does not sign, build a transaction, or broadcast. It does not ask for a seed phrase, a private key, or a keystore, and it has no path that would send one to a wallet. A tenant id is a label, not a boundary between customers. This page is not an audit. The 72h shadow validation is not complete.
+The monitor is a read-only program for one operator on a machine they control. Package version in this tree: `0.4.0rc2`. It does not sign, build a transaction, or broadcast. It does not ask for a seed phrase, a private key, or a keystore, and it has no path that would send one to a wallet. A tenant id is a label, not a boundary between customers. This page is not an audit. The 72h shadow validation is not complete.
 
 The longer model is [security-model.md](security-model.md). Assets, actors, and trust boundaries are in [threat-model.md](threat-model.md). Tests that lock the read-only rules live under `tests/`, including `tests/contracts/sources/test_mcm_w2_01_no_chain_writes.py` and the offline suites named in the README. Those tests do not call the network. A green local run is not a CI pass on the preview commits.
 

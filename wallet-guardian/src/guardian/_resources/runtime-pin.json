@@ -1,5 +1,5 @@
 {
   "schema_version": "guardian.runtime-pin.v1",
   "distribution": "wallet-guardian-monitor",
-  "version": "0.4.0rc1"
+  "version": "0.4.0rc2"
 }

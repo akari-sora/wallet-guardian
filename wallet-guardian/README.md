@@ -4,12 +4,12 @@ Wallet Guardian is a read-only monitor for addresses you type, on a machine you 
 
 It does not sign, does not build transactions, and does not broadcast. See [docs/threat-model.md](docs/threat-model.md#monitor-does-not-sign). It never asks for a seed phrase or a wallet private key. API keys stay in your environment. Config files store env var names only (`endpoint_env`, `credential_env`). What leaves the machine is described before anything is written: wallet addresses go to the RPC or indexer hosts you enable; your hostname is not added to those requests; GoPlus and Chainabuse user-address lookups stay off unless you set the key and the base. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`). `--no-send` forbids sends. See [docs/security-model.md](docs/security-model.md) and [docs/threat-model.md](docs/threat-model.md).
 
-**Status (preview rc.2).** The package version in this tree is `0.4.0rc1`. Read-only. Named chains: Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS, and Solana, with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path. The 72h shadow validation is not complete. Evidence for these preview commits is a local gate, not a CI pass. There is no PyPI release. Install the wheel from the project's GitLab Releases page: `<RELEASE_URL>`.
+**Status (preview rc.2).** Wallet Guardian is a self-hosted, read-only CLI preview for explicitly listed networks: Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS and Solana (partial), with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path. Coverage varies by chain, capability and data source; the dated cell-by-cell claim is [docs/coverage-matrix.md](docs/coverage-matrix.md). It runs without API keys, with explicitly reduced coverage. A rate-limited, key-less or failed read is shown as a gap, never as "no risk". Notifications are off by default. Continuous-operation (72-hour shadow) qualification is **not complete**. Evidence for rc.2 is a full local gate at the release commit, not a GitLab CI pass. There is no PyPI release: install the wheel from the project's GitLab Releases page, `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.2`.
 
 Three commands, after you download that release's wheel, `SHA256SUMS`, and `constraints.txt` and check the hash (`docs/install.md`):
 
 ```bash
-uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc1-py3-none-any.whl
+uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl
 guardian init --from answers.json --yes
 guardian run-once --mcm-config "${XDG_CONFIG_HOME:-$HOME/.config}/guardian/monitor.json" --no-send
 guardian coverage --mcm-config "${XDG_CONFIG_HOME:-$HOME/.config}/guardian/monitor.json"
@@ -98,7 +98,7 @@ Watch-only 地址只代表「拿來觀察」，不代表這個系統可以動用
 
 ## 安裝
 
-發行 wheel 的安裝、釘選的 constraints、XDG 私人目錄、升級與降版見 [docs/install.md](docs/install.md)。發行套件名稱是 `wallet-guardian-monitor`（wheel `wallet_guardian_monitor-0.4.0rc1-py3-none-any.whl`；匯入名稱與命令仍是 `guardian`）；預覽版沒有上傳到任何套件索引，名稱也沒有被保留。標籤 `v0.4.0-rc.1` 是否已發布，see GitLab releases。
+發行 wheel 的安裝、釘選的 constraints、XDG 私人目錄、升級與降版見 [docs/install.md](docs/install.md)。發行套件名稱是 `wallet-guardian-monitor`（wheel `wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl`；匯入名稱與命令仍是 `guardian`）；預覽版沒有上傳到任何套件索引，名稱也沒有被保留。標籤 `v0.4.0-rc.2` 是否已發布，see GitLab releases。
 
 在這個 checkout 裡開發：
 
