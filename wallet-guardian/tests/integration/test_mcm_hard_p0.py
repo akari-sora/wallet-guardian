@@ -692,3 +692,28 @@ def test_mcm_hard_p0_03e_log_reads_count_toward_bootstrap_cap(
     history = _coverage(report, WALLET_A, ETH, "history.fungible")
     assert "historical_backfill_pending" in history["reason_codes"]
     assert history["quality"] != "complete_in_declared_scope"
+
+
+def test_mcm_hard_p0_02e_budget_limiter_really_waits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """P0-02e. The max_rps token bucket waits through the budget sleeper, not just records.
+
+    Before this fix the limiter was built with a no-op sleeper, so a 1 rps group was hit in a burst,
+    the provider answered 429, and an identity read became ``identity_unreadable``.
+    """
+    desk = _ethereum(tmp_path, monkeypatch, lambda document: _deadline(document, 600))
+    backend = _use(desk)
+    backend.head = 20
+    clock = {"now": 1_700_000_000.0}
+    waits: list[float] = []
+
+    def budget_sleeper(seconds: float) -> None:
+        waits.append(seconds)
+        clock["now"] += seconds
+
+    backend.budget_sleeper = budget_sleeper
+    report = _run(capsys, desk, clock=lambda: clock["now"])
+    assert waits, "a burst on a 1 rps group must wait"
+    assert all(0 < wait <= 10 for wait in waits)
+    assert _coverage(report, WALLET_A, ETH, "history.fungible")["quality"] == "complete_in_declared_scope"

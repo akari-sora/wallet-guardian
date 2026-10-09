@@ -487,11 +487,31 @@ def default_backend() -> HttpxBackend:
     return HttpxBackend()
 
 
+_BUDGET_WAIT_MAX_SECONDS = 10.0
+
+
+def _budget_sleeper(backend: Any):
+    """Really wait for the max_rps token bucket on a live backend.
+
+    A test backend may carry a ``budget_sleeper``. Any other fake backend does not wait.
+    Without this the local limiter never slowed anything down and the provider
+    answered 429, which an identity read then reported as ``identity_unreadable``.
+    """
+    sleeper = getattr(backend, "budget_sleeper", None)
+    if callable(sleeper):
+        return sleeper
+    if isinstance(backend, HttpxBackend):
+        import time
+
+        return lambda seconds: time.sleep(min(max(float(seconds), 0.0), _BUDGET_WAIT_MAX_SECONDS))
+    return lambda _seconds: None
+
+
 def _transport(public_config: PublicConfig, backend: Any, clock: Clock) -> ReadOnlyTransport:
     from guardian.sources.resolver import HostnameResolver, load_resolver_settings
 
     secrets = _secrets(public_config)
-    book = BudgetBook.from_document(public_config.document["budgets"], clock=clock, sleep=lambda _seconds: None)
+    book = BudgetBook.from_document(public_config.document["budgets"], clock=clock, sleep=_budget_sleeper(backend))
     endpoints = build_endpoint_registry(public_config.document, secrets=secrets, environ=os.environ)
     resolver = HostnameResolver(load_resolver_settings(public_config.document, os.environ))
 
