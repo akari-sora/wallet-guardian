@@ -1,14 +1,17 @@
 """T0 EVM orchestration. Parsing stays here; sockets stay in the transport.
 
-eth_chainId is checked before anything is recorded. Native history is not
-inferred from eth_getLogs. A failed read keeps the previous cursor and does
-not become a zero balance.
+eth_chainId is checked before anything is recorded. A retryable failure is
+retried inside the round deadline. A successful identity is reused for the
+rest of that transport's process. A failed read is not cached and is not a
+zero balance. Native history is not inferred from eth_getLogs.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Mapping
+from weakref import WeakKeyDictionary
 
 from guardian.chains.evm.accounting import TRANSFER_TOPIC, TokenLedger, account_logs, pad_address
 from guardian.chains.evm.receipts import events_from_receipt
@@ -16,7 +19,9 @@ from guardian.coverage import CoverageObservation, build_coverage, portfolio_sum
 from guardian.errors import SecurityError
 from guardian.identities import IdentityError, parse_address
 from guardian.security.transport_policy import Operation
+from guardian.sources.budget import BootstrapStop
 from guardian.sources.etherscan import HistoryRead
+from guardian.sources.retry import read_with_retry
 from guardian.sources.router import SourceRouter
 
 LOG_RANGE_MAX = 2_000
@@ -99,6 +104,12 @@ class IdentityCheck:
     reason: str
     chain_id: int | None
     probe: str = _PROBE
+    causes: tuple[str, ...] = ()
+
+
+# One successful identity per live transport, source, and network.
+# Failures stay out so a later read can still succeed.
+_OK_IDENTITY: WeakKeyDictionary[Any, dict[tuple[str, str], IdentityCheck]] = WeakKeyDictionary()
 
 
 @dataclass(frozen=True)
@@ -174,16 +185,60 @@ class EvmAdapter:
         self.blockscout = blockscout
         self.nodereal = nodereal
 
-    def open(self) -> EvmSession:
+    def open(
+        self,
+        *,
+        clock: Callable[[], float] | None = None,
+        started_at: float | None = None,
+        deadline: int | None = None,
+    ) -> EvmSession:
+        """Read eth_chainId through the source retry budget and the scan waiter.
+
+        ``clock``, ``started_at``, and ``deadline`` are the same round clock the
+        scan uses. Tests inject the clock on the CLI and the waiter on
+        ``backend.sleeper``. A wrong or malformed chain id is not retried.
+        """
+        cached = _cached_identity(self.transport, self.rpc_source_id, self.network)
+        if cached is not None:
+            return EvmSession(self, cached)
+        import time
+
+        clock_fn = time.time if clock is None else clock
+        started = float(clock_fn() if started_at is None else started_at)
+        pause = _deadline_pause(self.transport, self.rpc_source_id, clock_fn, started, deadline)
+        last: dict[str, Any] = {}
+
+        def attempt() -> Any:
+            try:
+                result = self.transport.request(self.rpc_source_id, chain_id_operation())
+            except Exception as exc:
+                last["result"] = None
+                last["exc"] = exc
+                raise
+            last["result"] = result
+            last["exc"] = None
+            return result
+
         try:
-            result = self.transport.request(self.rpc_source_id, chain_id_operation())
+            result = read_with_retry(
+                attempt,
+                retry_attempts=_retry_attempts(self.transport, self.rpc_source_id),
+                sleep=pause,
+                random=lambda: 0.0,
+                clock=clock_fn,
+            )
         except SecurityError:
             raise
-        except Exception:
-            return EvmSession(self, IdentityCheck(False, "identity_unreadable", None))
-        if not getattr(result, "ok", False) or not isinstance(result.body, dict):
-            return EvmSession(self, IdentityCheck(False, "identity_unreadable", None))
-        return EvmSession(self, interpret_chain_id(result.body.get("result"), self.chain_id))
+        except BootstrapStop:
+            return EvmSession(self, _unreadable(*_stop_causes(last)))
+        except Exception as exc:
+            return EvmSession(self, _unreadable(_cause(exc)))
+        if not getattr(result, "ok", False) or not isinstance(getattr(result, "body", None), dict):
+            return EvmSession(self, _unreadable(_cause(result)))
+        check = interpret_chain_id(result.body.get("result"), self.chain_id)
+        if check.ok:
+            _store_identity(self.transport, self.rpc_source_id, self.network, check)
+        return EvmSession(self, check)
 
     def portfolio(
         self,
@@ -491,6 +546,91 @@ class EvmSession:
             return _pack(fetched.body, source, start_block, end_block)
         reason = fetched.reason_codes[0] if fetched.reason_codes else "error"
         return _pack(_error_read(capability, previous_cursor, reason, fetched.reason_codes), source, start_block, end_block)
+
+
+def _cached_identity(transport: Any, source_id: str, network: str) -> IdentityCheck | None:
+    try:
+        found = _OK_IDENTITY.get(transport)
+    except TypeError:
+        return None
+    if not found:
+        return None
+    item = found.get((source_id, network))
+    if item is not None and item.ok:
+        return item
+    return None
+
+
+def _store_identity(transport: Any, source_id: str, network: str, check: IdentityCheck) -> None:
+    if not check.ok:
+        return
+    try:
+        bucket = _OK_IDENTITY[transport]
+    except TypeError:
+        return
+    except KeyError:
+        bucket = {}
+        try:
+            _OK_IDENTITY[transport] = bucket
+        except TypeError:
+            return
+    bucket[(source_id, network)] = check
+
+
+def _retry_attempts(transport: Any, source_id: str) -> int:
+    try:
+        value = transport.retry_attempts(source_id)
+    except SecurityError:
+        raise
+    except Exception:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
+def _deadline_pause(transport: Any, source_id: str, clock: Callable[[], float], started: float, deadline: int | None):
+    """The scan's deadline sleeper. A wait past the round deadline is refused."""
+    from types import SimpleNamespace
+
+    from guardian.scan.drive import _sleep
+
+    box = SimpleNamespace(
+        deadline=deadline,
+        clock=clock,
+        started_at=started,
+        transport=transport,
+        deadline_hit=False,
+        source_id=source_id,
+    )
+    return _sleep(box)
+
+
+def _cause(value: Any) -> str:
+    reason = getattr(value, "reason", None)
+    if isinstance(reason, str) and reason.strip():
+        return reason.strip()
+    category = getattr(value, "category", None)
+    if isinstance(category, str) and category.strip() and category not in {"ok", "empty", "partial"}:
+        return category.strip()
+    return "read_error"
+
+
+def _stop_causes(last: Mapping[str, Any]) -> tuple[str, ...]:
+    found: list[str] = []
+    result = last.get("result")
+    if result is not None:
+        found.append(_cause(result))
+    exc = last.get("exc")
+    if exc is not None:
+        found.append(_cause(exc))
+    found.append("deadline")
+    return tuple(found)
+
+
+def _unreadable(*codes: str) -> IdentityCheck:
+    causes = tuple(dict.fromkeys(code for code in codes if code and code != "identity_unreadable"))
+    return IdentityCheck(False, "identity_unreadable", None, causes=causes)
 
 
 def interpret_chain_id(result: Any, expected: int) -> IdentityCheck:
