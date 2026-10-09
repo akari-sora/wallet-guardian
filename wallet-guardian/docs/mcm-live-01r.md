@@ -27,7 +27,7 @@ Blockscout Free 是每天 100K credits、5 RPS、不需信用卡。多數基本�
 
 ## 日誌區間
 
-每個 RPC 來源可以用 `log_range_max`（1 到 2000，省略時 2000）。`range_limit` 有設時，日誌寬度用它。Base 的 `tenderly_base` 是 1000，`base-1rpc` 是 50。區間被拒才二分。429 依 `Retry-After` 退避，秒數記在 `budget.backoff`。單一區塊仍然失敗就記 `single_block_unreadable:<block>`，游標不跨過它，也不改走下一個來源。來源整段失敗時，下一個來源只有在剩餘每日請求數夠追完剩下的區間才接上。
+每個 RPC 來源可以用 `log_range_max`（1 到 2000，省略時 2000）。`range_limit` 有設時，日誌寬度用它。Base 的 `tenderly_base` 是 1000，`base-1rpc` 是 50。區間被拒才二分。轉入（topic 2）與轉出（topic 1）用同一組切點：只有兩邊都讀完的那個葉子才提交。一邊拒絕寬區間時，兩邊一起對半切，不會因為切點不同而留下永遠對不上的 `unread_gap`。429 依 `Retry-After` 真的等待，等待時間不超過這一輪剩下的期限；會超過期限的等待不睡，該能力以 `deadline` 結束。`budget.backoff` 分開記 `planned_wait_seconds` 與 `actual_wait_seconds`（`seconds` 是實際等待）。單一區塊仍然失敗就記 `single_block_unreadable:<block>`，游標不跨過它，也不改走下一個來源。來源整段失敗時，下一個來源只有在剩餘每日請求數夠追完剩下的區間才接上。
 
 `eth_getLogs.address` 是發出事件的合約。監控中的錢包不能放進去。兩個錢包只在正確的 topic 位置做 OR，再在本地拆開。轉入看 topic 2，轉出看 topic 1，不把兩個位置 OR 在一起。`log_contract` 只有在它不是錢包時才當成合約篩選。
 
@@ -39,7 +39,9 @@ Blockscout Free 是每天 100K credits、5 RPS、不需信用卡。多數基本�
 
 日誌仍依 `log_range_max`（預設 2000）切片。`etherscan_v2`、`blockscout`、`nodereal_transfers`、`alchemy_transfers` 在來源沒有自訂 `range_limit` 或 `log_range_max` 時，用一個 `[origin, head]` 區間。客戶端仍會在結果窗滿的時候二分。授權掃描用同一個 origin。
 
-`polling.bootstrap_request_cap`（範例預設 2000）是每個來源、每一輪的 bootstrap 請求預算。分頁與二分的每一次傳輸都算。數字在報告的 `budget.bootstrap_request_cap` 與 `budget.bootstrap_requests`。碰到上限或 `round_deadline_seconds` 就停，提交最後一個完整讀完的區塊前綴，該能力是 partial，原因是 `bootstrap_request_cap` 或 `deadline`。下一輪從那個游標加一、再減掉重疊 2 繼續。同一輪不會空轉。
+`polling.bootstrap_request_cap`（範例預設 2000）是每個來源、每一輪的 bootstrap 請求預算。Indexer 的分頁與二分要算，`eth_getLogs` 的每一段也要算；JSON-RPC batch 按裡面的 log 方法數計入同一個上限。數字在報告的 `budget.bootstrap_request_cap` 與 `budget.bootstrap_requests`。沒有寫 `polling.round_deadline_seconds` 時，這一輪的期限是 180 秒。有寫就用那個整數。碰到上限或期限就停，提交最後一個完整讀完的區塊前綴，該能力是 partial，原因是 `bootstrap_request_cap` 或 `deadline`，並帶 `historical_backfill_pending`。沒讀完的歷史不會報 complete。下一輪從那個游標加一、再減掉重疊 2 繼續。同一輪不會空轉。
+
+每一輪先做有界的現況：餘額、最近一個 log 片段裡的授權（含目前 allowance），然後才做歷史回補。回補按能力各自留游標。Arbitrum 預設 30 天、0.25 秒一塊是 10,368,000 個區塊；2000 寬的切片約 5,182 段。Token 轉入加轉出是每段 2 次，授權日誌加 permit 探測是每段 2 次，一共約 20,728 次 log 讀取。只看預設上限 2000、期限沒有先把輪次截斷時，這段回補是 12 輪（12×2000 蓋過 20,728，並留每輪開頭的現況讀取）。若公開 RPC 慢到每秒 1 次、180 秒先把每一輪截斷，同一段約 116 輪（20,728 / 180）。沒有 key 的新資料庫每一輪仍會在上限與期限內返回。
 
 每個完整成功的 chunk 在同一個資料庫交易裡寫入事件和連續前綴游標。後面的 chunk 失敗就留下前綴，報告是 partial，下一輪從那個前綴減掉重疊再繼續。不跳過缺口，也不把最後一頁的旗標當成整輪。
 

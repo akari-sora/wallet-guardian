@@ -11,6 +11,7 @@ This preview does not create that tag and does not publish.
 ## [Unreleased]
 
 - Indexer catch-up starts at the lookback origin, uses one span per explorer, and stops at `bootstrap_request_cap` so a later round can resume. Plan refusals and successful DNS answers are cached.
+- Transfer-log directions split on the same ranges, 429 waits honor Retry-After inside the round deadline, and eth_getLogs counts toward `bootstrap_request_cap` so a no-key bootstrap stays bounded.
 
 ## [0.4.0rc1] - 2026-10-09
 
