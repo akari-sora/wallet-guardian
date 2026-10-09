@@ -3,12 +3,15 @@
 History forces only_confirmed=true and a frozen min/max timestamp. TronGrid
 treats a missing max_timestamp as "now", so every page of one walk sends the
 same pair. Pages stop at the documented 200-row maximum and at a local page
-cap. A page that is not fully verified keeps the fingerprint that fetched it;
-the following fingerprint is not a resume point. A repeated fingerprint or a
-capped window is not complete. links.next URLs are ignored. The optional key
-is sent only as TRON-PRO-API-KEY. Retries sleep for Retry-After inside the
-round deadline. The shared request-rate budget is not that wait. One call is
-in flight. Six HTTP 200s are not a quota. Nothing here signs, builds, or
+cap. A page that is not fully verified keeps the fingerprint that fetched it
+and the count of rows already classified on it; the following fingerprint is
+not a resume point. A repeated fingerprint or a capped window is not complete.
+links.next URLs are ignored. The optional key is sent only as
+TRON-PRO-API-KEY. Retries sleep for the full Retry-After, or defer when that
+wait would pass the round deadline. The deadline is checked before every
+attempt, including after that sleep. The shared request-rate budget is not
+that wait, and the shared helper's short cap is not applied to it. One call
+is in flight. Six HTTP 200s are not a quota. Nothing here signs, builds, or
 broadcasts.
 """
 
@@ -35,6 +38,8 @@ LOCAL_MAX_CONCURRENCY = 1
 HEADER_NAME = "TRON-PRO-API-KEY"
 # Used when polling.round_deadline_seconds is omitted. Same bound as the EVM scan.
 _DEFAULT_DEADLINE_SECONDS = 180
+# read_with_retry clips Retry-After to 30s. The round deadline is this client's cap.
+_RETRY_AFTER_UNCLIPPED = float(2**31)
 _FINGERPRINT = re.compile(r"^[A-Za-z0-9+/=_-]{1,256}$")
 _BASE58 = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
 _REJECTED_BODY = frozenset({"call_value", "raw_data_hex", "signature"})
@@ -67,16 +72,20 @@ class HistoryWalk:
 
 @dataclass(frozen=True)
 class Resume:
-    """A stored cursor. ``page`` repeats one fingerprint and its window."""
+    """A stored cursor. ``page`` repeats one fingerprint and its window.
+
+    ``row_at`` is how many leading rows of that page were already classified.
+    """
 
     fingerprint: str | None
     min_timestamp: int | None
     max_timestamp: int | None
     kind: str
+    row_at: int = 0
 
 
 class TronGridClient:
-    """Sequential reader. Retry-After is slept on the round clock, inside the deadline."""
+    """Sequential reader. The full Retry-After is slept on the round clock, or deferred."""
 
     def __init__(
         self,
@@ -211,6 +220,8 @@ class TronGridClient:
 
     def _send(self, operation: Operation) -> Got:
         def attempt() -> Any:
+            if self._remaining() <= 0:
+                raise BootstrapStop("deadline")
             if self.requests >= MAX_REQUESTS:
                 return _Stopped()
             self.requests += 1
@@ -227,6 +238,7 @@ class TronGridClient:
                 sleep=self._pause,
                 random=lambda: 0.0,
                 clock=self.clock,
+                max_wait=_RETRY_AFTER_UNCLIPPED,
             )
         except BootstrapStop:
             return Got(False, None, "deadline", True)
@@ -310,35 +322,41 @@ def frozen_filters(min_timestamp: int, max_timestamp: int) -> dict[str, str]:
 
 
 def parse_resume(cursor: str | None) -> Resume:
-    """Split a stored cursor into a fingerprint and the window that produced it."""
+    """Split a stored cursor into a fingerprint, window, and verified-row prefix."""
     if cursor is None or cursor == "":
         return Resume(None, None, None, "fresh")
     if not isinstance(cursor, str):
         raise ValueError("bad_cursor")
     minimum: int | None = None
     maximum: int | None = None
+    row_at: int | None = None
     base = cursor
-    if "|min:" in cursor or "|max:" in cursor:
+    if "|min:" in cursor or "|max:" in cursor or "|row:" in cursor:
         base, _, tail = cursor.partition("|")
         for part in tail.split("|"):
             if part.startswith("min:"):
                 minimum = _cursor_int(part[4:])
             elif part.startswith("max:"):
                 maximum = _cursor_int(part[4:])
+            elif part.startswith("row:"):
+                if row_at is not None:
+                    raise ValueError("bad_cursor")
+                row_at = _cursor_int(part[4:])
             else:
                 raise ValueError("bad_cursor")
+    kept = 0 if row_at is None else row_at
     if base.startswith("fp:"):
         token = base[3:]
         if _FINGERPRINT.fullmatch(token) is None:
             raise ValueError("bad_cursor")
-        return Resume(token, minimum, maximum, "page")
+        return Resume(token, minimum, maximum, "page", kept)
     if base.startswith("solidified:"):
         height = base[len("solidified:"):]
         if not height.isdigit():
             raise ValueError("bad_cursor")
-        return Resume(None, minimum, maximum, "solidified")
+        return Resume(None, minimum, maximum, "solidified", kept)
     if base == "window":
-        return Resume(None, minimum, maximum, "window")
+        return Resume(None, minimum, maximum, "window", kept)
     raise ValueError("bad_cursor")
 
 

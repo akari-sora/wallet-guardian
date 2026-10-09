@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from guardian.chains.tron.abi import abi_address_word, assert_read_selector
@@ -110,6 +110,7 @@ class _Verify:
     lag: bool
     fees: set[str]
     failures: set[str]
+    logs: dict[str, set[int]] = field(default_factory=dict)
 
 
 def read_tron_account(
@@ -600,8 +601,12 @@ def _trc20_row(
     movement = "approval" if kind == "approval" else "transfer"
     log_index = None
     if verdict.kind == "success":
-        log_index = _matching_log(verdict.info, kind, token_id, sender, target, amount)
+        used = verify.logs.setdefault(txid.lower(), set())
+        log_index = _matching_log(verdict.info, kind, token_id, sender, target, amount, used)
         if log_index is None:
+            # A later indexer copy of a log already taken is the same identity.
+            if _matching_log(verdict.info, kind, token_id, sender, target, amount) is not None:
+                return "done"
             reasons.append("trc20_event_unmatched")
             _emit_fee(txid, verdict, asset, chain_uid, tenant_id, wallet_id, network, observed_at, source_id, events, verify.fees, watch)
             return "done"
@@ -627,13 +632,26 @@ def _history_walk(
     window = _window_for(resume, solidity_head, clock)
     pending = False
     allow = True
+    skip = resume.row_at if resume.kind in {"page", "window"} else 0
+    page_done = 0
 
     def accept(rows) -> bool:
-        nonlocal pending, allow
+        nonlocal pending, allow, skip, page_done
+        done = 0
+        skipped = 0
         for row in rows:
+            if skip > 0:
+                skip -= 1
+                skipped += 1
+                continue
             if accept_row(row, allow) == "pending":
                 pending = True
                 allow = False
+            elif not pending:
+                done += 1
+        page_done = skipped + done
+        if skip > 0:
+            return False
         return not pending
 
     walk = client.history(path, frozen_filters(*window), resume.fingerprint, accept_page=accept)
@@ -644,7 +662,8 @@ def _history_walk(
     if pending and "verification_pending" not in reasons:
         reasons.append("verification_pending")
     fully = walk.complete and not walk.error and not pending
-    logical, persisted = _history_cursors(walk, fully, solidity_head, window)
+    row_at = page_done if walk.reason == "verification_pending" and page_done > 0 else 0
+    logical, persisted = _history_cursors(walk, fully, solidity_head, window, row_at)
     hard = bool(walk.error and not walk.rows)
     observation = _history_observation(
         source_id, fully, "", gaps, reasons, logical, solidity_head, declared, hard=hard,
@@ -669,19 +688,22 @@ def _window_for(resume: Resume, head: _Head | None, clock) -> tuple[int, int]:
     return 0, head_ts
 
 
-def _history_cursors(walk: HistoryWalk, fully: bool, head: _Head | None, window: tuple[int, int]) -> tuple[str | None, str | None]:
+def _history_cursors(
+    walk: HistoryWalk, fully: bool, head: _Head | None, window: tuple[int, int], row_at: int = 0,
+) -> tuple[str | None, str | None]:
     minimum, maximum = window
+    suffix = f"|row:{row_at}" if row_at > 0 else ""
     if walk.error and not walk.rows:
         return None, None
     if fully and head is not None:
         stored = f"solidified:{head.number}|min:{minimum}|max:{maximum}"
         return f"solidified:{head.number}", stored
     if walk.cursor:
-        stored = f"fp:{walk.cursor}|min:{minimum}|max:{maximum}"
+        stored = f"fp:{walk.cursor}|min:{minimum}|max:{maximum}{suffix}"
         return f"fp:{walk.cursor}", stored
     if fully:
         return None, None
-    stored = f"window|min:{minimum}|max:{maximum}"
+    stored = f"window|min:{minimum}|max:{maximum}{suffix}"
     return "window", stored
 
 
@@ -985,15 +1007,30 @@ def _payer(tx: Mapping[str, Any] | None) -> str | None:
     return _party(_param(tx).get("owner_address"))
 
 
-def _matching_log(info: Mapping[str, Any] | None, kind: str, token_id: str, sender: str | None, target: str | None, amount: int) -> int | None:
-    """Receipt log index whose contract, parties, and amount match the indexer row."""
+def _matching_log(
+    info: Mapping[str, Any] | None,
+    kind: str,
+    token_id: str,
+    sender: str | None,
+    target: str | None,
+    amount: int,
+    used: set[int] | None = None,
+) -> int | None:
+    """Next unused receipt log whose contract, parties, and amount match the row.
+
+    Indexes are positions in the receipt. ``used`` keeps earlier rows of this
+    transaction from taking the same log again.
+    """
     if not isinstance(info, Mapping) or sender is None or target is None:
         return None
     logs = info.get("log")
     if not isinstance(logs, list):
         return None
+    taken = set() if used is None else used
     topic = _TRANSFER_TOPIC if kind == "transfer" else _APPROVAL_TOPIC
     for index, item in enumerate(logs):
+        if index in taken:
+            continue
         if not isinstance(item, dict):
             continue
         if _log_identity(item.get("address")) != token_id:
@@ -1007,6 +1044,7 @@ def _matching_log(info: Mapping[str, Any] | None, kind: str, token_id: str, send
             continue
         if _data_uint(item.get("data")) != amount:
             continue
+        taken.add(index)
         return index
     return None
 
