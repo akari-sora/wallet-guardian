@@ -1,0 +1,26 @@
+{
+  "id": "uxlink",
+  "official": true,
+  "retrieved": "2026-10-09",
+  "protocols": [
+    "uxlink"
+  ],
+  "feeds": [
+    {
+      "url": "https://blog.uxlink.io/",
+      "kind": "blog",
+      "fetch": "not_fetched_by_monitor"
+    },
+    {
+      "url": "https://docs.uxlink.io/layer/announcement/notice",
+      "kind": "announcements",
+      "fetch": "not_fetched_by_monitor"
+    },
+    {
+      "url": "https://x.com/UXLINKofficial",
+      "kind": "x_account",
+      "fetch": "manual_not_fetched_by_monitor"
+    }
+  ],
+  "notes": "Notice and blog are HTML. No machine feed was verified, so nothing here is fetched. The X account is manual. No API key. Not a live pass."
+}

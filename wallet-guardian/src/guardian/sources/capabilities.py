@@ -16,9 +16,8 @@ from urllib.parse import urlsplit
 
 from guardian.errors import ConfigError
 from guardian.network_registry import load_registry
+from guardian.resources import resource_path
 from guardian.security.transport_policy import ADAPTER_PROTOCOL, operation_records
-
-ROOT = Path(__file__).resolve().parents[3]
 CAPABILITIES = (
     "address_risk",
     "asset_risk",
@@ -107,10 +106,10 @@ class CapabilityCatalog:
 
 
 def load_source_capabilities(directory: str | Path | None = None) -> CapabilityCatalog:
-    directory = Path(directory) if directory is not None else ROOT / "config" / "source-capabilities"
+    directory = Path(directory) if directory is not None else resource_path("config", "source-capabilities")
     if not directory.is_dir():
         raise ConfigError("source capabilities directory is missing")
-    networks = set(load_registry(ROOT / "config" / "chains"))
+    networks = set(load_registry(resource_path("config", "chains")))
     found: dict[str, AdapterCapabilities] = {}
     for path in sorted(directory.glob("*.json")):
         entry = _load_one(path, networks)

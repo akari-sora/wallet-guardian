@@ -161,7 +161,10 @@ class Database:
 
     def __init__(self, path: Path) -> None:
         path = Path(path)
+        parent_existed = path.parent.exists()
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if os.name == "posix" and not parent_existed:
+            os.chmod(path.parent, 0o700)
         try:
             descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
@@ -174,6 +177,7 @@ class Database:
             version = self.conn.execute("PRAGMA user_version").fetchone()[0]
             if version > 1:
                 raise ConfigError("database schema is newer than this build")
+            self._refuse_newer_mcm_schema()
             self.conn.executescript(SCHEMA)
             self._migrate(version)
             # MCM tables are additive. user_version stays 1 so older builds can open the file.
@@ -390,6 +394,23 @@ class Database:
     def table_names(self) -> list[str]:
         rows = self.conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
         return [row["name"] for row in rows]
+
+    def _refuse_newer_mcm_schema(self) -> None:
+        """A migration this build does not ship is a newer schema. Do not rewrite it."""
+        known = {path.stem for path in mcm_migration_directory().glob("*.sql") if path.is_file()}
+        present = {
+            row["name"]
+            for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if "mcm_schema_migrations" not in present:
+            return
+        extra = [
+            row["migration_id"]
+            for row in self.conn.execute("SELECT migration_id FROM mcm_schema_migrations")
+            if row["migration_id"] not in known
+        ]
+        if extra:
+            raise ConfigError("database schema is newer than this build: " + ", ".join(sorted(extra)))
 
     def _apply_mcm_migrations(self) -> None:
         files = sorted(path for path in mcm_migration_directory().glob("*.sql") if path.is_file())
@@ -825,8 +846,10 @@ def _normalized_sql(path: Path) -> str:
 
 
 def mcm_migration_directory() -> Path:
-    """SQL files shipped beside the repo, found the same way service.ROOT is."""
-    candidate = Path(__file__).resolve().parents[2] / "migrations" / "monitor"
+    """SQL files shipped inside the package."""
+    from guardian.resources import resource_path
+
+    candidate = resource_path("migrations", "monitor")
     if candidate.is_dir() and any(candidate.glob("*.sql")):
         return candidate
     raise ConfigError("mcm migration directory is missing")

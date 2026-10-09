@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from guardian.news.feeds import _PROTOCOL_ALIASES
+from guardian.resources import resource_path
 
-_ROOT = Path(__file__).resolve().parents[3]
-NEWS_DIR = _ROOT / "config" / "news-sources"
+NEWS_DIR = resource_path("config", "news-sources")
 _DATE = re.compile(r"^20[0-9]{2}-[01][0-9]-[0-3][0-9]$")
 _KINDS = frozenset({"announcements", "blog", "rss", "status", "x_account"})
 _FETCH_MANUAL = "manual_not_fetched_by_monitor"

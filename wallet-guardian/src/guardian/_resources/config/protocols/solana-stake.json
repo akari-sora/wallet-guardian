@@ -1,0 +1,26 @@
+{
+  "id": "solana_stake",
+  "version": "1",
+  "networks": [
+    "solana-mainnet"
+  ],
+  "contracts": {
+    "solana-mainnet": {
+      "stake_program": {
+        "address": "Stake11111111111111111111111111111111111111",
+        "source_url": "https://docs.solana.com/developing/runtime-facilities/programs",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "not verified on-chain by this package"
+      }
+    }
+  },
+  "required_sources": [
+    "solana_rpc"
+  ],
+  "view_methods": [],
+  "capabilities": [
+    "positions"
+  ],
+  "notes": "Public Stake program. Stake accounts come from the caller or from getProgramAccounts. This file has no user accounts. Memcmp offsets 12 and 44 are the documented StakeState meta layout, not live-verified here."
+}

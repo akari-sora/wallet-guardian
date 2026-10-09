@@ -1,0 +1,34 @@
+{
+  "network": "unichain-mainnet",
+  "display_name": "Unichain",
+  "family": "evm",
+  "tier": 1,
+  "evm_chain_id": 130,
+  "native_asset": {
+    "symbol": "ETH",
+    "decimals": 18,
+    "identity": "evm-native:130"
+  },
+  "identity": {
+    "method": "eth_chainId",
+    "evm_chain_id": 130,
+    "expected_value": "0x82",
+    "status": "documented"
+  },
+  "finality_policy": "Unichain 屬於 OP Stack。sequencer 確認不是 L1 finalized，也不套用固定 12 個執行層確認。",
+  "sources": [
+    {
+      "url": "https://github.com/ethereum-lists/chains/blob/master/_data/chains/eip155-130.json",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://github.com/ethereum-lists/chains",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "T1。鏈 ID 130 為 documented，不是 live 驗證。enabled 維持 false。"
+}

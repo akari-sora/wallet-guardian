@@ -1,0 +1,23 @@
+{
+  "id": "aave",
+  "official": true,
+  "retrieved": "2026-10-09",
+  "protocols": [
+    "aave"
+  ],
+  "feeds": [
+    {
+      "url": "https://governance.aave.com/latest.rss?order=created",
+      "kind": "rss",
+      "fetch": "allowlisted_get",
+      "verified": "2026-10-09",
+      "max_bytes": 524288
+    },
+    {
+      "url": "https://x.com/aave",
+      "kind": "x_account",
+      "fetch": "manual_not_fetched_by_monitor"
+    }
+  ],
+  "notes": "The governance RSS is an allowlisted public GET verified 2026-10-09 (application/rss+xml, no ETag, about 296 KiB; cap 512 KiB). The X account is not fetched. No API key. Not a live pass."
+}

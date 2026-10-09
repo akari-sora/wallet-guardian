@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from guardian.errors import ConfigError
+from guardian.resources import resource_path
 
 _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,95}$")
 _CHAIN_ID = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
@@ -27,7 +28,15 @@ T0_NETWORKS = (
 
 
 def default_risk_sources_path() -> Path:
-    return Path(__file__).resolve().parents[3] / "config" / "risk-sources.json"
+    """Editable checkout catalog when this process loaded that checkout; otherwise the packaged copy."""
+    from guardian.runtime_binding import source_checkout_root
+
+    root = source_checkout_root()
+    if root is not None:
+        candidate = root / "config" / "risk-sources.json"
+        if candidate.is_file():
+            return candidate
+    return resource_path("config", "risk-sources.json")
 
 
 @dataclass(frozen=True)

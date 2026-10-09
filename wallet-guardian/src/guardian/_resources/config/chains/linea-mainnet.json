@@ -1,0 +1,34 @@
+{
+  "network": "linea-mainnet",
+  "display_name": "Linea",
+  "family": "evm",
+  "tier": 1,
+  "evm_chain_id": 59144,
+  "native_asset": {
+    "symbol": "ETH",
+    "decimals": 18,
+    "identity": "evm-native:59144"
+  },
+  "identity": {
+    "method": "eth_chainId",
+    "evm_chain_id": 59144,
+    "expected_value": "0xe708",
+    "status": "documented"
+  },
+  "finality_policy": "Linea 的 L2 執行確認與 L1 最終化分開。不能因為 EVM 相容就複製其他鏈的最終性。",
+  "sources": [
+    {
+      "url": "https://github.com/ethereum-lists/chains/blob/master/_data/chains/eip155-59144.json",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://github.com/ethereum-lists/chains",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "T1。鏈 ID 59144 為 documented，不是 live 驗證。不能從 T0 EVM 複製 PASS。enabled 維持 false。"
+}

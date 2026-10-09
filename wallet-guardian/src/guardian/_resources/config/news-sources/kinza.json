@@ -1,0 +1,28 @@
+{
+  "id": "kinza",
+  "official": true,
+  "retrieved": "2026-10-09",
+  "protocols": [
+    "kinza"
+  ],
+  "feeds": [
+    {
+      "url": "https://x.com/kinzafinance",
+      "kind": "x_account",
+      "fetch": "manual_not_fetched_by_monitor"
+    },
+    {
+      "url": "https://kinzafinance.medium.com/",
+      "kind": "blog",
+      "fetch": "not_fetched_by_monitor"
+    },
+    {
+      "url": "https://medium.com/feed/@kinzafinance",
+      "kind": "rss",
+      "fetch": "allowlisted_get",
+      "verified": "2026-10-09",
+      "max_bytes": 262144
+    }
+  ],
+  "notes": "Only the Medium RSS is an allowlisted public GET verified 2026-10-09 (text/xml, no ETag, about 61 KiB; cap 256 KiB). The blog HTML page and the X account are not fetched. No API key. Not a live pass."
+}

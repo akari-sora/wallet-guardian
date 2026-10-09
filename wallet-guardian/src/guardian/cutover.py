@@ -46,8 +46,8 @@ _SCOPE_FIELDS = ("networks", "plugins", "required", "wallets")
 # Evidence that must be present and explicit. A missing or malformed value is
 # not "zero": the window fails closed with ``evidence_missing:<field>``.
 _EVIDENCE_COUNTS = ("duplicates", "secret_leaks", "unexplained_legacy_only", "unexplained_mcm_only")
-# Scope identity: config file hash plus a content hash of src/guardian and
-# config/ (never a commit SHA, so docs-only commits do not reset the count).
+# Scope identity: config file hash plus a content hash of src/guardian,
+# including the packaged resources that process runs (never a commit SHA).
 _SCOPE_HASHES = ("config_hash", "content_hash")
 _AFTER_GATE = frozenset({"cutover", "done", "qualified", "reverse_shadow"})
 

@@ -1,0 +1,27 @@
+{
+  "enabled": [
+    {
+      "namespace": "evm",
+      "chain_id": 56,
+      "name": "BNB Smart Chain",
+      "native_symbol": "BNB",
+      "native_decimals": 18,
+      "rpc": [
+        {
+          "url": "https://bsc-dataseed.bnbchain.org",
+          "source": "https://docs.bnbchain.org/bnb-smart-chain/developers/json_rpc/json-rpc-endpoint/",
+          "trust": "official_docs",
+          "limitations": ["eth_getLogs is disabled on the official dataseed endpoints"]
+        }
+      ],
+      "finality": "parlia_fast_finality_is_not_treated_as_ethereum_finalized"
+    }
+  ],
+  "not_enabled": [
+    {
+      "namespace": "evm",
+      "chain_id": 1,
+      "reason": "no preapproved Ethereum RPC in this build"
+    }
+  ]
+}

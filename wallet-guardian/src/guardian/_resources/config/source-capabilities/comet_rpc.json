@@ -1,0 +1,253 @@
+{
+  "adapter": "comet_rpc",
+  "allowed_operations": [
+    {
+      "method": "abci_info",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "abci_query",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "block",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "block_by_hash",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "block_results",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "block_search",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "blockchain",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "commit",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "consensus_params",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "dump_consensus_state",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "genesis",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "genesis_chunked",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "header",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "header_by_hash",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "health",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "net_info",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "num_unconfirmed_txs",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "status",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "tx",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "tx_search",
+      "protocol": "jsonrpc"
+    },
+    {
+      "method": "validators",
+      "protocol": "jsonrpc"
+    }
+  ],
+  "backend": "cometbft",
+  "capabilities": {
+    "address_risk": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "asset_risk": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.fungible": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.native": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.nft": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "bridges": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "exposure_news": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "history.fungible": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "history.native_external": {
+      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "history.native_internal": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "history.nft": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.cosmos_authz": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.cosmos_feegrant": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.erc1155_operator": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.erc20": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.erc721_operator": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.erc721_token": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.move_capability": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.spl_authority": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.spl_delegate": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.ton_extensions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.tron_account": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permits.dai_variant": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permits.erc2612_observed": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permits.offchain_unused": {
+      "notes": "未提交的離線簽名不可觀察，不能標成 complete。",
+      "probe": "documented",
+      "support": "not_observable"
+    },
+    "permit2.allowance": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permit2.signature_usage": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "positions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "sanctions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "withdrawals": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    }
+  },
+  "families": [
+    "cosmos"
+  ],
+  "limits": [],
+  "networks": [
+    "cosmos-hub",
+    "osmosis-mainnet"
+  ],
+  "notes": "CometBFT 查詢。tx_search 可能關閉或歷史已 prune，取不到不是沒有交易。廣播方法不在 allowlist。沒有 live 驗證。",
+  "probe": "untested",
+  "protocol": "jsonrpc"
+}

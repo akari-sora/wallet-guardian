@@ -1,0 +1,482 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "MCM-01 planning contract only. Not an installed runtime validator. Semantic cross-field validation is also required.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "guardian.monitor.v1"
+    },
+    "mode": {
+      "const": "read_only"
+    },
+    "enabled_networks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "ethereum-mainnet",
+          "bsc-mainnet",
+          "arbitrum-one",
+          "base-mainnet",
+          "optimism-mainnet",
+          "polygon-pos",
+          "avalanche-c",
+          "solana-mainnet",
+          "linea-mainnet",
+          "zksync-era",
+          "scroll-mainnet",
+          "mantle-mainnet",
+          "sonic-mainnet",
+          "unichain-mainnet",
+          "hyperevm-mainnet",
+          "bitcoin-mainnet",
+          "tron-mainnet",
+          "blast-mainnet",
+          "opbnb-mainnet",
+          "ton-mainnet",
+          "sui-mainnet",
+          "aptos-mainnet",
+          "cosmos-hub",
+          "osmosis-mainnet"
+        ]
+      },
+      "uniqueItems": true,
+      "minItems": 1
+    },
+    "private_inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "accounts_file_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{1,95}$"
+        },
+        "state_dir_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{1,95}$"
+        },
+        "secret_profile_file_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{1,95}$"
+        }
+      },
+      "required": [
+        "accounts_file_env",
+        "state_dir_env",
+        "secret_profile_file_env"
+      ]
+    },
+    "polling": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 60
+        },
+        "around_the_clock": {
+          "const": true
+        },
+        "discovery_interval_seconds": {
+          "type": "integer",
+          "minimum": 3600
+        },
+        "bootstrap_lookback_days": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3650
+        },
+        "bootstrap_request_cap": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "bootstrap_origin": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "round_deadline_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "webhooks_enabled": {
+          "const": false
+        }
+      },
+      "required": [
+        "interval_seconds",
+        "around_the_clock",
+        "discovery_interval_seconds",
+        "bootstrap_lookback_days",
+        "bootstrap_request_cap",
+        "webhooks_enabled"
+      ]
+    },
+    "alerts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "native_eth_threshold": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+          "maxLength": 90
+        },
+        "asset_usd_threshold": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+          "maxLength": 90
+        },
+        "threshold_operator": {
+          "const": "any"
+        },
+        "permission_changes": {
+          "const": true
+        },
+        "exposure_risk_changes": {
+          "const": true
+        },
+        "exposure_news_only": {
+          "const": true
+        },
+        "generic_news": {
+          "const": false
+        },
+        "unknown_price_policy": {
+          "const": "show_unknown_not_zero"
+        },
+        "baseline_policy": {
+          "const": "initial_summary_and_existing_risk_not_new_history"
+        },
+        "quiet_if_no_change": {
+          "const": true
+        },
+        "monitor_health_changes": {
+          "const": true
+        }
+      },
+      "required": [
+        "native_eth_threshold",
+        "asset_usd_threshold",
+        "threshold_operator",
+        "permission_changes",
+        "exposure_risk_changes",
+        "exposure_news_only",
+        "generic_news",
+        "unknown_price_policy",
+        "baseline_policy",
+        "quiet_if_no_change",
+        "monitor_health_changes"
+      ]
+    },
+    "sources": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_-]{0,95}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "adapter": {
+            "type": "string",
+            "enum": [
+              "evm_rpc",
+              "etherscan_v2",
+              "blockscout",
+              "nodereal_transfers",
+              "solana_rpc",
+              "helius_parsed_events",
+              "esplora",
+              "tron_grid",
+              "toncenter_v3",
+              "toncenter_v2",
+              "sui_graphql",
+              "sui_grpc",
+              "aptos_indexer",
+              "aptos_rest",
+              "cosmos_rest",
+              "comet_rpc",
+              "goplus",
+              "ofac_sls",
+              "chainabuse",
+              "coingecko",
+              "debank"
+            ]
+          },
+          "endpoint_env": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,95}$"
+          },
+          "credential_env": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Z][A-Z0-9_]{1,95}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "budget_group": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,95}$"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "log_range_max": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          },
+          "batch_reads": {
+            "type": "boolean"
+          },
+          "log_contract": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          },
+          "method_credits": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "adapter",
+          "endpoint_env",
+          "budget_group",
+          "enabled"
+        ]
+      }
+    },
+    "routing": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "network": {
+            "type": "string",
+            "enum": [
+              "ethereum-mainnet",
+              "bsc-mainnet",
+              "arbitrum-one",
+              "base-mainnet",
+              "optimism-mainnet",
+              "polygon-pos",
+              "avalanche-c",
+              "solana-mainnet",
+              "linea-mainnet",
+              "zksync-era",
+              "scroll-mainnet",
+              "mantle-mainnet",
+              "sonic-mainnet",
+              "unichain-mainnet",
+              "hyperevm-mainnet",
+              "bitcoin-mainnet",
+              "tron-mainnet",
+              "blast-mainnet",
+              "opbnb-mainnet",
+              "ton-mainnet",
+              "sui-mainnet",
+              "aptos-mainnet",
+              "cosmos-hub",
+              "osmosis-mainnet"
+            ]
+          },
+          "capability": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          },
+          "source_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,95}$"
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "network",
+          "capability",
+          "source_ids"
+        ]
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_-]{0,95}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "max_rps": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1000
+          },
+          "max_concurrency": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32
+          },
+          "max_requests_per_day": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_credits_per_month": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "retry_attempts": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 5
+          }
+        },
+        "required": [
+          "max_rps",
+          "max_concurrency",
+          "max_requests_per_day",
+          "retry_attempts"
+        ]
+      }
+    },
+    "plugins": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_-]{0,95}$"
+      },
+      "uniqueItems": true
+    },
+    "sanctions_lists": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "us-ofac-sdn",
+          "us-ofac-consolidated"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "upload_state": {
+          "const": false
+        },
+        "third_party_wallet_queries": {
+          "enum": [
+            "deny_until_local_consent",
+            "operator_approved_sources_only"
+          ]
+        },
+        "public_report_mode": {
+          "const": "aggregate_no_wallet_identifiers"
+        }
+      },
+      "required": [
+        "upload_state",
+        "third_party_wallet_queries",
+        "public_report_mode"
+      ]
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "outbox_only",
+            "configured_sender"
+          ]
+        },
+        "profile_env": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]{1,95}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "mode",
+        "profile_env"
+      ]
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sign": {
+          "const": false
+        },
+        "broadcast": {
+          "const": false
+        },
+        "auto_purchase": {
+          "const": false
+        },
+        "auto_disable_schedule": {
+          "const": false
+        }
+      },
+      "required": [
+        "sign",
+        "broadcast",
+        "auto_purchase",
+        "auto_disable_schedule"
+      ]
+    },
+    "news": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fetch": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "fetch"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "mode",
+    "enabled_networks",
+    "private_inputs",
+    "polling",
+    "alerts",
+    "sources",
+    "routing",
+    "budgets",
+    "plugins",
+    "sanctions_lists",
+    "privacy",
+    "delivery",
+    "execution"
+  ]
+}

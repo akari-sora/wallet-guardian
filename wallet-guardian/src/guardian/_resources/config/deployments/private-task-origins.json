@@ -1,0 +1,15 @@
+{
+  "schema": "guardian.private_task_origins.v1",
+  "note": "Approved private-task VIEW entry points. A view origin is not execution authorization. The issuer and the API both read this file; a task cannot supply its own origin.",
+  "deployments": [
+    {
+      "deployment_id": "wg-private-task-v1",
+      "origin": "https://wallet-guardian-action-client.pages.dev",
+      "task_path": "/t/{ref}",
+      "data_path": "/api/tasks/{ref}",
+      "purpose": "private_task_view",
+      "view_origin_approved": true,
+      "execution_authorized": false
+    }
+  ]
+}

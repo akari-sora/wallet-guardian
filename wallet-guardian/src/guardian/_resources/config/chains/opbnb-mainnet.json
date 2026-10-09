@@ -1,0 +1,39 @@
+{
+  "network": "opbnb-mainnet",
+  "display_name": "opBNB",
+  "family": "evm",
+  "tier": 2,
+  "evm_chain_id": 204,
+  "native_asset": {
+    "symbol": "BNB",
+    "decimals": 18,
+    "identity": "evm-native:204"
+  },
+  "identity": {
+    "method": "eth_chainId",
+    "evm_chain_id": 204,
+    "expected_value": "0xcc",
+    "status": "documented"
+  },
+  "finality_policy": "opBNB 的 L2 確認與 L1 最終化分開。不要把 Etherscan 的確認數或 API 可用與否當成鏈已停止。",
+  "sources": [
+    {
+      "url": "https://github.com/ethereum-lists/chains/blob/master/_data/chains/eip155-204.json",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://github.com/ethereum-lists/chains",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://docs.etherscan.io/supported-chains",
+      "kind": "deprecation_notice",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "不要把 Etherscan API 建成新的主來源。Etherscan 官方宣布 2026-10-12 起停止 opBNB Mainnet/Testnet API 支援。這是 API 支援變動，不是鏈停止運作。鏈 ID 204 為 documented。本包未 live 驗證，enabled 維持 false。"
+}

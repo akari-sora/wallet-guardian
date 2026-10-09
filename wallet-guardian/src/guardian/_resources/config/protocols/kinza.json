@@ -1,0 +1,63 @@
+{
+  "id": "kinza",
+  "version": "1",
+  "networks": [
+    "bsc-mainnet",
+    "ethereum-mainnet"
+  ],
+  "contracts": {
+    "bsc-mainnet": {
+      "pool": {
+        "address": "0xcB0620b181140e57D1C0D8b724cde623cA963c8C",
+        "source_url": "https://docs.kinza.finance/resources/deployed-contracts/bnb-chain",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "documented read-only candidate; not a safe list and not an execution whitelist"
+      },
+      "addresses_provider": {
+        "address": "0xCa20a50ea454Bd9F37a895182ff3309F251Fd7cE",
+        "source_url": "https://docs.kinza.finance/resources/deployed-contracts/bnb-chain",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "registry identity, not a spender identity"
+      }
+    },
+    "ethereum-mainnet": {
+      "pool": {
+        "address": "0xeA14474946C59Dee1F103aD517132B3F19Cef1bE",
+        "source_url": "https://docs.kinza.finance/resources/deployed-contracts/ethereum",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "documented read-only candidate; not a safe list and not an execution whitelist"
+      },
+      "addresses_provider": {
+        "address": "0x0218890dd636c3a1cf0f98557eE2d3612c6bD953",
+        "source_url": "https://docs.kinza.finance/resources/deployed-contracts/ethereum",
+        "retrieved": "2026-10-09",
+        "status": "documented",
+        "notes": "registry identity, not a spender identity"
+      }
+    }
+  },
+  "required_sources": [
+    "evm_rpc"
+  ],
+  "view_methods": [
+    "ADDRESSES_PROVIDER()",
+    "POOL()",
+    "UNDERLYING_ASSET_ADDRESS()",
+    "balanceOf(address)",
+    "decimals()",
+    "getPool()",
+    "getReserveData(address)",
+    "getReservesList()",
+    "getUserAccountData(address)"
+  ],
+  "capabilities": [
+    "positions"
+  ],
+  "execution_authorized": false,
+  "onchain_independently_verified": false,
+  "abi_checked_by_reviewer": "2026-10-09",
+  "notes": "Kinza Pool and PoolAddressesProvider on BSC and Ethereum are documented read-only candidates from the official docs. They are not a safe list, not a spender trust list, and not an Action Client execution whitelist. An approval to the Pool still alerts. The Provider is a registry identity, not a spender. abi_checked_by_reviewer 2026-10-09 is the reviewer's read-only ABI note (Pool.getReservesList and getReserveData words 8 and 10). This package did not independently verify the deployment. opBNB stays documentation-only. No user accounts."
+}

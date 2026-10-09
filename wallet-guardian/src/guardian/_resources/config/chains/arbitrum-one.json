@@ -1,0 +1,39 @@
+{
+  "network": "arbitrum-one",
+  "display_name": "Arbitrum One",
+  "family": "evm",
+  "tier": 0,
+  "evm_chain_id": 42161,
+  "native_asset": {
+    "symbol": "ETH",
+    "decimals": 18,
+    "identity": "evm-native:42161"
+  },
+  "identity": {
+    "method": "eth_chainId",
+    "evm_chain_id": 42161,
+    "expected_value": "0xa4b1",
+    "status": "documented"
+  },
+  "finality_policy": "Arbitrum One 的 L2 軟確認，和批次回到 L1 以及挑戰期，是不同層。不要套用 Ethereum 的 12 確認。",
+  "sources": [
+    {
+      "url": "https://github.com/ethereum-lists/chains/blob/master/_data/chains/eip155-42161.json",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://github.com/ethereum-lists/chains",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://docs.arbitrum.io/",
+      "kind": "official_docs",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "EVM 相容不會自動得到 PASS。鏈 ID 42161 只是 documented。本包未 live 驗證，enabled 維持 false。"
+}

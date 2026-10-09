@@ -1,0 +1,55 @@
+{
+  "id": "uxlink",
+  "retrieved": "2026-10-09",
+  "symbol_check": "auxiliary_only",
+  "sources": [
+    "https://docs.uxlink.io/layer/announcement/uxlink-supply-distribution",
+    "https://docs.uxlink.io/layer/announcement/notice",
+    "https://dapp.uxlink.io/new-uxlink-tokens/claim"
+  ],
+  "tokens": [
+    {
+      "network": "ethereum-mainnet",
+      "chain_id": 1,
+      "address": "0x3991B07b2951a4300Da8c76e7d2c7eddE861Fef3",
+      "status": "documented_new_token",
+      "claimability": "not_assessed",
+      "symbol_check": "auxiliary_only"
+    },
+    {
+      "network": "arbitrum-one",
+      "chain_id": 42161,
+      "address": "0x1A6B3A62391ECcaaa992ade44cd4AFe6bEC8CfF1",
+      "status": "deprecated_legacy",
+      "migration_eligibility": "unknown",
+      "claimability": "unknown",
+      "price_mapping": "separate_from_new_token",
+      "valuation": "valuation_unknown",
+      "symbol_check": "auxiliary_only"
+    },
+    {
+      "network": "bsc-mainnet",
+      "chain_id": 56,
+      "address": "0x1A6B3A62391ECcaaa992ade44cd4AFe6bEC8CfF1",
+      "status": "deprecated_legacy",
+      "migration_eligibility": "unknown",
+      "claimability": "unknown",
+      "price_mapping": "separate_from_new_token",
+      "valuation": "valuation_unknown",
+      "symbol_check": "auxiliary_only"
+    }
+  ],
+  "documentation_only": [
+    {
+      "network": "opbnb-mainnet",
+      "subject": "kinza",
+      "status": "documentation_only"
+    },
+    {
+      "network": "mantle-mainnet",
+      "subject": "uxlink",
+      "status": "documentation_only"
+    }
+  ],
+  "notes": "Public token identities only. The legacy token is not priced from the new token. Holding it does not prove migration eligibility. symbol() is an auxiliary check, not identity. No user wallet addresses."
+}

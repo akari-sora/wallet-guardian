@@ -15,9 +15,9 @@ from typing import Any, Mapping
 
 from guardian.protocols.network import chain_registry
 from guardian.protocols.registry import PLUGIN_REGISTRY
+from guardian.resources import resource_path
 
-_ROOT = Path(__file__).resolve().parents[3]
-PROTOCOLS_DIR = _ROOT / "config" / "protocols"
+PROTOCOLS_DIR = resource_path("config", "protocols")
 _FORBIDDEN = frozenset({
     "__import__",
     "class",

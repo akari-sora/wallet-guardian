@@ -630,13 +630,19 @@ def _lf_bytes(data: bytes) -> bytes:
 
 
 def content_hash(root: Path) -> str:
-    """Scope identity: file contents under src/guardian and config/, not a commit SHA.
+    """Scope identity for the code and the config the monitor actually runs.
 
-    Docs, tests and tools are outside the hash, so a docs-only commit does not
-    reset qualification. Any change to code or committed config does.
+    The hash covers ``src/guardian``, including packaged resources under
+    ``src/guardian/_resources``, with CRLF normalized to LF. Docs, tests, and
+    tools stay outside it. A checkout that has no packaged config tree still
+    hashes top-level ``config/`` so an unpackaged tree keeps the same rule.
     """
     digest = hashlib.sha256()
-    for top in ("src/guardian", "config"):
+    packaged_config = root / "src" / "guardian" / "_resources" / "config"
+    tops = ["src/guardian"]
+    if not packaged_config.is_dir():
+        tops.append("config")
+    for top in tops:
         base = root / top
         if not base.is_dir():
             continue

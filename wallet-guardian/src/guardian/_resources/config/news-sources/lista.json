@@ -1,0 +1,21 @@
+{
+  "id": "lista",
+  "official": true,
+  "retrieved": "2026-10-09",
+  "protocols": [
+    "lista"
+  ],
+  "feeds": [
+    {
+      "url": "https://blog.lista.org/",
+      "kind": "blog",
+      "fetch": "not_fetched_by_monitor"
+    },
+    {
+      "url": "https://x.com/lista_dao",
+      "kind": "x_account",
+      "fetch": "manual_not_fetched_by_monitor"
+    }
+  ],
+  "notes": "Blog HTML only. No machine feed was verified, so nothing here is fetched. No API key. Not a live pass."
+}

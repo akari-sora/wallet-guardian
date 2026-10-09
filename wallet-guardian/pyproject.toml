@@ -1,6 +1,6 @@
 [project]
 name = "guardian"
-version = "0.3.0"
+version = "0.4.0rc1"
 description = "Read-only wallet monitor and a fixed-version wallet-browser task workbench."
 readme = "README.md"
 authors = [

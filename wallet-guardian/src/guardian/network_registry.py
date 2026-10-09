@@ -38,8 +38,6 @@ _REQUIRED = (
     "status",
     "notes",
 )
-_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_TIER_PLAN = _ROOT / "docs" / "mcm-01" / "network-tiers.plan.json"
 _ADDRESS = re.compile(r"(?<![0-9A-Fa-f])0x[0-9A-Fa-f]{40}(?![0-9A-Fa-f])")
 _SYNTHETIC_ADDRESS = re.compile(r"0x0{39}[0-9A-Fa-f]$", re.IGNORECASE)
 _SECRET_MARKERS = ("apikey=", "glpat-", "nodereal.io/v1/")
@@ -50,12 +48,24 @@ class RegistryError(ValueError):
     """The planned registry is inconsistent. Nothing in it is turned on."""
 
 
+def _packaged_tier_plan() -> Path:
+    """Tier plan shipped beside this module.
+
+    This loader stays on the stdlib so it does not import the rest of guardian.
+    The file lives in the package tree (``guardian/_resources``), not a repo walk.
+    """
+    plan = Path(__file__).resolve().parent / "_resources" / "docs" / "mcm-01" / "network-tiers.plan.json"
+    if not plan.is_file():
+        raise RegistryError("network tier plan is missing from the package")
+    return plan
+
+
 def load_registry(directory: str | Path, *, tier_plan: str | Path | None = None) -> dict[str, dict[str, Any]]:
     """Load ``config/chains/<network-id>.json`` files and validate them against the tier plan."""
     directory = Path(directory)
     if not directory.is_dir():
         raise RegistryError(f"registry directory is missing: {directory}")
-    plan = _read_tier_plan(Path(tier_plan) if tier_plan is not None else _DEFAULT_TIER_PLAN)
+    plan = _read_tier_plan(Path(tier_plan) if tier_plan is not None else _packaged_tier_plan())
     entries: list[dict[str, Any]] = []
     seen_ids: dict[str, str] = {}
     for path in sorted(directory.glob("*.json")):

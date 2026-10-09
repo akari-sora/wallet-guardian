@@ -1,0 +1,34 @@
+{
+  "network": "zksync-era",
+  "display_name": "zkSync Era",
+  "family": "evm",
+  "tier": 1,
+  "evm_chain_id": 324,
+  "native_asset": {
+    "symbol": "ETH",
+    "decimals": 18,
+    "identity": "evm-native:324"
+  },
+  "identity": {
+    "method": "eth_chainId",
+    "evm_chain_id": 324,
+    "expected_value": "0x144",
+    "status": "documented"
+  },
+  "finality_policy": "zkSync Era 的 L2 區塊與 L1 證明或批次最終化分開。不能假設它有和其他 EVM 相同的地址索引端點。",
+  "sources": [
+    {
+      "url": "https://github.com/ethereum-lists/chains/blob/master/_data/chains/eip155-324.json",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    },
+    {
+      "url": "https://github.com/ethereum-lists/chains",
+      "kind": "chain_id_registry",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "T1。鏈 ID 324 為 documented。規劃附件寫明 zkSync 官方頁在查證當下有路徑讀不到，所以這裡不把鏈 ID 說成 live probe。enabled 維持 false。"
+}

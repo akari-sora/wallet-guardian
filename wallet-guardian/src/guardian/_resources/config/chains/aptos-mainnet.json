@@ -1,0 +1,29 @@
+{
+  "network": "aptos-mainnet",
+  "display_name": "Aptos",
+  "family": "aptos",
+  "tier": 3,
+  "evm_chain_id": null,
+  "native_asset": {
+    "symbol": "APT",
+    "decimals": 8,
+    "identity": "aptos-native:APT"
+  },
+  "identity": {
+    "method": "chain-id from node_info",
+    "evm_chain_id": null,
+    "expected_value": "1",
+    "status": "documented"
+  },
+  "finality_policy": "Aptos 已提交的 ledger version，和該筆交易是否成功，要分開看。版本前進不是每一筆交易都成功。",
+  "sources": [
+    {
+      "url": "https://aptos.dev/network/nodes/networks",
+      "kind": "official_docs",
+      "retrieved": "2026-10-08"
+    }
+  ],
+  "enabled": false,
+  "status": "planned_not_live_verified",
+  "notes": "主網 chain id 1 來自公開網路表，identity.status 是 documented。本包沒有呼叫 fullnode。原生符號 APT，8 位小數（octas）。404 的單一資源不是整戶為零。enabled 維持 false。"
+}

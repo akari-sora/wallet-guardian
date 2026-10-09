@@ -1,0 +1,18 @@
+{
+  "id": "solana",
+  "official": true,
+  "retrieved": "2026-10-09",
+  "protocols": [
+    "solana"
+  ],
+  "feeds": [
+    {
+      "url": "https://status.solana.com/history.rss",
+      "kind": "rss",
+      "fetch": "allowlisted_get",
+      "verified": "2026-10-09",
+      "max_bytes": 131072
+    }
+  ],
+  "notes": "The status RSS is an allowlisted public GET verified 2026-10-09 (application/rss+xml, weak ETag, about 26 KiB; cap 128 KiB). No API key. Not a live pass."
+}
