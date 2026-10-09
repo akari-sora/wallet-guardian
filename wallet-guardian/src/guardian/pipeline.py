@@ -28,7 +28,7 @@ from guardian.configuration import (
 )
 from guardian.coverage import CoverageObservation, build_coverage, resolve_support
 from guardian.sources.key_guide import credential_hint, hint_for_source
-from guardian.delivery import deliver, load_handoff
+from guardian.delivery import CANARY_STATUS, deliver, load_handoff
 from guardian.events import ChainEvent
 from guardian.errors import GuardianError
 from guardian.monitoring import CapabilityCycle
@@ -130,11 +130,13 @@ class RunReport:
     runtime: dict[str, Any] | None = None
     indexer_disclosures: list[dict[str, Any]] | None = None
     egress: dict[str, Any] | None = None
+    provider_message_ids: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "baseline": self.baseline,
             "budget": self.budget or {},
+            "canary": CANARY_STATUS,
             "checkpoints": self.checkpoints or [],
             "coverage": self.coverage,
             "decisions": self.decisions,
@@ -150,6 +152,7 @@ class RunReport:
             "outbox_written": self.outbox_written,
             "permission_notes": self.permission_notes or [],
             "positions": self.positions,
+            "provider_message_ids": list(self.provider_message_ids),
             "required": self.required,
             "run_id": self.run_id,
             "runtime": self.runtime or {},
@@ -172,6 +175,8 @@ def run_capability_pipeline(
     sender: Any = None,
     news_input: bytes | None = None,
     price_input: bytes | None = None,
+    notification_backend: Any = None,
+    notification_resolve: Any = None,
 ) -> RunReport:
     """Read configured wallets and commit one capability cycle."""
     runtime = assert_worktree()
@@ -328,11 +333,27 @@ def run_capability_pipeline(
     if enabled and not native_reads and any(value in {"error", "blocked"} for value in required.values()):
         status = "failed"
     handoff = load_handoff(public_config, os.environ)
+    active_sender = sender
+    if (
+        not no_send
+        and active_sender is None
+        and handoff.channel == "telegram"
+        and handoff.opt_in
+        and handoff.reason == "ready"
+    ):
+        from guardian.senders.telegram import TelegramSender
+
+        active_sender = TelegramSender.from_public(
+            public_config,
+            os.environ,
+            backend=notification_backend,
+            resolve=notification_resolve,
+        )
     delivery = deliver(
         database,
         tenant,
         mode="no_send" if no_send else "send",
-        sender=sender,
+        sender=active_sender,
         handoff=handoff,
         clock=clock,
     )
@@ -376,6 +397,7 @@ def run_capability_pipeline(
         permission_notes=permission_notes,
         runtime=runtime,
         indexer_disclosures=disclosures,
+        provider_message_ids=delivery.message_ids,
     )
     database.save_run(tenant, run_id, {
         "baseline": report.baseline,

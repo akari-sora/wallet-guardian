@@ -9,6 +9,9 @@ _QUERY = re.compile(
 )
 _BEARER = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-+/=]{6,}")
 _HEADER = re.compile(r"(?i)(x-api-key['\"]?\s*[:=]\s*['\"]?)([^'\"\s,]+)")
+# Telegram bot tokens travel in the URL path (`/bot<id>:<secret>/`). Mask the
+# whole token, not only query parameters.
+_BOT_TOKEN = re.compile(r"\d{5,}:[A-Za-z0-9_-]{8,}")
 
 
 def redact(text: str, extra_secrets: list[str] | None = None) -> str:
@@ -17,6 +20,7 @@ def redact(text: str, extra_secrets: list[str] | None = None) -> str:
     masked = _QUERY.sub(r"\1***", text)
     masked = _BEARER.sub(r"\1***", masked)
     masked = _HEADER.sub(r"\1***", masked)
+    masked = _BOT_TOKEN.sub("***", masked)
     for secret in extra_secrets or []:
         if secret and len(secret) >= 6:
             masked = masked.replace(secret, "***")
