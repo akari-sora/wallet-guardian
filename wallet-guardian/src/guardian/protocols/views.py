@@ -18,8 +18,11 @@ from guardian.chains.evm.permissions import eth_call_operation
 from guardian.security.transport_policy import Operation
 
 _WRITE_NAMES = frozenset({
+    "absorb",
+    "accrueaccount",
     "approve",
     "bridge",
+    "buycollateral",
     "claimwithdraw",
     "claimwithdrawfor",
     "closeaccount",
@@ -35,6 +38,9 @@ _WRITE_NAMES = frozenset({
     "requestwithdraw",
     "setapprovalforall",
     "setauthority",
+    "supply",
+    "supplyfrom",
+    "supplyto",
     "transfer",
     "withdraw",
 })
@@ -96,9 +102,21 @@ def decode_view(spec: ViewSpec, raw: str) -> tuple[Any, ...] | None:
     return tuple(decoded)
 
 
-def view_operation(signature: str, spec: ViewSpec, to: str, args: Sequence[Any]) -> Operation:
-    """eth_call for one view. The transport still applies its own read allowlist."""
-    return eth_call_operation(to, encode_view(signature, spec, args))
+def view_operation(
+    signature: str,
+    spec: ViewSpec,
+    to: str,
+    args: Sequence[Any],
+    block: str = "latest",
+) -> Operation:
+    """eth_call for one view. The transport still applies its own read allowlist.
+
+    ``block`` is ``latest`` or a hex block number. A tag binds every call in one
+    observation to the same head. It is not a write.
+    """
+    if not _block_tag(block):
+        raise ValueError("not_a_view_call")
+    return eth_call_operation(to, encode_view(signature, spec, args), block)
 
 
 class ViewPlugin:
@@ -122,6 +140,12 @@ def _coerce(kind: str, value: Any) -> Any:
         if normalized is None:
             raise ValueError("not_a_view_call")
         return normalized
+    if kind == "uint8":
+        if isinstance(value, bool) or isinstance(value, float) or not isinstance(value, int):
+            raise ValueError("not_a_view_call")
+        if not 0 <= value <= 255:
+            raise ValueError("not_a_view_call")
+        return value
     if kind == "uint256":
         if isinstance(value, bool) or isinstance(value, float) or not isinstance(value, int):
             raise ValueError("not_a_view_call")
@@ -133,3 +157,15 @@ def _coerce(kind: str, value: Any) -> Any:
             raise ValueError("not_a_view_call")
         return [_coerce("uint256", item) for item in value]
     raise ValueError("not_a_view_call")
+
+
+def _block_tag(value: str) -> bool:
+    if value == "latest":
+        return True
+    if not isinstance(value, str) or not value.startswith("0x") or len(value) < 3:
+        return False
+    try:
+        number = int(value, 16)
+    except ValueError:
+        return False
+    return number >= 0

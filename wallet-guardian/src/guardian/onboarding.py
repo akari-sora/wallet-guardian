@@ -54,8 +54,12 @@ _ACCOUNT_FIELDS = frozenset({
 _PLUGINS = frozenset({
     "aave-v3",
     "aave_v3",
+    "compound-v3",
+    "compound_v3",
     "erc4626",
+    "erc4626-pins",
     "erc4626-registered",
+    "erc4626_pins",
     "kinza",
     "lido",
     "lista-slisbnb",

@@ -84,6 +84,26 @@ LIDO_WSTETH = "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0"
 LIDO_WITHDRAWAL_QUEUE = "0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1"
 LIDO_SOURCE = "https://docs.lido.fi/deployed-contracts/"
 
+# Documented read candidates. Agreement of symbol, name, asset, or MORPHO() is not a safety certificate.
+# sDAI: https://docs.spark.fi/dev/savings/sdai-token
+# Steakhouse USDC MetaMorpho: https://github.com/morpho-org/metamorpho
+# Morpho Blue (MORPHO()): https://docs.morpho.org/get-started/resources/addresses/
+DAI = "0x6B175474E89094C44Da98b954EedeAC495271d0F"
+USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+SDAI = "0x83F20F44975D03b1b09e64809B757c47f942BEeA"
+SDAI_SOURCE = "https://docs.spark.fi/dev/savings/sdai-token"
+STEAKHOUSE_USDC = "0xBEEF01735c132Ada46AA9aA4c54623cAA92A64CB"
+STEAKHOUSE_SOURCE = "https://github.com/morpho-org/metamorpho"
+MORPHO = "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb"
+MORPHO_SOURCE = "https://docs.morpho.org/get-started/resources/addresses/"
+# Compound III Ethereum USDC Comet proxy. The launch implementation is provenance only.
+# https://docs.compound.finance/
+COMET_USDC = "0xc3d688B66703497DAA19211EEdff47f25384cdc3"
+COMET_IMPLEMENTATION = "0x42F9505a376761b180e27a01bA0554244ED1DE7D"
+COMET_SOURCE = "https://docs.compound.finance/"
+USDC_SOURCE = "https://developers.circle.com/stablecoins/usdc-contract-addresses"
+DAI_SOURCE = "https://github.com/makerdao/dss"
+
 # Documented StakeStateV2 layout, not live-verified here.
 # 4-byte Borsh tag, then Meta.rent_exempt_reserve (u64), then Authorized.staker, then withdrawer.
 STAKE_STAKER_OFFSET = 12
@@ -108,6 +128,20 @@ def evm_contracts(protocol_id: str) -> frozenset[str]:
             LIDO_STETH.lower(),
             LIDO_WSTETH.lower(),
             LIDO_WITHDRAWAL_QUEUE.lower(),
+        })
+    if protocol_id == "erc4626_pins":
+        return frozenset({
+            SDAI.lower(),
+            DAI.lower(),
+            STEAKHOUSE_USDC.lower(),
+            USDC.lower(),
+            MORPHO.lower(),
+        })
+    if protocol_id == "compound_v3":
+        return frozenset({
+            COMET_USDC.lower(),
+            COMET_IMPLEMENTATION.lower(),
+            USDC.lower(),
         })
     return frozenset()
 

@@ -1,0 +1,52 @@
+{
+  "id": "compound_v3",
+  "version": "1",
+  "networks": [
+    "ethereum-mainnet"
+  ],
+  "contracts": {
+    "ethereum-mainnet": {
+      "comet": {
+        "address": "0xc3d688B66703497DAA19211EEdff47f25384cdc3",
+        "source_url": "https://docs.compound.finance/",
+        "retrieved": "2026-10-10",
+        "status": "documented",
+        "notes": "cUSDCv3 proxy. This is the only address the plugin calls. Expected base token USDC with 6 decimals. baseToken() agreement is not a safety certificate."
+      },
+      "base_token": {
+        "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "source_url": "https://developers.circle.com/stablecoins/usdc-contract-addresses",
+        "retrieved": "2026-10-10",
+        "status": "documented",
+        "notes": "USDC, the expected Comet base token. Expected decimals 6. Not a safety certificate."
+      },
+      "implementation": {
+        "address": "0x42F9505a376761b180e27a01bA0554244ED1DE7D",
+        "source_url": "https://docs.compound.finance/",
+        "retrieved": "2026-10-10",
+        "status": "documented",
+        "notes": "Launch Comet implementation from the Compound III deployment notes. Provenance only. The plugin does not call this address. An upgrade does not make the proxy a safety certificate."
+      }
+    }
+  },
+  "required_sources": [
+    "evm_rpc"
+  ],
+  "view_methods": [
+    "baseToken()",
+    "baseTokenPriceFeed()",
+    "collateralBalanceOf(address,address)",
+    "decimals()",
+    "getAssetInfo(uint8)",
+    "getPrice(address)",
+    "isBorrowCollateralized(address)",
+    "isLiquidatable(address)",
+    "numAssets()",
+    "totalsBasic()",
+    "userBasic(address)"
+  ],
+  "capabilities": [
+    "positions"
+  ],
+  "notes": "Opt-in ethereum-mainnet Compound III USDC Comet via plugins entry compound-v3. Not listed in examples/monitor.json. Reads are eth_call on the proxy, bound to one block. Stored principal is not accrued to now. No accrueAccount. No invented health factor. Collateral is enumerated up to 32 assets. offline fixtures. No user accounts."
+}
