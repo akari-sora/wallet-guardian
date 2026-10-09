@@ -1,0 +1,5 @@
+{
+  "synthetic": true,
+  "created": "2026-10-10",
+  "note": "Synthetic yield fixtures only. No monitored wallets, API keys, tokens, or publisher articles. Hosts are .invalid. Pool ids are UUIDs, not addresses. Contract stand-ins are 0x000…000N."
+}

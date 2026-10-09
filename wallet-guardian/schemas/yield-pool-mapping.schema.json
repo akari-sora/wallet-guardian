@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Versioned synthetic pool and campaign mapping. Addresses are fixtures, not monitored wallets.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "mapping_version", "synthetic", "pools", "campaigns"],
+  "properties": {
+    "schema_version": {"const": "yield-pool-mapping.v1"},
+    "mapping_version": {"type": "string", "minLength": 1, "maxLength": 80},
+    "synthetic": {"const": true},
+    "description": {"type": "string", "maxLength": 400},
+    "pools": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/pool"}
+    },
+    "campaigns": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/campaign"}
+    }
+  },
+  "$defs": {
+    "pool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pool_id", "chain", "protocol", "contracts"],
+      "properties": {
+        "pool_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "chain": {"type": "string", "minLength": 1, "maxLength": 64},
+        "protocol": {"type": "string", "pattern": "^synthetic-[a-z0-9-]{1,40}$"},
+        "contracts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/contract"}
+        }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "address"],
+      "properties": {
+        "role": {"enum": ["pool", "receipt", "token"]},
+        "address": {"type": "string", "pattern": "^0x0{39}[0-9a-f]$"}
+      }
+    },
+    "campaign": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["campaign_id", "pool_id", "source", "product"],
+      "properties": {
+        "campaign_id": {"type": "string", "pattern": "^[a-z0-9-]{1,64}$"},
+        "pool_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "source": {"enum": ["explicit_body"]},
+        "product": {"type": "string", "minLength": 1, "maxLength": 80}
+      }
+    }
+  }
+}
