@@ -411,7 +411,7 @@ def _round_record(
         "networks": sorted({network for account in private.accounts.accounts for network in account.networks}),
         "plugins": sorted(name for name in public.document.get("plugins", []) if isinstance(name, str)),
         "required": sorted(str(key) for key in required),
-        "src_sha": _source_sha(Path(__file__).resolve().parents[1]),
+        "content_hash": content_hash(Path(__file__).resolve().parents[1]),
         "wallets": sorted(account.wallet_id for account in private.accounts.accounts),
     }
     return {
@@ -603,14 +603,24 @@ def _object(text: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _source_sha(root: Path) -> str:
+def content_hash(root: Path) -> str:
+    """Scope identity: file contents under src/guardian and config/, not a commit SHA.
+
+    Docs, tests and tools are outside the hash, so a docs-only commit does not
+    reset qualification. Any change to code or committed config does.
+    """
     digest = hashlib.sha256()
-    base = root / "src" / "guardian"
-    for path in sorted(base.rglob("*.py")):
-        digest.update(path.relative_to(base).as_posix().encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
+    for top in ("src/guardian", "config"):
+        base = root / top
+        if not base.is_dir():
+            continue
+        for path in sorted(item for item in base.rglob("*") if item.is_file()):
+            if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
+                continue
+            digest.update(f"{top}/{path.relative_to(base).as_posix()}".encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
     return digest.hexdigest()
 
 

@@ -513,7 +513,7 @@ def test_mcm_live_l3_08_frozen_scope_no_denominator_shrink(tmp_path: Path) -> No
     changed_config[0]["scope"]["config_hash"] = "config-hash-changed"
     assert "scope_changed" in tool.evaluate_cutover([*_windows(2, scope=base), *changed_config])["reasons"]
     changed_src = _windows(1, scope=base, start=datetime(2026, 1, 1, 6, tzinfo=timezone.utc))
-    changed_src[0]["scope"]["src_sha"] = "src-sha-changed"
+    changed_src[0]["scope"]["content_hash"] = "content-hash-changed"
     assert "scope_changed" in tool.evaluate_cutover([*_windows(2, scope=base), *changed_src])["reasons"]
     docs = _windows(4, scope=base)
     docs[-1]["scope"]["docs_only"] = True
@@ -522,6 +522,64 @@ def test_mcm_live_l3_08_frozen_scope_no_denominator_shrink(tmp_path: Path) -> No
     assert kept["qualifying_windows"] == 4
     assert "scope_changed" not in kept["reasons"]
     assert kept["history"] == ["w0", "w1", "w2", "w3"]
+
+
+def test_mcm_live_l3_07_missing_evidence_fails_closed() -> None:
+    """MCM-LIVE-L3-07. Missing evidence is not zero: the window does not qualify."""
+    tool = _tool()
+    good = tool.evaluate_cutover(_windows(3))
+    assert good["qualifying_windows"] == 3
+    for field in ("duplicates", "secret_leaks", "unexplained_legacy_only", "unexplained_mcm_only", "no_send"):
+        rows = _windows(3)
+        del rows[1][field]
+        result = tool.evaluate_cutover(rows)
+        assert f"evidence_missing:{field}" in result["reasons"], field
+        assert result["qualifying_windows"] == 1, field
+    for bad in (None, "0", True, -1):
+        rows = _windows(2)
+        rows[1]["secret_leaks"] = bad
+        assert "evidence_missing:secret_leaks" in tool.evaluate_cutover(rows)["reasons"]
+    rows = _windows(2)
+    rows[1]["no_send"] = None
+    unproven = tool.evaluate_cutover(rows)
+    assert unproven["qualifying_windows"] == 0
+    assert "evidence_missing:no_send" in unproven["reasons"]
+    rows = _windows(2)
+    del rows[1]["scope"]["content_hash"]
+    assert "scope_missing" in tool.evaluate_cutover(rows)["reasons"]
+    rows = [*_windows(24), {"action": "cutover"}, *_reverse(8, hours=3)]
+    assert tool.evaluate_cutover(rows)["phase"] == "done"
+    rows = [*_windows(24), {"action": "cutover"}, *_reverse(8, hours=3)]
+    del rows[-1]["no_send"]
+    reverse = tool.evaluate_cutover(rows)
+    assert reverse["phase"] != "done"
+    assert "evidence_missing:no_send" in reverse["reasons"]
+
+
+def test_mcm_live_l3_08_scope_identity_is_content_hash(tmp_path: Path) -> None:
+    """MCM-LIVE-L3-08. Scope identity hashes src/guardian and config/, not a commit SHA."""
+    tool = _tool()
+    root = tmp_path / "repo"
+    for rel, text in {
+        "src/guardian/a.py": "x = 1\n",
+        "config/protocols/p.json": "{}\n",
+        "docs/readme.md": "doc\n",
+        "tests/t.py": "t\n",
+    }.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text, encoding="utf-8")
+    first = tool.content_hash(root)
+    assert len(first) == 64
+    (root / "docs/readme.md").write_text("doc changed\n", encoding="utf-8")
+    (root / "tests/t.py").write_text("t changed\n", encoding="utf-8")
+    (root / "src/guardian/__pycache__").mkdir()
+    (root / "src/guardian/__pycache__/a.cpython-313.pyc").write_bytes(b"cache")
+    assert tool.content_hash(root) == first
+    (root / "config/protocols/p.json").write_text('{"x": 1}\n', encoding="utf-8")
+    changed_config = tool.content_hash(root)
+    assert changed_config != first
+    (root / "src/guardian/a.py").write_text("x = 2\n", encoding="utf-8")
+    assert tool.content_hash(root) not in {first, changed_config}
 
 
 class _Sink:
@@ -740,7 +798,7 @@ def _scope() -> dict:
         "networks": ["bsc-mainnet", "ethereum-mainnet"],
         "plugins": ["aave-v3"],
         "required": ["balances.native", "history.fungible"],
-        "src_sha": "src-sha-frozen",
+        "content_hash": "content-hash-frozen",
         "wallets": ["wallet-a", "wallet-b"],
     }
 

@@ -43,6 +43,12 @@ GAP_TOKENS = (
     "private_endpoint",
 )
 _SCOPE_FIELDS = ("networks", "plugins", "required", "wallets")
+# Evidence that must be present and explicit. A missing or malformed value is
+# not "zero": the window fails closed with ``evidence_missing:<field>``.
+_EVIDENCE_COUNTS = ("duplicates", "secret_leaks", "unexplained_legacy_only", "unexplained_mcm_only")
+# Scope identity: config file hash plus a content hash of src/guardian and
+# config/ (never a commit SHA, so docs-only commits do not reset the count).
+_SCOPE_HASHES = ("config_hash", "content_hash")
 _AFTER_GATE = frozenset({"cutover", "done", "qualified", "reverse_shadow"})
 
 
@@ -180,6 +186,14 @@ def _disqualify(record: Mapping[str, Any]) -> list[str]:
             found.append(marker)
     if record.get("fixture") is True and "mock_fixture_pass" not in found:
         found.append("mock_fixture_pass")
+    for field in _EVIDENCE_COUNTS:
+        if not _explicit_count(record.get(field)):
+            found.append(f"evidence_missing:{field}")
+    scope = record.get("scope")
+    if not isinstance(scope, Mapping) or not all(
+        isinstance(scope.get(name), str) and scope.get(name) for name in _SCOPE_HASHES
+    ):
+        found.append("scope_missing")
     if _count(record.get("unexplained_legacy_only")) > 0:
         found.append("unexplained_legacy_only")
     if _count(record.get("unexplained_mcm_only")) > 0:
@@ -196,6 +210,8 @@ def _disqualify(record: Mapping[str, Any]) -> list[str]:
             found.append(token)
     if record.get("no_send") is False:
         found.append("sent")
+    elif record.get("no_send") is not True:
+        found.append("evidence_missing:no_send")
     return found
 
 
@@ -205,7 +221,7 @@ def _scope_changed(previous: Mapping[str, Any], current: Mapping[str, Any]) -> b
             return True
     if previous.get("config_hash") != current.get("config_hash"):
         return True
-    if previous.get("src_sha") != current.get("src_sha"):
+    if previous.get("content_hash") != current.get("content_hash"):
         return True
     return False
 
@@ -245,6 +261,8 @@ def _drill(record: Mapping[str, Any], drill: str) -> dict[str, Any]:
 def _reverse_block(record: Mapping[str, Any]) -> list[str]:
     if record.get("no_send") is False:
         return ["reverse_sent"]
+    if record.get("no_send") is not True:
+        return ["evidence_missing:no_send"]
     if _parse(record.get("started_at")) is None or _parse(record.get("finished_at")) is None:
         return ["reverse_window_unreadable"]
     return []
@@ -254,6 +272,10 @@ def _members(value: Any) -> frozenset[str]:
     if isinstance(value, str) or not isinstance(value, list | tuple | set):
         return frozenset()
     return frozenset(item for item in value if isinstance(item, str))
+
+
+def _explicit_count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _count(value: Any) -> int:

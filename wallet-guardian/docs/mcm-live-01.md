@@ -53,7 +53,9 @@ uv run --frozen guardian compare-legacy --mcm-config "$MCM_CONFIG" --legacy-stat
 
 缺口以原名記入證據：`no_allowlisted_feed`、`news_not_supplied`、`credential_missing`、`private_endpoint`、`fetch_error`、`budget_exhausted`。已宣告、已凍結、而且不是 required 的缺口可以留在合格窗裡，但 status 就是那個名稱。required 上的缺口使該窗不合格。不寫成「沒有新聞」或 ok。
 
-範圍是凍結的：required 能力、規則、外掛、錢包集合、網路與設定雜湊。拿掉錢包、網路或 required 能力會縮小分母，那是 `scope_changed`，序列重算，不是通過的方法。改設定雜湊、src SHA 或外掛集合也重置。純文件或文案不重置；比較不看 `docs_sha`。先前輪次留在 history，不刪。
+範圍是凍結的：required 能力、規則、外掛、錢包集合、網路與設定雜湊。拿掉錢包、網路或 required 能力會縮小分母，那是 `scope_changed`，序列重算，不是通過的方法。改設定雜湊、`content_hash` 或外掛集合也重置。`content_hash` 是 `src/guardian/` 與 `config/` 下所有檔案內容的雜湊（略過 `__pycache__`），不是 commit SHA；docs、tests、tools 不在裡面，所以純文件或文案的 commit 不重置。先前輪次留在 history，不刪。
+
+證據缺漏時一律判不合格（fail-closed）：`duplicates`、`secret_leaks`、`unexplained_legacy_only`、`unexplained_mcm_only` 必須是明確的非負整數，`no_send` 必須明確是 true。缺少或格式不對就是 `evidence_missing:<欄位>`，不能當成 0 或「沒送」。scope 缺 `config_hash` 或 `content_hash` 時是 `scope_missing`。反向 shadow 的輪次也要有明確的 `no_send: true`。
 
 常規舊六鏈不能倒退。Avalanche 若已嘗試但尚未完整，維持 `expansion_pending`，不能隱藏，也不能聲稱七鏈都已覆蓋。若發現重大曝險，把該能力升為 required。
 
