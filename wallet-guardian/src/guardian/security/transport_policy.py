@@ -145,6 +145,7 @@ CREDENTIAL_HEADERS = {
     "blockscout": frozenset({"authorization"}),
     "chainabuse": frozenset({"authorization"}),
     "goplus": frozenset({"authorization"}),
+    "tron_grid": frozenset({"TRON-PRO-API-KEY"}),
 }
 _GET_ONLY = frozenset({
     "aptos_rest",
@@ -172,6 +173,7 @@ _ETHERSCAN_PAIRS = frozenset({
 })
 _TRON_POST = frozenset({
     "/wallet/getaccount",
+    "/wallet/getnowblock",
     "/wallet/gettransactionbyid",
     "/wallet/gettransactioninfobyid",
     "/wallet/triggerconstantcontract",

@@ -295,6 +295,13 @@ def run_capability_pipeline(
                 observations, native_reads, seen, baseline, candidates, tenant, started,
                 events, explicit_cursors, held_cursors,
             )
+        elif family == "tron":
+            _read_tron(
+                public_config, private_inputs, transport, account, network, entry,
+                observations, native_reads, seen, baseline, candidates, tenant, started,
+                events, explicit_cursors, held_cursors, stored_cursors,
+                clock=clock, started_at=started_at, deadline=deadline,
+            )
         else:
             _block_family(account.wallet_id, network, observations, "unsupported_family")
         _read_positions(
@@ -899,6 +906,90 @@ def _read_bitcoin(
         explicit_cursors.append(read.cursor)
         held_cursors.add((wallet_id, network, "history.native_external"))
     _stamp_gaps(observations, wallet_id, network, gaps)
+
+
+_TRON_CAPABILITIES = (
+    "balances.native",
+    "balances.fungible",
+    "history.native_external",
+    "history.fungible",
+    "permissions.tron_account",
+    "permissions.erc20",
+)
+
+
+def _read_tron(
+    public_config, private_inputs, transport, account, network, entry, observations, native_reads,
+    seen, baseline, candidates, tenant, started, events, explicit_cursors, held_cursors, stored_cursors,
+    *, clock, started_at, deadline,
+) -> None:
+    """Watch-only TRON read. A failed answer is not stored as zero sun."""
+    from guardian.chains.tron.adapter import read_tron_account
+
+    wallet_id = account.wallet_id
+    source_id = _family_source(public_config, private_inputs, network, "tron_grid")
+    if source_id is None:
+        _block_caps(wallet_id, network, observations, _TRON_CAPABILITIES, "endpoint_missing")
+        return
+    try:
+        read = read_tron_account(
+            transport,
+            source_id,
+            account.normalized.canonical,
+            entry,
+            tenant_id=tenant,
+            wallet_id=wallet_id,
+            observed_at=started,
+            contracts=account.trc20_contracts,
+            spenders=account.allowance_spenders,
+            native_cursor=_cursor_text(stored_cursors, wallet_id, network, "history.native_external"),
+            trc20_cursor=_cursor_text(stored_cursors, wallet_id, network, "history.fungible"),
+            clock=clock,
+            started_at=started_at,
+            deadline=deadline,
+        )
+    except (BudgetExhausted, TransportError, SecurityError) as exc:
+        reason = getattr(exc, "reason", "") or "read_error"
+        _block_caps(wallet_id, network, observations, _TRON_CAPABILITIES, reason)
+        return
+    for capability, observation in read.observations.items():
+        observations[(wallet_id, network, capability)] = observation
+        if observation.category in {"ok", "empty", "partial"}:
+            _baseline(wallet_id, network, capability, seen, baseline, candidates, tenant)
+    if read.native_sun is not None:
+        native_reads.append({"network": network, "raw_amount": str(read.native_sun), "wallet_id": wallet_id})
+    for event in read.events:
+        if any(item.identity == event.identity for item in events):
+            continue
+        events.append(event)
+        if event.finality != "finalized" or event.tx_status != "success":
+            continue
+        if event.kind not in {"asset_in", "asset_out"} or event.asset != _native_asset(entry, network):
+            continue
+        candidates.append(Candidate(
+            tenant_id=tenant,
+            wallet_id=wallet_id,
+            network=network,
+            capability="history.native_external",
+            identity=event.identity,
+            kind="asset",
+            raw_amount=int(event.raw_amount),
+            is_native=True,
+            direction="in" if event.kind == "asset_in" else "out",
+            tx_id=event.tx_id,
+            symbol="TRX",
+        ))
+    for cursor in read.cursors:
+        explicit_cursors.append(cursor)
+        held_cursors.add((wallet_id, network, cursor["capability"]))
+
+
+def _cursor_text(stored: Mapping[tuple[str, str, str], Mapping[str, Any]], wallet: str, network: str, capability: str) -> str | None:
+    row = stored.get((wallet, network, capability))
+    if not isinstance(row, Mapping):
+        return None
+    cursor = row.get("cursor")
+    return cursor if isinstance(cursor, str) and cursor else None
 
 
 def _stamp_gaps(observations, wallet_id: str, network: str, gaps) -> None:

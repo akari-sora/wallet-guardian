@@ -8,7 +8,7 @@ _QUERY = re.compile(
     r"(?i)([?&]?(?:api[_-]?key|access[_-]?key|apikey|token|authorization|secret)=)([^&\s\"']+)"
 )
 _BEARER = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-+/=]{6,}")
-_HEADER = re.compile(r"(?i)(x-api-key['\"]?\s*[:=]\s*['\"]?)([^'\"\s,]+)")
+_HEADER = re.compile(r"(?i)((?:x-api-key|tron-pro-api-key)['\"]?\s*[:=]\s*['\"]?)([^'\"\s,]+)")
 # Telegram bot tokens travel in the URL path (`/bot<id>:<secret>/`). Mask the
 # whole token, not only query parameters.
 _BOT_TOKEN = re.compile(r"\d{5,}:[A-Za-z0-9_-]{8,}")

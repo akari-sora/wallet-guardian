@@ -13,6 +13,11 @@
     },
     {
       "http_method": "POST",
+      "path": "/wallet/getnowblock",
+      "protocol": "rest"
+    },
+    {
+      "http_method": "POST",
       "path": "/wallet/gettransactionbyid",
       "protocol": "rest"
     },
@@ -80,12 +85,12 @@
       "support": "unsupported"
     },
     "balances.fungible": {
-      "notes": "",
-      "probe": "untested",
-      "support": "unsupported"
+      "notes": "只讀已設定合約的 balanceOf。不是全錢包代幣發現，也不是 live 結果。",
+      "probe": "documented",
+      "support": "partial"
     },
     "balances.native": {
-      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "notes": "固化節點上的流動 TRX。質押與資源不計入。latest 讀取要分開標。不是 live 結果。",
       "probe": "documented",
       "support": "partial"
     },
@@ -105,12 +110,12 @@
       "support": "unsupported"
     },
     "history.fungible": {
-      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "notes": "TRC-20 依紀錄 type 區分 transfer 與 approval。approval 不是代幣移動。不是 live 結果。",
       "probe": "documented",
       "support": "partial"
     },
     "history.native_external": {
-      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "notes": "only_confirmed 的直接 TRX。經濟事件還要固化納入且執行成功。手續費分開。不是 live 結果。",
       "probe": "documented",
       "support": "partial"
     },
@@ -140,9 +145,9 @@
       "support": "not_applicable"
     },
     "permissions.erc20": {
-      "notes": "",
-      "probe": "untested",
-      "support": "not_applicable"
+      "notes": "已設定 pair 的 allowance(owner,spender)，標成 configured_pairs_only。不是 ERC-20 授權歷史，也不是完整授權掃描。",
+      "probe": "documented",
+      "support": "partial"
     },
     "permissions.erc721_operator": {
       "notes": "",
@@ -175,7 +180,7 @@
       "support": "not_applicable"
     },
     "permissions.tron_account": {
-      "notes": "運輸層允許讀取，adapter 尚未實作，不是 live 結果。",
+      "notes": "只記錄 owner threshold、owner key 數量與 active permission 數量。不處理帳戶金鑰，也不是控制權證明。不是 live 結果。",
       "probe": "documented",
       "support": "partial"
     },
@@ -226,7 +231,7 @@
   "limits": [
     {
       "name": "plan_specific",
-      "notes": "官方限額按方案與端點而異。不要把舊的 20 QPS 或每日 100,000 寫進程式。429 與 403 要退避。",
+      "notes": "官方限額按方案與端點而異。不要把舊的 20 QPS 或每日 100,000 寫進程式。429 與 403 要退避。六次 HTTP 200 不是配額，也不是持續可用性。",
       "retrieved": "2026-10-08",
       "source_url": "https://developers.tron.network/reference/rate-limits",
       "verification": "unverified"
@@ -235,7 +240,7 @@
   "networks": [
     "tron-mainnet"
   ],
-  "notes": "限額隨方案與端點改變，不寫死舊的 20 QPS 或 100,000。confirmed 與交易成功分開看。TRX fee、energy、bandwidth 分開。Base58 與 41 前綴 hex 不映射成其他鏈。沒有 live 驗證。",
+  "notes": "限額隨方案與端點改變，不寫死舊的 20 QPS 或 100,000。confirmed 與交易成功分開看。TRX fee、energy、bandwidth 分開。Base58 與 41 前綴 hex 不映射成其他鏈。沒有 live 驗證。六次 keyless 200 不是配額，也不是 TRON fully supported。/wallet/getnowblock 是 latest，不是 solidified。",
   "probe": "untested",
   "protocol": "rest"
 }

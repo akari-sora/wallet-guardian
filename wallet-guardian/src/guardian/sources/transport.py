@@ -474,6 +474,8 @@ def _format_credential(adapter: str, secret: MaskedSecret) -> MaskedSecret:
     if adapter == "chainabuse":
         token = base64.b64encode(f"{raw}:".encode("utf-8")).decode("ascii")
         return MaskedSecret(f"Basic {token}")
+    if adapter == "tron_grid":
+        return MaskedSecret(raw)
     raise SecurityError("header_not_allowed", reason="header_not_allowed")
 
 

@@ -125,6 +125,8 @@ class AccountRecord:
     networks: tuple[str, ...]
     relationship: str
     own_group: str | None
+    trc20_contracts: tuple[str, ...] = ()
+    allowance_spenders: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -205,6 +207,8 @@ def load_accounts(path: str | Path, *, registry: dict[str, dict[str, Any]] | Non
             networks=declared,
             relationship=account["relationship"],
             own_group=account.get("own_group"),
+            trc20_contracts=_tron_watch(account, "trc20_contracts", family),
+            allowance_spenders=_tron_watch(account, "allowance_spenders", family),
         )
         records.append(record)
         identities.append(WalletIdentity(wallet_id, record.label, normalized))
@@ -397,6 +401,26 @@ def _normalize_account(family: str, address: str, networks: tuple[str, ...]) -> 
         raise ConfigError(exc.reason) from None
 
 
+def _tron_watch(account: Mapping[str, Any], field: str, family: str) -> tuple[str, ...]:
+    """Configured TRON contracts or spenders. Canonical base58, capped, never discovered."""
+    raw = account.get(field) or ()
+    if raw in (None, ()):
+        return ()
+    if not isinstance(raw, list) or any(not isinstance(item, str) or not item.strip() for item in raw):
+        raise ConfigError("bad_address")
+    if family != "tron":
+        raise ConfigError("tron_watch_family")
+    if len(raw) > 8:
+        raise ConfigError("tron_watch_cap")
+    found: list[str] = []
+    for item in raw:
+        try:
+            found.append(parse_address("tron", item).canonical)
+        except IdentityError as exc:
+            raise ConfigError(exc.reason) from None
+    return tuple(found)
+
+
 def _source_status(document: dict[str, Any], profile: dict[str, str], environ: Mapping[str, str]) -> dict[str, SourceStatus]:
     status: dict[str, SourceStatus] = {}
     for source_id, source in document["sources"].items():
@@ -407,6 +431,12 @@ def _source_status(document: dict[str, Any], profile: dict[str, str], environ: M
         present = _credential_present(credential, profile, environ)
         if not present and source.get("adapter") == "coingecko":
             # The public tier needs no key. A missing demo key is a lower limit, not a gap.
+            status[source_id] = SourceStatus(
+                source_id, source["adapter"], source["enabled"] is True, False, "keyless", None,
+            )
+            continue
+        if not present and source.get("adapter") == "tron_grid":
+            # The optional key is not required. A keyless read still sends the watch address.
             status[source_id] = SourceStatus(
                 source_id, source["adapter"], source["enabled"] is True, False, "keyless", None,
             )
