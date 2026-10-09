@@ -72,6 +72,8 @@ STABLE_B = "b2" * 32
 INCOMING_TX = "c1" * 32
 MISSING_OK = "d2" * 32
 MISSING_TX = "d1" * 32
+TWIN_TX = "e1" * 32
+DUP_TX = "e2" * 32
 HEAD_TS = 1_700_000_000_000
 FOREIGN_BALANCE = 424242
 _TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
@@ -294,6 +296,12 @@ class TronBackend:
             newer = _trc20_row(STABLE_B, OTHER, WATCH, 1)
             data = [newer, older] if self.prepend else [older]
             return {"data": data, "meta": {}, "success": True}
+        if self.mode == "twin_logs":
+            row = _trc20_row(TWIN_TX, OTHER, WATCH, TOKEN_TRANSFER)
+            return {"data": [row, dict(row)], "meta": {}, "success": True}
+        if self.mode == "dup_row":
+            row = _trc20_row(DUP_TX, OTHER, WATCH, TOKEN_TRANSFER)
+            return {"data": [row, dict(row)], "meta": {}, "success": True}
         if self.mode != "typed":
             return _empty_page()
         return {
@@ -342,6 +350,8 @@ class TronBackend:
             )
         if self.mode in {"unmatched", "stable"} and txid in {UNMATCHED_TX, MATCHED_TX, STABLE_A, STABLE_B}:
             return _tx(txid, "TriggerSmartContract", {"call_value": 0, "owner_address": WATCH_HEX}, "SUCCESS")
+        if self.mode in {"twin_logs", "dup_row"} and txid in {TWIN_TX, DUP_TX}:
+            return _tx(txid, "TriggerSmartContract", {"call_value": 0, "owner_address": WATCH_HEX}, "SUCCESS")
         if txid in {ACT_TX, KEY_TX}:
             raise AssertionError(txid)
         if txid == FAIL_TX:
@@ -387,6 +397,22 @@ class TronBackend:
                     {"address": "ab" * 20, "data": "00", "topics": ["11"]},
                     _event_log(TOKEN, OTHER, WATCH, amount, _TRANSFER_TOPIC),
                 ],
+                "receipt": {"result": "SUCCESS"},
+            }
+        if self.mode == "twin_logs" and txid == TWIN_TX:
+            first = _event_log(TOKEN, OTHER, WATCH, TOKEN_TRANSFER, _TRANSFER_TOPIC)
+            second = _event_log(TOKEN, OTHER, WATCH, TOKEN_TRANSFER, _TRANSFER_TOPIC)
+            return {
+                "blockNumber": 900,
+                "id": txid,
+                "log": [first, second],
+                "receipt": {"result": "SUCCESS"},
+            }
+        if self.mode == "dup_row" and txid == DUP_TX:
+            return {
+                "blockNumber": 900,
+                "id": txid,
+                "log": [_event_log(TOKEN, OTHER, WATCH, TOKEN_TRANSFER, _TRANSFER_TOPIC)],
                 "receipt": {"result": "SUCCESS"},
             }
         if txid in {ACT_TX, KEY_TX}:
@@ -1149,6 +1175,155 @@ def test_mcm_tron_fix_05_retry_after_clock_and_deadline(monkeypatch: pytest.Monk
     assert transport.calls
     assert len(transport.calls) == 1
     assert clock["now"] == started
+
+
+def test_mcm_tron_fix2_within_page_progress_processes_each_transfer_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A capped page keeps its window and still moves past rows already verified."""
+    work = tmp_path / "progress"
+    work.mkdir()
+    config = _desk(work, monkeypatch)
+    per_round: list[int] = []
+    info_ids: list[str] = []
+    for _round in range(5):
+        backend = TronBackend("verify_cap")
+        code, report = _run(capsys, config, backend)
+        assert code == 0, report
+        urls = _history_urls(backend, trc20=False)
+        assert urls
+        assert "fingerprint" not in _query(urls[0])
+        assert _bounds(urls[0]) == ("0", str(HEAD_TS))
+        fresh = _info_ids(backend)
+        assert fresh
+        assert len(fresh) == len(set(fresh))
+        assert set(fresh).isdisjoint(info_ids)
+        info_ids.extend(fresh)
+        outs = [event["tx_id"] for event in _stored(work) if event["kind"] == "asset_out"]
+        assert len(outs) == len(set(outs)) == len(info_ids)
+        per_round.append(len(outs))
+        if len(per_round) == 1:
+            database = Database(work / "state" / "monitor.sqlite")
+            try:
+                cursors = database.capability_cursors_for("local")
+            finally:
+                database.close()
+            native = next(row for row in cursors if row["capability"] == "history.native_external")
+            assert native["cursor"].startswith("window|")
+            assert "|row:22" in native["cursor"]
+            assert "beyond60" not in native["cursor"]
+            assert not native["cursor"].startswith("solidified")
+        if len(outs) < 60:
+            assert all("beyond60" not in url for url in urls)
+        if len(outs) == 60:
+            break
+    assert per_round == [22, 44, 60]
+    assert len(info_ids) == 60
+    assert len(set(info_ids)) == 60
+
+
+def test_mcm_tron_fix2_identical_logs_and_duplicate_indexer_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Two identical receipt logs stay two identities. One log repeated by the indexer stays one."""
+    twin_dir = tmp_path / "twin"
+    twin_dir.mkdir()
+    code, twin = _run(capsys, _desk(twin_dir, monkeypatch), TronBackend("twin_logs"))
+    assert code == 0, twin
+    incoming = [event for event in _stored(twin_dir) if event["tx_id"] == TWIN_TX and event["kind"] == "asset_in"]
+    assert len(incoming) == 2
+    assert {event["sub_index"] for event in incoming} == {"log-0", "log-1"}
+    assert len({event["identity"] for event in incoming}) == 2
+    assert {event["raw_amount"] for event in incoming} == {str(TOKEN_TRANSFER)}
+    assert {event["tx_status"] for event in incoming} == {"success"}
+    assert {event["finality"] for event in incoming} == {"finalized"}
+    assert "trc20_event_unmatched" not in _coverage(twin, "history.fungible")["reason_codes"]
+
+    dup_dir = tmp_path / "dup"
+    dup_dir.mkdir()
+    code, dup = _run(capsys, _desk(dup_dir, monkeypatch), TronBackend("dup_row"))
+    assert code == 0, dup
+    repeated = [event for event in _stored(dup_dir) if event["tx_id"] == DUP_TX and event["kind"] == "asset_in"]
+    assert len(repeated) == 1
+    assert repeated[0]["sub_index"] == "log-0"
+    assert repeated[0]["raw_amount"] == str(TOKEN_TRANSFER)
+    assert repeated[0]["tx_status"] == "success"
+    assert repeated[0]["finality"] == "finalized"
+    assert all(event["sub_index"] != "log-1" for event in _stored(dup_dir) if event["tx_id"] == DUP_TX)
+    assert "trc20_event_unmatched" not in _coverage(dup, "history.fungible")["reason_codes"]
+
+
+def test_mcm_tron_fix2_long_retry_after_and_expired_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A long Retry-After is waited in full or deferred. An expired deadline sends nothing."""
+    clock = {"now": 1_700_000_000.0}
+    slept: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        slept.append(float(seconds))
+        clock["now"] += float(seconds)
+
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+
+    def open_client(responses: list[object], deadline: int, *, started_at: float | None = None) -> tuple[TronGridClient, _NoHook]:
+        transport = _NoHook(responses, clock)
+        reader = TronGridClient(
+            transport,
+            "tron-grid",
+            clock=lambda: clock["now"],
+            started_at=clock["now"] if started_at is None else started_at,
+            deadline=deadline,
+        )
+        return reader, transport
+
+    clock["now"] = 1_700_000_000.0
+    slept.clear()
+    started = clock["now"]
+    reader, transport = open_client([_rate("120"), _ok_block()], 180)
+    result = reader.post("/walletsolidity/getnowblock", {"visible": False})
+    assert result.ok is True
+    assert result.body["blockID"] == SOLID_ID
+    assert slept == [120.0]
+    assert 30.0 not in slept
+    assert transport.attempts[1] - transport.attempts[0] == 120.0
+    assert len(transport.calls) == 2
+
+    clock["now"] = 1_700_000_000.0
+    slept.clear()
+    started = clock["now"]
+    reader, transport = open_client([_rate("120"), _ok_block()], 60)
+    result = reader.post("/walletsolidity/getnowblock", {"visible": False})
+    assert result.ok is False
+    assert result.reason == "deadline"
+    assert slept == []
+    assert len(transport.calls) == 1
+    assert clock["now"] == started
+
+    clock["now"] = 1_700_000_000.0
+    slept.clear()
+    started = clock["now"]
+    reader, transport = open_client([_rate("80"), _ok_block()], 80)
+    result = reader.post("/walletsolidity/getnowblock", {"visible": False})
+    assert result.ok is False
+    assert result.reason == "deadline"
+    assert slept == [80.0]
+    assert len(transport.calls) == 1
+    assert clock["now"] == started + 80.0
+
+    clock["now"] = 1_700_000_000.0
+    slept.clear()
+    reader, transport = open_client([_ok_block()], 30, started_at=clock["now"] - 30)
+    result = reader.post("/walletsolidity/getnowblock", {"visible": False})
+    assert result.ok is False
+    assert result.reason == "deadline"
+    assert slept == []
+    assert transport.calls == []
+
+
+def _info_ids(backend: TronBackend) -> list[str]:
+    found = []
+    for call in backend.calls:
+        path = urlsplit(str(getattr(call, "url", ""))).path
+        if not path.endswith("/gettransactioninfobyid"):
+            continue
+        value = json.loads(getattr(call, "body")).get("value", "")
+        found.append(str(value).lower())
+    return found
 
 
 def _bounds(url: str) -> tuple[str, str]:
