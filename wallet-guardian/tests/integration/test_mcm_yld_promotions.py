@@ -1049,6 +1049,221 @@ def test_mcm_yld_03_negation_after_match_is_not_affirmative(tmp_path: Path) -> N
         database.close()
 
 
+def test_mcm_yld_03_publication_time_is_not_a_deadline(tmp_path: Path) -> None:
+    """A publication timestamp in the next sentence is not an end deadline."""
+    published = "The deadline is unknown. Published 2026-12-01T00:00:00Z."
+    stated = "Eligible until 2026-11-15T00:00:00Z."
+    document = {
+        "records": [
+            {"record_id": "published-time-1", "body": published},
+            {"record_id": "stated-deadline-1", "body": stated},
+        ],
+    }
+    parsed = parse_source("explicit_body", json.dumps(document).encode("utf-8"))
+    assert parsed.ok is True
+    by_id = {item.record_id: item for item in parsed.records}
+
+    announcement = by_id["published-time-1"]
+    assert announcement.deadlines == ()
+    assert announcement.deadline_status == "unknown"
+    assert announcement.extraction_status == "unknown"
+    assert announcement.residual_conditions == "unknown"
+    assert announcement.described_as_temporary is False
+    assert announcement.duration_stated is False
+    assert announcement.temporary_language == "not_described_as_temporary"
+    assert all(item["field"] != "deadline" for item in announcement.provenance)
+    assert "2026-12-01T00:00:00Z" not in json.dumps(announcement.deadlines)
+
+    stated_deadline = by_id["stated-deadline-1"]
+    assert stated_deadline.deadline_status == "extracted"
+    assert stated_deadline.extraction_status == "extracted"
+    assert stated_deadline.residual_conditions == "none"
+    assert stated_deadline.described_as_temporary is True
+    ends = [item for item in stated_deadline.deadlines if item["role"] == "end"]
+    assert len(ends) == 1
+    assert ends[0]["original"] == "2026-11-15T00:00:00Z"
+    assert ends[0]["utc"] == "2026-11-15T00:00:00Z"
+    assert "until" in ends[0]["quote"]
+    assert "2026-11-15T00:00:00Z" in ends[0]["quote"]
+    assert "2026-12-01T00:00:00Z" not in ends[0]["quote"]
+    quote = {item["field"]: item["quote"] for item in stated_deadline.provenance}["deadline"]
+    assert "until" in quote and "2026-11-15T00:00:00Z" in quote
+    assert quote.startswith('"')
+
+    backend = _backend(
+        [_response(_pools_doc([_pool(LEND, total=5)]))],
+        [_response(_empty_catalog())],
+    )
+    database = Database(tmp_path / "yld-03-published.sqlite")
+    try:
+        report = _run(database, Clock(), backend, promotions=json.dumps(document).encode("utf-8"))
+        stored = _record(report, "explicit_body", "published-time-1")
+        assert stored["terms"]["deadlines"] == []
+        assert stored["terms"]["deadline_status"] == "unknown"
+        assert stored["terms"]["extraction_status"] == "unknown"
+        assert stored["terms"]["residual_conditions"] == "unknown"
+        assert stored["yields"]["described_as_temporary"] is False
+        kept = _record(report, "explicit_body", "stated-deadline-1")
+        assert kept["terms"]["deadline_status"] == "extracted"
+        assert kept["terms"]["residual_conditions"] == "none"
+        assert kept["terms"]["deadlines"][0]["utc"] == "2026-11-15T00:00:00Z"
+        assert not any(item["kind"] == "yield_change" for item in report["candidates"])
+        assert database.alerts_for(TENANT) == []
+        assert database.outbox_for(TENANT) == []
+        validate(report["state"], state_schema())
+    finally:
+        database.close()
+
+
+def test_mcm_yld_03_contradictory_deadline_is_unknown(tmp_path: Path) -> None:
+    """An affirmative deadline plus the same date saying it is not the deadline is unknown."""
+    denied = "Eligible until 2026-12-01T00:00:00Z. 2026-12-01T00:00:00Z is not the deadline."
+    repeated = (
+        "Eligible until 2026-12-01T00:00:00Z. "
+        "Eligible until 2026-12-01T00:00:00Z is not the deadline."
+    )
+    stated = "Eligible until 2026-12-15T00:00:00Z."
+    document = {
+        "records": [
+            {"record_id": "denied-date-1", "body": denied},
+            {"record_id": "denied-repeat-1", "body": repeated},
+            {"record_id": "clear-deadline-1", "body": stated},
+        ],
+    }
+    parsed = parse_source("explicit_body", json.dumps(document).encode("utf-8"))
+    assert parsed.ok is True
+    by_id = {item.record_id: item for item in parsed.records}
+
+    for record_id in ("denied-date-1", "denied-repeat-1"):
+        conflict = by_id[record_id]
+        assert conflict.deadlines == ()
+        assert conflict.deadline_status == "unknown"
+        assert conflict.extraction_status == "unknown"
+        assert conflict.residual_conditions == "unknown"
+        assert conflict.described_as_temporary is False
+        assert conflict.duration_stated is False
+        assert all(item["field"] != "deadline" for item in conflict.provenance)
+        assert "2026-12-01T00:00:00Z" not in json.dumps(conflict.deadlines)
+
+    clear = by_id["clear-deadline-1"]
+    assert clear.deadline_status == "extracted"
+    assert clear.extraction_status == "extracted"
+    assert clear.residual_conditions == "none"
+    assert clear.described_as_temporary is True
+    ends = [item for item in clear.deadlines if item["role"] == "end"]
+    assert len(ends) == 1
+    assert ends[0]["original"] == "2026-12-15T00:00:00Z"
+    assert ends[0]["utc"] == "2026-12-15T00:00:00Z"
+    assert "until" in ends[0]["quote"]
+    assert "2026-12-15T00:00:00Z" in ends[0]["quote"]
+    quote = {item["field"]: item["quote"] for item in clear.provenance}["deadline"]
+    assert "until" in quote and "2026-12-15T00:00:00Z" in quote
+    assert quote.startswith('"')
+
+    backend = _backend(
+        [_response(_pools_doc([_pool(LEND, total=5)]))],
+        [_response(_empty_catalog())],
+    )
+    database = Database(tmp_path / "yld-03-conflict-deadline.sqlite")
+    try:
+        report = _run(database, Clock(), backend, promotions=json.dumps(document).encode("utf-8"))
+        for record_id in ("denied-date-1", "denied-repeat-1"):
+            stored = _record(report, "explicit_body", record_id)
+            assert stored["terms"]["deadlines"] == []
+            assert stored["terms"]["deadline_status"] == "unknown"
+            assert stored["terms"]["extraction_status"] == "unknown"
+            assert stored["terms"]["residual_conditions"] == "unknown"
+            assert stored["yields"]["described_as_temporary"] is False
+        kept = _record(report, "explicit_body", "clear-deadline-1")
+        assert kept["terms"]["deadline_status"] == "extracted"
+        assert kept["terms"]["residual_conditions"] == "none"
+        assert kept["terms"]["deadlines"][0]["original"] == "2026-12-15T00:00:00Z"
+        assert not any(item["kind"] == "yield_change" for item in report["candidates"])
+        assert database.alerts_for(TENANT) == []
+        assert database.outbox_for(TENANT) == []
+        validate(report["state"], state_schema())
+    finally:
+        database.close()
+
+
+def test_mcm_yld_03_invalid_date_clause_is_not_covered(tmp_path: Path) -> None:
+    """An unparsed date clause stays residual unknown and does not erase a valid minimum."""
+    invalid = "Minimum 100 USDT. Eligible until 2026-02-30T00:00:00Z."
+    valid = "Minimum 100 USDT. Eligible until 2026-12-01T00:00:00Z."
+    document = {
+        "records": [
+            {"record_id": "invalid-day-1", "body": invalid},
+            {"record_id": "valid-day-1", "body": valid},
+        ],
+    }
+    parsed = parse_source("explicit_body", json.dumps(document).encode("utf-8"))
+    assert parsed.ok is True
+    by_id = {item.record_id: item for item in parsed.records}
+
+    rejected = by_id["invalid-day-1"]
+    assert rejected.conditions["status"] == "extracted"
+    assert rejected.conditions["minimum_amount"] == "100"
+    assert rejected.conditions["minimum_unit"] == "USDT"
+    assert rejected.conditions["lock_days"] is None
+    assert rejected.extraction_status == "extracted"
+    assert rejected.deadlines == ()
+    assert rejected.deadline_status == "unknown"
+    assert rejected.residual_conditions == "unknown"
+    assert rejected.described_as_temporary is False
+    assert rejected.duration_stated is False
+    quotes = {item["field"]: item["quote"] for item in rejected.provenance}
+    assert "100" in quotes["minimum_amount"] and "USDT" in quotes["minimum_amount"]
+    assert "2026-02-30" not in quotes["minimum_amount"]
+    assert "deadline" not in quotes
+    assert quotes["minimum_amount"].startswith('"')
+
+    accepted = by_id["valid-day-1"]
+    assert accepted.conditions["status"] == "extracted"
+    assert accepted.conditions["minimum_amount"] == "100"
+    assert accepted.conditions["minimum_unit"] == "USDT"
+    assert accepted.deadline_status == "extracted"
+    assert accepted.extraction_status == "extracted"
+    assert accepted.residual_conditions == "none"
+    assert accepted.described_as_temporary is True
+    ends = [item for item in accepted.deadlines if item["role"] == "end"]
+    assert len(ends) == 1
+    assert ends[0]["original"] == "2026-12-01T00:00:00Z"
+    assert ends[0]["utc"] == "2026-12-01T00:00:00Z"
+    assert "until" in ends[0]["quote"]
+    accepted_quotes = {item["field"]: item["quote"] for item in accepted.provenance}
+    assert "100" in accepted_quotes["minimum_amount"] and "USDT" in accepted_quotes["minimum_amount"]
+    assert "until" in accepted_quotes["deadline"]
+    assert "2026-12-01T00:00:00Z" in accepted_quotes["deadline"]
+
+    backend = _backend(
+        [_response(_pools_doc([_pool(LEND, total=5)]))],
+        [_response(_empty_catalog())],
+    )
+    database = Database(tmp_path / "yld-03-invalid-day.sqlite")
+    try:
+        report = _run(database, Clock(), backend, promotions=json.dumps(document).encode("utf-8"))
+        stored = _record(report, "explicit_body", "invalid-day-1")
+        assert stored["terms"]["conditions"]["minimum_amount"] == "100"
+        assert stored["terms"]["conditions"]["minimum_unit"] == "USDT"
+        assert stored["terms"]["conditions"]["lock_days"] is None
+        assert stored["terms"]["conditions"]["status"] == "extracted"
+        assert stored["terms"]["deadlines"] == []
+        assert stored["terms"]["deadline_status"] == "unknown"
+        assert stored["terms"]["extraction_status"] == "extracted"
+        assert stored["terms"]["residual_conditions"] == "unknown"
+        kept = _record(report, "explicit_body", "valid-day-1")
+        assert kept["terms"]["conditions"]["minimum_amount"] == "100"
+        assert kept["terms"]["residual_conditions"] == "none"
+        assert kept["terms"]["deadline_status"] == "extracted"
+        assert kept["terms"]["deadlines"][0]["utc"] == "2026-12-01T00:00:00Z"
+        assert not any(item["kind"] == "yield_change" for item in report["candidates"])
+        assert database.alerts_for(TENANT) == []
+        assert database.outbox_for(TENANT) == []
+        validate(report["state"], state_schema())
+    finally:
+        database.close()
+
+
 def _nested(minimum: int) -> bytes:
     nested = "0"
     while len(nested) < minimum:
