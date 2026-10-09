@@ -1,14 +1,31 @@
 # Wallet Guardian
 
-Read-only multichain wallet monitor for one operator on a machine they control. It watches addresses you type, stores coverage locally, and leaves alerts in an outbox. It is not a hosted service. A tenant id is a label, not isolation between mutually untrusted customers.
+Wallet Guardian is a read-only monitor for addresses you type, on a machine you control. It stores coverage and alerts locally. It is not a hosted service: a tenant id is a label for one operator. You can run the `guardian` command yourself, or let Grok Bot operate that same command. It does not sign, build a transaction, or broadcast, and it does not ask for a seed phrase or a private key. API keys stay in your environment. Config files store environment-variable names only (`endpoint_env`, `credential_env`). This is a preview, and it is not investment advice.
 
 It does not sign, does not build transactions, and does not broadcast. See [docs/threat-model.md](docs/threat-model.md#monitor-does-not-sign). It never asks for a seed phrase or a wallet private key. API keys stay in your environment. Config files store env var names only (`endpoint_env`, `credential_env`). What leaves the machine is described before anything is written: wallet addresses go to the RPC or indexer hosts you enable; your hostname is not added to those requests; GoPlus and Chainabuse user-address lookups stay off unless you set the key and the base. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`). `--no-send` forbids sends. See [docs/security-model.md](docs/security-model.md) and [docs/threat-model.md](docs/threat-model.md).
 
-You do not need the author's Grok session, Cloudflare, D1, a wallet login, or Node to run the monitor. The Action Client below is optional.
+**Status (preview rc.2).** The package version in this tree is `0.4.0rc1`. Read-only. Named chains: Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS, and Solana, with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path. The 72h shadow validation is not complete. Evidence for these preview commits is a local gate, not a CI pass. There is no PyPI release. Install the wheel from the project's GitLab Releases page: `<RELEASE_URL>`.
 
-This is not investment advice. Building and testing it is not permission to move mainnet assets.
+Three commands, after you download that release's wheel, `SHA256SUMS`, and `constraints.txt` and check the hash (`docs/install.md`):
 
-授權：AGPL-3.0-only（見 `LICENSE`）。
+```bash
+uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc1-py3-none-any.whl
+guardian init --from answers.json --yes
+guardian run-once --mcm-config "${XDG_CONFIG_HOME:-$HOME/.config}/guardian/monitor.json" --no-send
+guardian coverage --mcm-config "${XDG_CONFIG_HOME:-$HOME/.config}/guardian/monitor.json"
+```
+
+Copy `examples/answers.example.json` to `answers.json` first. That file's address is synthetic. `init` writes under the XDG config directory (or `GUARDIAN_CONFIG_DIR`) and prints `private_dir`. Pass that directory's `monitor.json` if it is not the path above. `run-once --no-send` still reads the endpoints you set. It leaves alerts in the local outbox and does not send them.
+
+- Read-only monitor: addresses you choose, local coverage, local outbox. No signing and no broadcast.
+- No-key and bring-your-own-key use the same files. A missing key is `credential_missing`, with a hint, not a zero balance.
+- Coverage is per chain and per source. The claim is [docs/coverage-matrix.md](docs/coverage-matrix.md). A failed read stays a gap.
+- `guardian install-service --dry-run` prints a schedule plan and exits non-zero. It does not install a unit.
+- Grok Bot can run the same CLI. The shareable template is coming; there is no template link yet.
+
+Guides: [CLI only](docs/guide-cli.md), [command reference](docs/cli-reference.md), [scheduling](docs/scheduling.md), [FAQ](docs/faq-troubleshooting.md), [Grok Bot](docs/guide-grok-bot.md), [security and privacy](docs/security-privacy.md). Contributing: [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+You do not need Cloudflare, D1, a wallet login, or Node to run the monitor. The Action Client section below is optional.
 
 The MCM-01 scope contract is [docs/mcm-01.md](docs/mcm-01.md). That document is a plan, not a live result.
 

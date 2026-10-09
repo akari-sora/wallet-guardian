@@ -10,6 +10,7 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 
 ## [Unreleased]
 
+- User-facing preview copy: a CLI guide, command reference, scheduling, FAQ, Grok Bot notes, security and privacy, a contributing guide, and GitLab issue templates.
 - A 429 on `eth_chainId` is retried inside the round deadline and a successful identity is reused for that run; the example NodeReal source shares the `nodereal-key` budget so one key is not burst across hosts.
 - Indexer catch-up starts at the lookback origin, uses one span per explorer, and stops at `bootstrap_request_cap` so a later round can resume. Plan refusals and successful DNS answers are cached.
 - Transfer-log directions split on the same ranges, 429 waits honor Retry-After inside the round deadline, and eth_getLogs counts toward `bootstrap_request_cap` so a no-key bootstrap stays bounded.
