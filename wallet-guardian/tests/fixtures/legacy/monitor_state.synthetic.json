@@ -1,0 +1,27 @@
+{
+  "_note": "synthetic fixture mirroring monitor_state keys; addresses are synthetic",
+  "alerted": [
+    "eth:evm-a:0x2222222222222222222222222222222222222222222222222222222222222222 transfer_out synthetic"
+  ],
+  "bsc_last_block": 50,
+  "ignored_spam": [],
+  "last_run_taipei": "2023-11-15T06:13:20+08:00",
+  "latest_seen": {
+    "evm-a_eth_external": "2023-11-14"
+  },
+  "news_checked": [],
+  "nonces": {
+    "0x0000000000000000000000000000000000000001": {
+      "eth": 4
+    }
+  },
+  "runs": [
+    {
+      "at": "2023-11-14T22:13:20Z",
+      "eth_since_1913": "scan"
+    }
+  ],
+  "sources": {
+    "eth": "synthetic-rpc"
+  }
+}
