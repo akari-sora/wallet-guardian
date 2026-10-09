@@ -5,10 +5,37 @@ All notable changes to the Wallet Guardian monitor are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-PEP 440 version `0.4.0rc2` maps to the git tag name `v0.4.0-rc.2`.
+PEP 440 version `0.4.0rc3` maps to the git tag name `v0.4.0-rc.3`.
 Whether that tag is published, see GitLab releases. This changelog does not publish. The distribution name is `wallet-guardian-monitor`.
 
 ## [Unreleased]
+
+## [0.4.0rc3] - 2026-10-10
+
+Preview channel. The manifest is a pre-publication evidence snapshot: its `published: false` records that generation stage, and the GitLab release is recorded separately. No package-index upload is performed. The monitor is read-only: it does not sign, build a transaction, or broadcast. Wheel: `wallet_guardian_monitor-0.4.0rc3-py3-none-any.whl`.
+
+### Added (all opt-in, experimental, or inert; none is on in the shipped example monitor)
+
+- Injection and privacy tests: untrusted feed text is quarantined per item, display text is neutralised, and a policy table (`privacy_boundary`) lists what may leave the machine. See `docs/injection-privacy-tests.md` for the residuals: a double HTML escape is cosmetic, the incident matcher can miss digit-plus-letter tokens such as "Aave v3 incident", and there is no claim of general prompt-injection immunity.
+- Opt-in positions: sDAI and Steakhouse USDC ERC-4626 pins (vault exposure only) and Compound III USDC (stored-index present value, not accrued to now; block height is not block-hash proof; a positive oracle price is not freshness). sUSDe and Morpho Blue markets are deferred. See `docs/positions-more.md`.
+- Experimental TRON reader: opt-in, the chain stays `enabled: false`, bounded native TRX and TRC-20 history and configured balances, not live-qualified, genesis identity not verified, only finalized native TRX produces alert candidates, no TRC-20 or approval alerting. Do not use it as the only safety monitor. See `docs/coverage-tron.md`.
+- Yield and promotion parsers: offline fixture and parser only, disabled. No live fetch, scheduler or delivery; extracted terms are partial interpretations. See `docs/yield-promotions.md`.
+
+### Changed
+
+- Coverage matrix, README status and install docs describe the four items above with these limits. Named networks are unchanged; there is no "all chains" claim.
+
+### Known limitations / not claimed
+
+- The 72-hour formal shadow (24 successive windows) is not complete. Evidence is the full local gate at the release SHA, not a GitLab CI pass.
+- No live Telegram canary; delivery defaults to off.
+- TRON is not live-qualified. Yield has no live path. sUSDe and Morpho Blue are not supported.
+- The aggregate release evidence stays `NOT_RUN` while the optional public-sample-probe is not executed; that is waived for the labelled preview only.
+- No PyPI release. `constraints.txt` pins versions; it does not hash-verify dependencies.
+
+### Release blockers for stable
+
+- The formal 24-window shadow; live gaps in `docs/coverage-matrix.md`; Telegram canary; a CI pass; a human decision to publish.
 
 ## [0.4.0rc2] - 2026-10-09
 

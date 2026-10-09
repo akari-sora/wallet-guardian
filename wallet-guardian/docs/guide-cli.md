@@ -1,21 +1,21 @@
 # CLI guide
 
-Wallet Guardian's monitor is a preview you run on a machine you control. The package version in this tree is `0.4.0rc2`. It is read-only: it does not sign, build a transaction, or broadcast, and it does not ask for a seed phrase or a private key. The named chains are Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS, and Solana, with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path. What each chain can actually read is [coverage-matrix.md](coverage-matrix.md). The 72h shadow validation is not complete. Checks on these preview commits are a local gate, not a CI pass. There is no PyPI release.
+Wallet Guardian's monitor is a preview you run on a machine you control. The package version in this tree is `0.4.0rc3`. It is read-only: it does not sign, build a transaction, or broadcast, and it does not ask for a seed phrase or a private key. The named chains are Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS, and Solana, with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path. What each chain can actually read is [coverage-matrix.md](coverage-matrix.md). The 72h shadow validation is not complete. Checks on these preview commits are a local gate, not a CI pass. There is no PyPI release.
 
 You do not need Grok Bot, Cloudflare, D1, a wallet login, or Node to follow this page. Flags for every command are in [cli-reference.md](cli-reference.md).
 
 ## Install
 
-Download one release's wheel, `SHA256SUMS`, and `constraints.txt` from the project's GitLab Releases page: `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.2`. Check the hash before you install. `uv tool install` does not apply `constraints.txt` unless you pass it. Do not install a package named `guardian` from PyPI. The steps and the Windows interpreter path are in [install.md](install.md).
+Download one release's wheel, `SHA256SUMS`, and `constraints.txt` from the project's GitLab Releases page: `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.3`. Check the hash before you install. `uv tool install` does not apply `constraints.txt` unless you pass it. Do not install a package named `guardian` from PyPI. The steps and the Windows interpreter path are in [install.md](install.md).
 
 ```bash
-uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl
+uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc3-py3-none-any.whl
 guardian --help
 ```
 
 Before the first `run-once`, export an endpoint for each chain you enabled, for example `export RPC_ETHEREUM_MAINNET_URL=<a public JSON-RPC URL you choose>`. Without it `run-once` stops with `endpoint_missing`. See [faq-troubleshooting.md](faq-troubleshooting.md).
 
-The wheel name in this tree is `wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl`. A later release uses that release's own wheel and constraints file.
+The wheel name in this tree is `wallet_guardian_monitor-0.4.0rc3-py3-none-any.whl`. A later release uses that release's own wheel and constraints file.
 
 ## Quickstart
 

@@ -1,6 +1,6 @@
 # Security model
 
-Wallet Guardian's monitor is a read-only program for one operator on a machine they control. The installable distribution is `wallet-guardian-monitor` (wheel `wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl`). It is not a hosted service and it does not isolate mutually untrusted customers. A `tenant_id` in the accounts file is a label for that operator's data. It is not a security boundary between customers. Whether git tag `v0.4.0-rc.2` is published, see GitLab releases.
+Wallet Guardian's monitor is a read-only program for one operator on a machine they control. The installable distribution is `wallet-guardian-monitor` (wheel `wallet_guardian_monitor-0.4.0rc3-py3-none-any.whl`). It is not a hosted service and it does not isolate mutually untrusted customers. A `tenant_id` in the accounts file is a label for that operator's data. It is not a security boundary between customers. Whether git tag `v0.4.0-rc.3` is published, see GitLab releases.
 
 授權：AGPL-3.0-only（見 `LICENSE`）。
 

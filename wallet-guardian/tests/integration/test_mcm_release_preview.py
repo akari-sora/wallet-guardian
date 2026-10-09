@@ -236,8 +236,8 @@ def test_mcm_share_s8_03_manifest_draft_immutable(tmp_path: Path) -> None:
     tool = _load("mcm_share_s8_release_manifest", "release_manifest.py")
     dist = tmp_path / "dist"
     dist.mkdir()
-    wheel = dist / "wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl"
-    sdist = dist / "wallet_guardian_monitor-0.4.0rc2.tar.gz"
+    wheel = dist / "wallet_guardian_monitor-0.4.0rc3-py3-none-any.whl"
+    sdist = dist / "wallet_guardian_monitor-0.4.0rc3.tar.gz"
     constraints = dist / "constraints.txt"
     wheel.write_bytes(b"synthetic-wheel-s8")
     sdist.write_bytes(b"synthetic-sdist-s8")
@@ -270,10 +270,10 @@ def test_mcm_share_s8_03_manifest_draft_immutable(tmp_path: Path) -> None:
     assert payload["tag"] is None
     assert payload["channel"] == "preview"
     assert payload["tag_created"] is False
-    assert payload["version"] == "0.4.0rc2"
+    assert payload["version"] == "0.4.0rc3"
     assert payload["license_spdx"] == "AGPL-3.0-only"
     assert payload["requires_python"] == ">=3.12"
-    assert payload["git_tag_name"] == "v0.4.0-rc.2"
+    assert payload["git_tag_name"] == "v0.4.0-rc.3"
     assert payload["source_sha"] == SHA
     assert payload["wheel"]["name"] == wheel.name
     assert payload["wheel"]["sha256"] == hashlib.sha256(wheel.read_bytes()).hexdigest()
@@ -310,7 +310,7 @@ def test_mcm_share_s8_03_manifest_draft_immutable(tmp_path: Path) -> None:
     draft = json.loads(_text(DRAFT))
     assert draft["published"] is False
     assert draft["tag"] is None
-    assert draft["version"] == "0.4.0rc2"
+    assert draft["version"] == "0.4.0rc3"
     assert draft["channel"] == "preview"
     # The committed draft is a template: the real hash is computed when a manifest is cut for a dist.
     # Pinning it here would break on every unrelated src/ change.
@@ -330,8 +330,8 @@ def test_mcm_share_s8_03_manifest_refuses_credentials(
     tool = _load("mcm_share_s8_release_manifest", "release_manifest.py")
     dist = tmp_path / "dist"
     dist.mkdir()
-    (dist / "wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl").write_bytes(b"synthetic-wheel-s8")
-    (dist / "wallet_guardian_monitor-0.4.0rc2.tar.gz").write_bytes(b"synthetic-sdist-s8")
+    (dist / "wallet_guardian_monitor-0.4.0rc3-py3-none-any.whl").write_bytes(b"synthetic-wheel-s8")
+    (dist / "wallet_guardian_monitor-0.4.0rc3.tar.gz").write_bytes(b"synthetic-sdist-s8")
     (dist / "constraints.txt").write_bytes(b"httpx==0.28.1\n")
     output = tmp_path / "manifest.draft.json"
     monkeypatch.setenv("ETHERSCAN_API_KEY", "synthetic-secret-value")
@@ -344,15 +344,15 @@ def test_mcm_share_s8_03_manifest_refuses_credentials(
 
 
 def test_mcm_share_s8_04_version_consistency(tmp_path: Path) -> None:
-    """S8-04. Version sources agree on 0.4.0rc2, and a copied mismatch is reported."""
+    """S8-04. Version sources agree on 0.4.0rc3, and a copied mismatch is reported."""
     tool = _load("mcm_share_s8_check_version", "check_version_consistency.py")
     raw = json.loads(_text_from_main(tool))
     assert raw["ok"] is True
     assert raw["tag_created"] is False
-    assert raw["tag_name"] == "v0.4.0-rc.2"
-    assert tool.tag_name_for_pep440("0.4.0rc2") == "v0.4.0-rc.2"
+    assert raw["tag_name"] == "v0.4.0-rc.3"
+    assert tool.tag_name_for_pep440("0.4.0rc3") == "v0.4.0-rc.3"
     for name, value in raw["versions"].items():
-        assert value == "0.4.0rc2", name
+        assert value == "0.4.0rc3", name
     assert tool.consistency_errors(WG) == []
 
     root = tmp_path / "copy"
@@ -364,16 +364,16 @@ def test_mcm_share_s8_04_version_consistency(tmp_path: Path) -> None:
         target.write_bytes((WG / rel).read_bytes())
     changelog = root / "CHANGELOG.md"
     changelog.write_text(
-        changelog.read_text(encoding="utf-8").replace("## [0.4.0rc2]", "## [0.4.0rc3]", 1),
+        changelog.read_text(encoding="utf-8").replace("## [0.4.0rc3]", "## [0.4.0rc4]", 1),
         encoding="utf-8",
         newline="\n",
     )
     buffer = io.StringIO()
     with redirect_stdout(buffer):
         assert tool.main(["--root", str(root)]) == 1
-    assert "changelog=0.4.0rc3" in buffer.getvalue()
+    assert "changelog=0.4.0rc4" in buffer.getvalue()
     errors = tool.consistency_errors(root)
-    assert any("changelog=0.4.0rc3" in item for item in errors)
+    assert any("changelog=0.4.0rc4" in item for item in errors)
     assert any("mismatch:" in item for item in errors)
 
     # The release tag may exist in a checkout that fetched tags (a release tag is
@@ -394,16 +394,16 @@ def _text_from_main(tool) -> str:
 def test_mcm_share_s8_05_changelog_nonclaims() -> None:
     """S8-05. The changelog names the preview, the gaps, and the stable blockers."""
     changelog = _text(CHANGELOG)
-    assert "## [0.4.0rc2]" in changelog
+    assert "## [0.4.0rc3]" in changelog
     assert "### Known limitations / not claimed" in changelog
     assert "### Release blockers for stable" in changelog
     assert "NOT_RUN" in changelog
-    assert "v0.4.0-rc.2" in changelog
+    assert "v0.4.0-rc.3" in changelog
     preview = _text(PREVIEW)
     matrix = _text(MATRIX)
     assert "has not been run" in matrix
     assert "NOT_RUN" in preview
-    assert "v0.4.0-rc.2" in preview
+    assert "v0.4.0-rc.3" in preview
     claimed = []
     for path in (WG / "docs").rglob("*.md"):
         for line in _text(path).splitlines():
