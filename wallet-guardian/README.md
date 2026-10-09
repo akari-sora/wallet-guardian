@@ -129,3 +129,7 @@ uv run pytest -q
 ## 資料來源
 
 BNB Chain 官方 RPC、Lista 官方文件上的 StakeManager proxy、Hyperliquid 公開 info、Etherscan V2 chainlist、OFAC SDN CSV。文件網址與查證等級見 `docs/source-registry.json` 與 doctor 產生的 `source_registry.json`。
+
+## License
+
+Wallet Guardian is licensed under the GNU Affero General Public License v3.0 only (SPDX: AGPL-3.0-only). See [LICENSE](LICENSE). If you run a modified version as a network service, AGPL section 13 requires offering its source to that service's users.
