@@ -40,6 +40,7 @@ class _Stop(Exception):
 @dataclass
 class _State:
     failed: bool = False
+    blocked: bool = False
     reason: str = ""
     explode: Exception | None = None
 
@@ -215,6 +216,12 @@ class NodeRealClient:
                 state.reason = "error"
                 raise _Stop() from None
             body = result.body
+            refusal = _method_refusal(body)
+            if refusal:
+                state.failed = True
+                state.blocked = True
+                state.reason = refusal
+                raise _Stop()
             if not result.ok or not isinstance(body, dict):
                 state.failed = True
                 state.reason = str(getattr(result, "reason", "error"))
@@ -240,7 +247,9 @@ class NodeRealClient:
             raise state.explode
         if state.failed or walk.stop_reason != "exhausted":
             reason = state.reason or walk.stop_reason or "error"
-            return HistoryRead(capability, (), False, False, (), None, "error", False, reason, (reason,), "")
+            return HistoryRead(
+                capability, (), False, False, (), None, "error", state.blocked, reason, (reason,), "",
+            )
         tagged = tuple(_tag(item, category) for item in walk.items)
         name = "empty" if not tagged else "ok"
         return HistoryRead(capability, tagged, True, True, (), None, name, False, "", (), "")
@@ -276,6 +285,26 @@ def _tag(item: Any, category: str) -> Any:
     copied = dict(item)
     copied.setdefault("category", category)
     return copied
+
+
+def _method_refusal(body: Any) -> str | None:
+    """A refused method is blocked. It is not an empty transfer list and not an eth_call."""
+    if not isinstance(body, dict):
+        return None
+    err = body.get("error")
+    code = None
+    message = ""
+    if isinstance(err, dict):
+        code = err.get("code")
+        message = str(err.get("message") or "")
+    elif isinstance(err, str):
+        message = err
+    text = message.lower()
+    if code == -32601 or "method not found" in text or "method-not-found" in text:
+        return "method_not_found"
+    if code in {-32001, 401} or "unauthorized" in text or "not allowed" in text:
+        return "unauthorized"
+    return None
 
 
 def _kept(capability: str, previous: str | None, reason: str) -> HistoryRead:

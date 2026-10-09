@@ -79,6 +79,7 @@ class TransportResult:
     blocked: bool
     reason: str
     headers: dict[str, str]
+    detail: str = ""
 
     @property
     def ok(self) -> bool:
@@ -243,7 +244,11 @@ class ReadOnlyTransport:
                     raise SecurityError("redirect_host", reason="redirect_host")
                 current = target
                 continue
-            return _finish(source_id, operation.protocol, raw, self.max_response_bytes)
+            result = _finish(source_id, operation.protocol, raw, self.max_response_bytes)
+            ledger = getattr(self, "provenance", None)
+            if ledger is not None:
+                ledger.observe(source, operation, result)
+            return result
 
     def request_allowlisted_get(
         self,
@@ -433,7 +438,7 @@ def _bind_credential(call: PreparedCall, source: RegisteredSource, operation: Op
 
 def _format_credential(adapter: str, secret: MaskedSecret) -> MaskedSecret:
     raw = secret.reveal()
-    if adapter == "goplus":
+    if adapter in {"blockscout", "goplus"}:
         return MaskedSecret(f"Bearer {raw}")
     if adapter == "chainabuse":
         token = base64.b64encode(f"{raw}:".encode("utf-8")).decode("ascii")
@@ -513,7 +518,7 @@ def _finish(source_id: str, protocol: str, raw: RawResponse, max_bytes: int) -> 
     headers = {str(key).lower(): str(value) for key, value in raw.headers.items()}
     if raw.status >= 400 or raw.status < 200:
         classification = classify_response(raw.status, None)
-        return _result(source_id, raw.status, None, classification, headers)
+        return _result(source_id, raw.status, None, classification, headers, detail=_snippet(raw.body))
     try:
         parsed = _parse_body(protocol, raw.body)
     except TransportError:
@@ -523,7 +528,14 @@ def _finish(source_id: str, protocol: str, raw: RawResponse, max_bytes: int) -> 
     return _result(source_id, raw.status, body, classification, headers)
 
 
-def _result(source_id: str, status: int, body: Any, classification: Classification, headers: dict[str, str]) -> TransportResult:
+def _result(
+    source_id: str,
+    status: int,
+    body: Any,
+    classification: Classification,
+    headers: dict[str, str],
+    detail: str = "",
+) -> TransportResult:
     return TransportResult(
         source_id=source_id,
         status=status,
@@ -534,7 +546,19 @@ def _result(source_id: str, status: int, body: Any, classification: Classificati
         blocked=classification.blocked,
         reason=classification.reason,
         headers=headers,
+        detail=detail,
     )
+
+
+def _snippet(body: bytes) -> str:
+    """Short error text for classification. It is not a coverage field and not a log line."""
+    if not body:
+        return ""
+    try:
+        text = body.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    return text[:2000]
 
 
 def _parse_body(protocol: str, body: bytes) -> Any:

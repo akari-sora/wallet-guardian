@@ -134,24 +134,24 @@
       "support": "not_applicable"
     },
     "permissions.erc1155_operator": {
-      "notes": "",
+      "notes": "ApprovalForAll logs from an explicit origin. Older history stays unknown.",
       "probe": "untested",
-      "support": "unsupported"
+      "support": "partial"
     },
     "permissions.erc20": {
-      "notes": "",
+      "notes": "Approval logs from an explicit origin. Older history stays unknown.",
       "probe": "untested",
-      "support": "unsupported"
+      "support": "partial"
     },
     "permissions.erc721_operator": {
-      "notes": "",
+      "notes": "ApprovalForAll logs from an explicit origin. Older history stays unknown.",
       "probe": "untested",
-      "support": "unsupported"
+      "support": "partial"
     },
     "permissions.erc721_token": {
-      "notes": "",
+      "notes": "Approval logs from an explicit origin. Older history stays unknown.",
       "probe": "untested",
-      "support": "unsupported"
+      "support": "partial"
     },
     "permissions.move_capability": {
       "notes": "",

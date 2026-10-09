@@ -851,7 +851,7 @@ def test_mcm_w1_03_snapshot_cycle_after_migration_does_not_reemit(tmp_path):
 
 def test_mcm_w1_04_profile_roundtrip_and_safe_export(tmp_path):
     config = load_public_config(ROOT / "examples" / "monitor.json")
-    assert config.document["plugins"] == ["lista-slisbnb", "aave-v3", "erc4626-registered"]
+    assert config.document["plugins"] == ["lista-slisbnb", "aave-v3", "erc4626-registered", "kinza", "uxlink-holdings"]
     source = (SRC / "configuration.py").read_text(encoding="utf-8")
     assert "importlib" not in source and "exec(" not in source and "eval(" not in source
     accounts = _accounts_doc([

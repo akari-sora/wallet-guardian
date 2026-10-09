@@ -14,7 +14,7 @@ from typing import Any
 from guardian.errors import SecurityError
 from guardian.security.transport_policy import Operation
 from guardian.sources.budget import BudgetExhausted
-from guardian.sources.etherscan import HistoryRead
+from guardian.sources.etherscan import HistoryRead, plan_not_supported
 from guardian.sources.pagination import walk_page_key
 from guardian.sources.retry import read_with_retry
 from guardian.sources.transport import TransportError
@@ -44,20 +44,28 @@ class BlockscoutClient:
         clock: Callable[[], float] | None = None,
         sleep: Callable[[float], None] | None = None,
         random: Callable[[], float] | None = None,
+        credential: str | None = None,
     ) -> None:
         self.transport = transport
         self.source_id = source_id
         self.clock = clock or (lambda: 0.0)
         self.sleep = sleep or (lambda _seconds: None)
         self.random = random or (lambda: 0.0)
+        self._credential = credential if isinstance(credential, str) else ""
 
-    def operation(self, path: str, query: Mapping[str, str] | None = None) -> Operation:
+    def operation(
+        self,
+        path: str,
+        query: Mapping[str, str] | None = None,
+        headers: tuple[str, ...] | None = None,
+    ) -> Operation:
         return Operation(
             protocol="rest",
             adapter="blockscout",
             http_method="GET",
             path=path,
             query=dict(query) if query else None,
+            headers=headers,
         )
 
     def page_query(self, params: Mapping[str, Any]) -> dict[str, str]:
@@ -75,6 +83,102 @@ class BlockscoutClient:
         if not query:
             raise ValueError("bad_page")
         return query
+
+    def account_history(
+        self,
+        *,
+        action: str,
+        address: str,
+        start_block: int,
+        end_block: int,
+        page_size: int = 1000,
+        page_cap: int = 20,
+        previous_cursor: str | None = None,
+        chain_id: int | None = None,
+        pro: bool = False,
+    ) -> HistoryRead:
+        """Etherscan-compatible account pages.
+
+        PRO uses ``/v2/api`` and ``chain_id``. A key is ``Authorization: Bearer``,
+        never a query value. A keyless instance uses ``/api`` and no key.
+        """
+        capability = {
+            "txlist": "history.native_external",
+            "txlistinternal": "history.native_internal",
+            "tokentx": "history.fungible",
+            "getLogs": "history.logs",
+        }.get(action, "unspecified")
+        if action not in {"txlist", "txlistinternal", "tokentx", "getLogs"}:
+            return _kept(capability, previous_cursor, "unknown_action")
+        if not isinstance(page_size, int) or isinstance(page_size, bool) or page_size < 1:
+            return _kept(capability, previous_cursor, "bad_page")
+        if pro and (isinstance(chain_id, bool) or not isinstance(chain_id, int)):
+            return _kept(capability, previous_cursor, "chain_id_missing")
+        items: list[Any] = []
+        page = 1
+        while page <= page_cap:
+            query = {
+                "action": action,
+                "address": address,
+                "endblock": str(end_block),
+                "module": "account" if action != "getLogs" else "logs",
+                "offset": str(page_size),
+                "page": str(page),
+                "sort": "asc",
+                "startblock": str(start_block),
+            }
+            path = "/api"
+            headers = None
+            if pro:
+                query["chain_id"] = str(chain_id)
+                path = "/v2/api"
+            if self._credential:
+                headers = ("authorization",)
+            operation = self.operation(path, query, headers)
+            try:
+                result = read_with_retry(
+                    lambda: self.transport.request(self.source_id, operation),
+                    retry_attempts=self.transport.retry_attempts(self.source_id),
+                    sleep=self.sleep,
+                    random=self.random,
+                    clock=self.clock,
+                )
+            except (SecurityError, BudgetExhausted):
+                raise
+            except TransportError as exc:
+                return _kept(capability, previous_cursor, exc.reason)
+            except Exception:
+                return _kept(capability, previous_cursor, "error")
+            refusal = _http_refusal(result)
+            if refusal:
+                return _refused(capability, previous_cursor, refusal)
+            body = result.body
+            if plan_not_supported(body):
+                return HistoryRead(
+                    capability, (), False, False, (), previous_cursor, "error", True,
+                    "plan_not_supported", ("plan_not_supported",), "",
+                )
+            if not result.ok or not isinstance(body, dict):
+                return _kept(capability, previous_cursor, str(getattr(result, "reason", "error") or "error"))
+            rows = body.get("result")
+            message = str(body.get("message") or "")
+            if isinstance(rows, str):
+                lowered = f"{message} {rows}".lower()
+                if "no transactions found" in lowered or "no records found" in lowered:
+                    break
+                return _kept(capability, previous_cursor, "malformed")
+            if not isinstance(rows, list):
+                return _kept(capability, previous_cursor, "missing_items")
+            items.extend(rows)
+            if len(rows) < page_size:
+                break
+            page += 1
+        else:
+            return _kept(capability, previous_cursor, "page_cap")
+        category = "empty" if not items else "ok"
+        return HistoryRead(
+            capability, tuple(items), True, True, (), str(end_block), category, False, "", (), "",
+        )
 
     def walk(
         self,
@@ -167,3 +271,49 @@ def _address_path(path: str) -> bool:
 
 def _kept(capability: str, previous: str | None, reason: str) -> HistoryRead:
     return HistoryRead(capability, (), False, False, (), previous, "error", False, reason, (reason,) if reason else (), "")
+
+
+def _refused(capability: str, previous: str | None, reason: str) -> HistoryRead:
+    return HistoryRead(
+        capability, (), False, False, (), previous, "error", True, reason, (reason,), "",
+    )
+
+
+def _http_refusal(result: Any) -> str:
+    """Map Blockscout PRO and Cloudflare failures. They are not an empty wallet."""
+    status = getattr(result, "status", 0)
+    if isinstance(status, bool) or not isinstance(status, int):
+        status = 0
+    text = _error_text(result)
+    if status == 402 or _featured(text) or _needs_key(text):
+        if _featured(text):
+            return "plan_not_supported"
+        return "credential_missing"
+    if status == 403 and _bot_challenge(text):
+        return "bot_challenge"
+    return ""
+
+
+def _error_text(result: Any) -> str:
+    parts = [str(getattr(result, "detail", "") or "")]
+    body = getattr(result, "body", None)
+    if isinstance(body, dict):
+        for key in ("error", "message", "result"):
+            value = body.get(key)
+            if isinstance(value, str):
+                parts.append(value)
+    elif isinstance(body, str):
+        parts.append(body)
+    return " ".join(parts).lower()
+
+
+def _featured(text: str) -> bool:
+    return "featured chain" in text and "plan" in text
+
+
+def _needs_key(text: str) -> bool:
+    return "proceed with api key" in text or "x402" in text
+
+
+def _bot_challenge(text: str) -> bool:
+    return "just a moment" in text

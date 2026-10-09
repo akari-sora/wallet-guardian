@@ -91,6 +91,14 @@
           "type": "integer",
           "minimum": 1
         },
+        "bootstrap_origin": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "round_deadline_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
         "webhooks_enabled": {
           "const": false
         }
@@ -217,6 +225,27 @@
           },
           "enabled": {
             "type": "boolean"
+          },
+          "log_range_max": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          },
+          "batch_reads": {
+            "type": "boolean"
+          },
+          "log_contract": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          },
+          "method_credits": {
+            "type": "integer",
+            "minimum": 1
           }
         },
         "required": [

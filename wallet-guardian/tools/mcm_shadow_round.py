@@ -149,6 +149,12 @@ def run_round(
     if drill == "restart":
         _write_json(evidence / "restart-proof.json", _restart_proof(legacy))
     budget = transport.snapshot()
+    try:
+        reported = json.loads(run_out)
+    except json.JSONDecodeError:
+        reported = None
+    if isinstance(reported, dict) and isinstance(reported.get("budget"), dict):
+        budget["run_once"] = reported["budget"]
     _write_json(evidence / "budget.json", budget)
     leaks = _leak_scan(mcm_config, evidence)
     _write_json(evidence / "leak-scan.json", {"leaks": leaks})
@@ -268,6 +274,9 @@ class CountingBackend:
         self.etherscan_calls = 0
         self.news_gets = 0
         self.kinza_eth_calls = 0
+        self.logical_methods = 0
+        self.http_calls = 0
+        self.credits = 0
 
     def send(self, call: Any) -> Any:
         self._observe(call)
@@ -282,8 +291,11 @@ class CountingBackend:
 
     def snapshot(self) -> dict[str, Any]:
         return {
+            "credits": self.credits,
             "etherscan_calls": self.etherscan_calls,
+            "http_calls": self.http_calls,
             "kinza_eth_calls": self.kinza_eth_calls,
+            "logical_methods": self.logical_methods,
             "news_gets": self.news_gets,
             "rpc_calls_by_network": dict(sorted(self.rpc_calls.items())),
         }
@@ -292,28 +304,37 @@ class CountingBackend:
         source_id = str(getattr(call, "source_id", "") or "")
         method = str(getattr(call, "method", "") or "").upper()
         body = getattr(call, "body", b"") or b""
-        payload: dict[str, Any] = {}
+        payloads: list[dict[str, Any]] = []
         if body:
             try:
                 parsed = json.loads(body.decode("utf-8"))
             except (UnicodeError, json.JSONDecodeError):
                 parsed = None
-            if isinstance(parsed, dict):
-                payload = parsed
-        rpc_method = payload.get("method") if isinstance(payload.get("method"), str) else ""
-        if "etherscan" in source_id:
-            self.etherscan_calls += 1
-        elif source_id.startswith("rpc-"):
-            self.rpc_calls[source_id.removeprefix("rpc-")] += 1
-        if method == "GET" and ("news" in source_id or getattr(call, "protocol", "") == "xml"):
-            self.news_gets += 1
-        if rpc_method == "eth_call":
-            params = payload.get("params") if isinstance(payload.get("params"), list) else []
-            target = ""
-            if params and isinstance(params[0], dict) and isinstance(params[0].get("to"), str):
-                target = params[0]["to"].lower()
-            if target in _KINZA:
-                self.kinza_eth_calls += 1
+            if isinstance(parsed, list):
+                payloads = [item for item in parsed if isinstance(item, dict)]
+            elif isinstance(parsed, dict):
+                payloads = [parsed]
+        if not payloads:
+            payloads = [{}]
+        self.http_calls += 1
+        each = 20 if "blockscout" in source_id else 1
+        self.logical_methods += len(payloads)
+        self.credits += each * len(payloads)
+        for payload in payloads:
+            rpc_method = payload.get("method") if isinstance(payload.get("method"), str) else ""
+            if "etherscan" in source_id:
+                self.etherscan_calls += 1
+            elif source_id.startswith("rpc-"):
+                self.rpc_calls[source_id.removeprefix("rpc-")] += 1
+            if method == "GET" and ("news" in source_id or getattr(call, "protocol", "") == "xml"):
+                self.news_gets += 1
+            if rpc_method == "eth_call":
+                params = payload.get("params") if isinstance(payload.get("params"), list) else []
+                target = ""
+                if params and isinstance(params[0], dict) and isinstance(params[0].get("to"), str):
+                    target = params[0]["to"].lower()
+                if target in _KINZA:
+                    self.kinza_eth_calls += 1
 
 
 class _GuardedSender:
@@ -603,6 +624,11 @@ def _object(text: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _lf_bytes(data: bytes) -> bytes:
+    """CRLF and lone CR become LF so Windows and Linux hash the same checkout."""
+    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def content_hash(root: Path) -> str:
     """Scope identity: file contents under src/guardian and config/, not a commit SHA.
 
@@ -619,7 +645,7 @@ def content_hash(root: Path) -> str:
                 continue
             digest.update(f"{top}/{path.relative_to(base).as_posix()}".encode("utf-8"))
             digest.update(b"\0")
-            digest.update(path.read_bytes())
+            digest.update(_lf_bytes(path.read_bytes()))
             digest.update(b"\0")
     return digest.hexdigest()
 

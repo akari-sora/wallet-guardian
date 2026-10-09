@@ -140,7 +140,8 @@ def test_mcm_w9_01_first_run_no_code_edit(tmp_path: Path, monkeypatch: pytest.Mo
     assert sol_native["quality"] == "complete_in_declared_scope"
     assert eth_native["price_quality"] == "unknown"
     assert sol_native["price_quality"] == "unknown"
-    assert history["quality"] == "partial"
+    assert history["quality"] == "complete_in_declared_scope"
+    assert "incremental_window_complete" in history["reason_codes"]
     assert "not_queried" not in history["reason_codes"]
     assert external["quality"] == "error"
     assert "credential_missing" in external["reason_codes"]

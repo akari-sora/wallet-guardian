@@ -219,10 +219,11 @@ def test_mcm_live_l0_03_restart_cursor_pagination_gap(tmp_path: Path, monkeypatc
     assert len(pages) >= 2
     assert min(row["from_block"] for row in pages) == 99
     assert max(row["from_block"] for row in pages) > 99
-    assert _cursor(desk, "history.fungible") == "100"
-    assert _cursor(desk, "permissions.erc20") == "100"
+    assert _cursor(desk, "history.fungible") == "4600"
+    assert _cursor(desk, "permissions.erc20") == "4600"
     history = next(row for row in report["coverage"] if row["capability"] == "history.fungible" and row["wallet_id"] == WALLET_A)
-    assert "unread_gap" in history["reason_codes"]
+    assert history["scope"]["gap_detection_complete"] is True
+    assert "unread_gap" not in history["reason_codes"]
     assert report.get("live_pass") is not True
 
 

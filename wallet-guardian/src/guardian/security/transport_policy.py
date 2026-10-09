@@ -127,7 +127,7 @@ _RPC_KEYS = frozenset({"id", "jsonrpc", "method", "params"})
 # example Esplora under /api) must include that base in the request path.
 _GET_PREFIXES: dict[str, tuple[str, ...]] = {
     "aptos_rest": ("/v1/accounts/", "/v1/transactions/by_hash/", "/v1/transactions/by_version/", "/v1/blocks/", "/v1"),
-    "blockscout": ("/api/v2/addresses/", "/api/v2/transactions/", "/api/v2/tokens/", "/api/v2/blocks/", "/api/v2/stats", "/api"),
+    "blockscout": ("/api/v2/addresses/", "/api/v2/transactions/", "/api/v2/tokens/", "/api/v2/blocks/", "/api/v2/stats", "/api", "/v2/api"),
     "chainabuse": ("/v0/reports", "/v0/addresses/"),
     "coingecko": ("/api/v3/simple/", "/api/v3/coins/", "/api/v3/ping"),
     "cosmos_rest": ("/cosmos/bank/v1beta1/", "/cosmos/staking/v1beta1/", "/cosmos/authz/v1beta1/", "/cosmos/feegrant/v1beta1/", "/cosmos/base/tendermint/v1beta1/", "/ibc/core/channel/v1/", "/cosmos/tx/v1beta1/txs/"),
@@ -138,6 +138,7 @@ _GET_PREFIXES: dict[str, tuple[str, ...]] = {
 }
 
 CREDENTIAL_HEADERS = {
+    "blockscout": frozenset({"authorization"}),
     "chainabuse": frozenset({"authorization"}),
     "goplus": frozenset({"authorization"}),
 }

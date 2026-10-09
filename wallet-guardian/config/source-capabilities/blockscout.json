@@ -30,6 +30,11 @@
       "http_method": "GET",
       "path": "/api/v2/transactions/*",
       "protocol": "rest"
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/api",
+      "protocol": "rest"
     }
   ],
   "backend": "blockscout",
