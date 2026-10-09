@@ -1,0 +1,191 @@
+{
+  "adapter": "alchemy_transfers",
+  "allowed_operations": [
+    {
+      "method": "alchemy_getAssetTransfers",
+      "protocol": "jsonrpc"
+    }
+  ],
+  "backend": "alchemy",
+  "capabilities": {
+    "address_risk": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "asset_risk": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.fungible": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.native": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.nft": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "bridges": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "exposure_news": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "history.fungible": {
+      "notes": "erc20 asset transfers only. A page is not a complete token history and is not an approval scan. Not a live pass.",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "history.native_external": {
+      "notes": "external category, fromAddress and toAddress queried separately, pageKey until absent, fixed fromBlock and toBlock. 120 CU per call is an estimate. Not a live pass.",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "history.native_internal": {
+      "notes": "This path does not request internal transfers. A missing internal read is not an empty history.",
+      "probe": "documented",
+      "support": "unsupported"
+    },
+    "history.nft": {
+      "notes": "erc721 and erc1155 transfers can be returned. This adapter does not mark NFT history complete. Not a live pass.",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "permissions.cosmos_authz": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.cosmos_feegrant": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.erc1155_operator": {
+      "notes": "Asset transfers do not complete ApprovalForAll. This capability stays unsupported here.",
+      "probe": "documented",
+      "support": "unsupported"
+    },
+    "permissions.erc20": {
+      "notes": "Asset transfers do not complete Approval. This capability stays unsupported here.",
+      "probe": "documented",
+      "support": "unsupported"
+    },
+    "permissions.erc721_operator": {
+      "notes": "Asset transfers do not complete ApprovalForAll. This capability stays unsupported here.",
+      "probe": "documented",
+      "support": "unsupported"
+    },
+    "permissions.erc721_token": {
+      "notes": "Asset transfers do not complete Approval. This capability stays unsupported here.",
+      "probe": "documented",
+      "support": "unsupported"
+    },
+    "permissions.move_capability": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.spl_authority": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.spl_delegate": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.ton_extensions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.tron_account": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permits.dai_variant": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permits.erc2612_observed": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permits.offchain_unused": {
+      "notes": "未提交的離線簽名不可觀察，不能標成 complete。",
+      "probe": "documented",
+      "support": "not_observable"
+    },
+    "permit2.allowance": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permit2.signature_usage": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "positions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "sanctions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "withdrawals": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    }
+  },
+  "families": [
+    "evm"
+  ],
+  "limits": [
+    {
+      "name": "alchemy_getAssetTransfers",
+      "notes": "Published compute-unit table lists alchemy_getAssetTransfers at 120 CU per call. This package records that as an estimate, not a live measurement. maxCount stays 1000 (0x3e8). pageKey continues until it is absent. fromAddress and toAddress are separate calls. fromBlock and toBlock stay a fixed window, never latest.",
+      "retrieved": "2026-10-09",
+      "source_url": "https://www.alchemy.com/docs/reference/compute-unit-costs",
+      "cu_per_call": 120,
+      "cu_basis": "estimate",
+      "max_count": 1000
+    },
+    {
+      "name": "alchemy_free_tier",
+      "notes": "Free tier is about 30,000,000 compute units per month and 300 compute units per second. Recorded as an estimate from the pricing page, not a live quota read.",
+      "retrieved": "2026-10-09",
+      "source_url": "https://www.alchemy.com/docs/reference/pricing-plans",
+      "cu_per_month": 30000000,
+      "cu_per_second": 300,
+      "cu_basis": "estimate"
+    }
+  ],
+  "networks": [
+    "base-mainnet"
+  ],
+  "notes": "JSON-RPC alchemy_getAssetTransfers for Base external, erc20, erc721, and erc1155 transfers. fromAddress and toAddress are separate calls. pageKey is followed until it is absent. fromBlock and toBlock are a fixed window. 120 CU per call is an estimate. Internal transfers are not requested. Approval and ApprovalForAll stay on the log path. Free eth_getLogs is 10 blocks and is not an allowed method here. No live verification.",
+  "probe": "untested",
+  "protocol": "jsonrpc"
+}

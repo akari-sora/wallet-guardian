@@ -66,7 +66,7 @@ Clock = Callable[[], float]
 _APPLICABLE = frozenset({"implemented", "partial"})
 _CURSOR_OVERLAP = 2
 _INCLUSION_LAG = 12
-_INDEXER_ADAPTERS = frozenset({"etherscan_v2", "nodereal_transfers", "blockscout"})
+_INDEXER_ADAPTERS = frozenset({"alchemy_transfers", "etherscan_v2", "nodereal_transfers", "blockscout"})
 _FALLBACK_INDEXERS = {
     "base-mainnet": "blockscout",
     "bsc-mainnet": "nodereal_transfers",
@@ -1809,6 +1809,10 @@ def _required_map(enabled, rows, observations, position_summaries, public_config
 def _indexer_ready(public_config, private_inputs, network: str) -> bool:
     if network == "avalanche-c":
         return False
+    # Base stays required while any enabled indexer is on the route. A missing
+    # preferred key must not move the capability out of the required set.
+    if network == "base-mainnet":
+        return _base_history_required(public_config)
     source_id = _routed(public_config, network, "history.native_external")
     if source_id is None:
         return False
@@ -1818,6 +1822,19 @@ def _indexer_ready(public_config, private_inputs, network: str) -> bool:
     status = private_inputs.source_status.get(source_id)
     credential = source.get("credential_env")
     return isinstance(credential, str) and status is not None and status.credential_present
+
+
+def _base_history_required(public_config) -> bool:
+    for route in public_config.document["routing"]:
+        if route.get("network") != "base-mainnet" or route.get("capability") != "history.native_external":
+            continue
+        for source_id in route.get("source_ids") or []:
+            if not isinstance(source_id, str):
+                continue
+            source = public_config.document["sources"].get(source_id, {})
+            if source.get("enabled") is True and source.get("adapter") in _INDEXER_ADAPTERS:
+                return True
+    return False
 
 
 def _health_from_observation(observation: CoverageObservation | None) -> str:

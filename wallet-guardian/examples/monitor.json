@@ -185,6 +185,28 @@
       "budget_group": "blockscout-polygon-public",
       "enabled": true,
       "method_credits": 20
+    },
+    "alchemy-base": {
+      "adapter": "alchemy_transfers",
+      "endpoint_env": "ALCHEMY_TRANSFERS_URL",
+      "credential_env": "ALCHEMY_API_KEY",
+      "budget_group": "alchemy-base",
+      "enabled": true,
+      "method_credits": 120
+    },
+    "tenderly_base": {
+      "adapter": "evm_rpc",
+      "endpoint_env": "TENDERLY_BASE_URL",
+      "budget_group": "tenderly-base",
+      "enabled": true,
+      "range_limit": 1000
+    },
+    "base-1rpc": {
+      "adapter": "evm_rpc",
+      "endpoint_env": "BASE_1RPC_URL",
+      "budget_group": "base-1rpc",
+      "enabled": false,
+      "range_limit": 50
     }
   },
   "routing": [
@@ -287,20 +309,23 @@
       "network": "base-mainnet",
       "capability": "history.token",
       "source_ids": [
-        "rpc-base-mainnet"
+        "tenderly_base",
+        "base-1rpc"
       ]
     },
     {
       "network": "base-mainnet",
       "capability": "permissions.standard",
       "source_ids": [
-        "rpc-base-mainnet"
+        "tenderly_base",
+        "base-1rpc"
       ]
     },
     {
       "network": "base-mainnet",
       "capability": "history.native_external",
       "source_ids": [
+        "alchemy-base",
         "blockscout-pro",
         "blockscout-base-public",
         "blockscout-base"
@@ -556,6 +581,25 @@
       "max_rps": 5,
       "max_concurrency": 1,
       "max_requests_per_day": 5000,
+      "retry_attempts": 3
+    },
+    "alchemy-base": {
+      "max_rps": 2,
+      "max_concurrency": 1,
+      "max_requests_per_day": 20000,
+      "max_credits_per_month": 30000000,
+      "retry_attempts": 3
+    },
+    "tenderly-base": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 10000,
+      "retry_attempts": 3
+    },
+    "base-1rpc": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 10000,
       "retry_attempts": 3
     }
   },

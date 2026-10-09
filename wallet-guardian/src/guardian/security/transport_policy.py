@@ -89,7 +89,10 @@ SUI_GRPC_READ_METHODS = frozenset({
     "sui.rpc.v2.StateService/ListOwnedObjects",
 })
 
+ALCHEMY_READ_METHODS = frozenset({"alchemy_getAssetTransfers"})
+
 ADAPTER_PROTOCOL = {
+    "alchemy_transfers": "jsonrpc",
     "aptos_indexer": "graphql",
     "aptos_rest": "rest",
     "blockscout": "rest",
@@ -114,6 +117,7 @@ ADAPTER_PROTOCOL = {
 }
 
 _JSONRPC_METHODS = {
+    "alchemy_transfers": ALCHEMY_READ_METHODS,
     "comet_rpc": COMET_READ_METHODS,
     "evm_rpc": AGENT_READ_METHODS,
     "nodereal_transfers": NODEREAL_READ_METHODS,

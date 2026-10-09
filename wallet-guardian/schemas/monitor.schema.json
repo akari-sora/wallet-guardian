@@ -185,6 +185,7 @@
               "etherscan_v2",
               "blockscout",
               "nodereal_transfers",
+              "alchemy_transfers",
               "solana_rpc",
               "helius_parsed_events",
               "esplora",
@@ -227,6 +228,11 @@
             "type": "boolean"
           },
           "log_range_max": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000
+          },
+          "range_limit": {
             "type": "integer",
             "minimum": 1,
             "maximum": 2000

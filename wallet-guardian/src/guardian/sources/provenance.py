@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Mapping
 
+from guardian.sources.alchemy import CU_ESTIMATE
 from guardian.sources.resolver import egress_evidence
 
 _REMAINING = ("x-credits-remaining", "x-ratelimit-remaining", "x-ratelimit-remaining-quota")
@@ -39,9 +40,11 @@ class CallLedger:
     def observe(self, source: Any, operation: Any, result: Any) -> None:
         source_id = str(getattr(source, "source_id", "") or "")
         adapter = str(getattr(source, "adapter", "") or getattr(operation, "adapter", "") or "")
+        each, basis = _credit_rule(adapter)
         entry = self.providers.setdefault(source_id, {
             "adapter": adapter,
             "credits": 0,
+            "credits_basis": basis,
             "http_calls": 0,
             "logical_methods": 0,
             "methods": Counter(),
@@ -50,7 +53,6 @@ class CallLedger:
             "remaining_quota": None,
         })
         methods = _methods(operation)
-        each = _BLOCKSCOUT_CREDITS if adapter == "blockscout" else 1
         entry["http_calls"] += 1
         entry["logical_methods"] += len(methods)
         entry["credits"] += each * len(methods)
@@ -82,6 +84,7 @@ class CallLedger:
             providers[source_id] = {
                 "adapter": entry["adapter"],
                 "credits": entry["credits"],
+                "credits_basis": entry.get("credits_basis", "count"),
                 "http_calls": entry["http_calls"],
                 "logical_methods": entry["logical_methods"],
                 "methods": dict(sorted(entry["methods"].items())),
@@ -117,9 +120,18 @@ def _methods(operation: Any) -> list[str]:
     return ["request"]
 
 
+def _credit_rule(adapter: str) -> tuple[int, str]:
+    """Blockscout credits and Alchemy compute units are published estimates."""
+    if adapter == "alchemy_transfers":
+        return CU_ESTIMATE, "estimate"
+    if adapter == "blockscout":
+        return _BLOCKSCOUT_CREDITS, "estimate"
+    return 1, "count"
+
+
 def _is_page(operation: Any) -> bool:
     method = getattr(operation, "method", None)
-    if method == "nr_getAssetTransfers":
+    if method in {"alchemy_getAssetTransfers", "nr_getAssetTransfers"}:
         return True
     query = getattr(operation, "query", None)
     if not isinstance(query, Mapping):

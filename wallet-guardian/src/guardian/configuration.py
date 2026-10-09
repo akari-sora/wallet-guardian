@@ -55,6 +55,7 @@ _ADAPTER_FAMILY = {
     "etherscan_v2": "evm",
     "blockscout": "evm",
     "nodereal_transfers": "evm",
+    "alchemy_transfers": "evm",
     "solana_rpc": "solana",
     "helius_parsed_events": "solana",
     "esplora": "bitcoin",
