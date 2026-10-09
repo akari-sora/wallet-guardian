@@ -2,7 +2,7 @@
 
 Wallet Guardian's monitor is a read-only program for one operator on a machine they control. It is not a hosted service and it does not isolate mutually untrusted customers. A `tenant_id` in the accounts file is a label for that operator's data. It is not a security boundary between customers.
 
-license: pending
+授權：AGPL-3.0-only（見 `LICENSE`）。
 
 ## What the monitor is
 

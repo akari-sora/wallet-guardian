@@ -1,6 +1,6 @@
 # Threat model
 
-This note is the threat model for the read-only monitor as a single-operator, self-hosted program. It is not a pentest report and it is not a promise that every provider is honest. license: pending
+This note is the threat model for the read-only monitor as a single-operator, self-hosted program. It is not a pentest report and it is not a promise that every provider is honest. 授權：AGPL-3.0-only（見 `LICENSE`）。
 
 The Action Client, SIWE, WalletConnect, Pages Functions, and D1 are out of scope here. They are an optional subsystem and are not required to run the monitor.
 

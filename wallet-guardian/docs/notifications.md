@@ -1,6 +1,6 @@
 # 通知
 
-license: pending
+授權：AGPL-3.0-only（見 `LICENSE`）。
 
 這一包只加一個頻道：Telegram Bot API。預設仍是 `outbox_only`，不會送。沒有 Slack、email 或 webhook 用戶端。也沒有 Grok 用戶端；這裡沒有可呼叫的 Grok API，不能用假的回條假裝送過。
 
