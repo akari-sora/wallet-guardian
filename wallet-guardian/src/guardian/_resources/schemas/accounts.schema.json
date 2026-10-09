@@ -83,6 +83,24 @@
               "watch_only"
             ]
           },
+          "trc20_contracts": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "uniqueItems": true
+          },
+          "allowance_spenders": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "uniqueItems": true
+          },
           "own_group": {
             "anyOf": [
               {
