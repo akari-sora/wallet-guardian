@@ -43,3 +43,16 @@ A laptop that is asleep at the slot does not run that slot. The shipped timers s
 ## An empty alert outbox is not all clear
 
 `outbox_written` of 0 means no new deduped alert was inserted. It does not mean every capability was read, that history is complete, or that nothing moved. Movements under `native_eth_threshold` or `asset_usd_threshold` are `below_threshold` and are not written. A missing USD quote does not meet the USD rule. Coverage rows can still say `credential_missing`, `partial`, `identity_unreadable`, `rate_limited`, `plan_not_supported`, `feed_not_supplied`, or `unknown`. `--no-send` leaves `sent` at 0 even when rows were written. Default delivery is `outbox_only`. Nothing was sent to Telegram unless you opted in, and the Telegram canary is `NOT_RUN`.
+
+## `run-once` stops with `endpoint_missing`
+
+You enabled a chain but did not set its endpoint variable (for Ethereum, `RPC_ETHEREUM_MAINNET_URL`). Nothing was read. Export a JSON-RPC URL for each enabled chain, then run again. `init` prints the variable names under `data_sharing`.
+
+## `run-once` refuses with a resolver message (benchmark or private address)
+
+Your system resolver answered a public host with a reserved address. Set `GUARDIAN_RESOLVER_MODE=doh` and see `docs/host-network.md`. The monitor refuses rather than connect to an address it cannot trust.
+
+## A first no-key run takes about three minutes
+
+The round is bounded by a deadline. On a free public RPC with no indexer key, history and permission reads end as `partial` (`pagination_incomplete`, `gaps_present`) and `history.native_external` is an error with `unsupported_source`. That is the real no-key coverage for that chain, not a zero balance and not a clean wallet.
+

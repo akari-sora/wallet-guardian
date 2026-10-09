@@ -10,10 +10,13 @@ Three commands, after you download that release's wheel, `SHA256SUMS`, and `cons
 
 ```bash
 uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc2-py3-none-any.whl
+export RPC_ETHEREUM_MAINNET_URL=https://ethereum-rpc.publicnode.com   # any public JSON-RPC URL you choose; one variable per chain you enable
 guardian init --from answers.json --yes
 guardian run-once --mcm-config "${XDG_CONFIG_HOME:-$HOME/.config}/guardian/monitor.json" --no-send
 guardian coverage --mcm-config "${XDG_CONFIG_HOME:-$HOME/.config}/guardian/monitor.json"
 ```
+
+The RPC variable is required: with no endpoint set, `run-once` stops with `endpoint_missing` and reads nothing. The URL above is an example of a public endpoint, not an endorsement; public endpoints rate-limit and may refuse some calls, which shows up as a gap in `coverage`. On a host whose system resolver returns a benchmark or private address, `run-once` refuses with a resolver message; set `GUARDIAN_RESOLVER_MODE=doh` (see [docs/host-network.md](docs/host-network.md)). A first no-key run is bounded by a round deadline of about three minutes and reports what it could not finish as `partial`.
 
 Copy `examples/answers.example.json` to `answers.json` first. That file's address is synthetic. `init` writes under the XDG config directory (or `GUARDIAN_CONFIG_DIR`) and prints `private_dir`. Pass that directory's `monitor.json` if it is not the path above. `run-once --no-send` still reads the endpoints you set. It leaves alerts in the local outbox and does not send them.
 
