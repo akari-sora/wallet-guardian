@@ -455,7 +455,7 @@ def _legacy(database: Database, tenant: str, payload: Mapping[str, Any]) -> bool
 
 def _message(payload: Mapping[str, Any]) -> dict[str, Any]:
     kept = {}
-    for key in ("dedup_key", "kind", "network", "wallet_id", "identity", "valuation_unknown", "informational", "gross", "net", "tx_id"):
+    for key in ("dedup_key", "kind", "network", "wallet_id", "identity", "valuation_unknown", "informational", "gross", "net", "tx_id", "detail"):
         if key in payload:
             kept[key] = payload[key]
     return kept

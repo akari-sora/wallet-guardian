@@ -423,17 +423,25 @@ class AlertBook:
 
 
 def format_alert(alert: dict[str, Any]) -> str:
-    price = "未知" if alert.get("price") is None else str(alert["price"])
-    price_time = alert.get("price_time") or "未知"
+    from guardian.security.display_text import escape_plain
+
+    def show(key: str, default: str = "") -> str:
+        value = alert.get(key, default)
+        if value is None:
+            value = default
+        return escape_plain(str(value))
+
+    price = "未知" if alert.get("price") is None else escape_plain(str(alert["price"]))
+    price_time = escape_plain(str(alert.get("price_time") or "未知"))
     return "\n".join(
         [
-            f"{alert['severity_label']}／{alert['confidence']}｜{alert['wallet_label']}｜{alert['chain_label']}｜{alert['subject']}",
-            str(alert["what"]),
-            f"數量 {alert['amount_display']} {alert['unit']}；估計價值 {price}（價格時間 {price_time}）",
-            f"相關原因：{alert['why']}",
-            f"建議：{alert['step']}",
-            f"事件時間 {alert['event_time']}；觀測時間 {alert['observed_at']}",
-            f"來源：{alert['source']}；限制：{alert['limits']}",
+            f"{show('severity_label')}／{show('confidence')}｜{show('wallet_label')}｜{show('chain_label')}｜{show('subject')}",
+            show("what"),
+            f"數量 {show('amount_display')} {show('unit')}；估計價值 {price}（價格時間 {price_time}）",
+            f"相關原因：{show('why')}",
+            f"建議：{show('step')}",
+            f"事件時間 {show('event_time')}；觀測時間 {show('observed_at')}",
+            f"來源：{show('source')}；限制：{show('limits')}",
         ]
     )
 

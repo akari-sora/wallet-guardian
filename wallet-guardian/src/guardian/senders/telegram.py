@@ -205,13 +205,15 @@ def _resolve_host(host: str) -> list[str]:
 
 
 def _text(message: Mapping[str, Any]) -> str:
+    from guardian.security.display_text import escape_plain
+
     parts: list[str] = []
-    for key in ("kind", "network", "dedup_key", "informational"):
+    for key in ("kind", "network", "dedup_key", "informational", "detail"):
         if key not in message:
             continue
         value = message[key]
         if isinstance(value, (str, int)) and not isinstance(value, bool):
-            parts.append(f"{key}={value}")
+            parts.append(f"{key}={escape_plain(str(value))}")
     text = "\n".join(parts) or "wallet-guardian alert"
     return redact(text)[:3500]
 

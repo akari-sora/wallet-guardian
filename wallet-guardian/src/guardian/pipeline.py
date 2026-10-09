@@ -331,10 +331,18 @@ def run_capability_pipeline(
             # feed's first fetch is a quiet baseline apart from recent items.
             fresh = [item for item in fetched.book.incidents if item.incident_id in fetched.linkable]
             for notice in link_exposure(fresh, wallets):
-                alerts.append(_fetched_alert(tenant, notice, position_rows, active_approvals, fetched))
+                alerts.append(_with_title(
+                    _fetched_alert(tenant, notice, position_rows, active_approvals, fetched),
+                    fetched.book,
+                    notice,
+                ))
         if news_book is not None:
             for notice in link_exposure(news_book.incidents, wallets):
-                alerts.append(exposure_alert(tenant, notice, _notice_network(notice.wallet_id, position_rows, active_approvals)))
+                alerts.append(_with_title(
+                    exposure_alert(tenant, notice, _notice_network(notice.wallet_id, position_rows, active_approvals)),
+                    news_book,
+                    notice,
+                ))
     alerts.extend(sanction_alerts)
     cursors = _merge_cursors(observations, explicit_cursors, held_cursors)
     cycle = CapabilityCycle(database, tenant)
@@ -672,6 +680,24 @@ def _fetched_observation(
         price_quality="unknown",
         evidence_refs=tuple(f"{feed.source_id}:{feed.status}" for feed in fetched.feeds),
     )
+
+
+def _with_title(alert: dict[str, Any], book: Any, notice: Any) -> dict[str, Any]:
+    """Copy the incident title into a display field. It does not select policy."""
+    incident_id = getattr(notice, "incident_id", None)
+    incidents = getattr(book, "incidents", None)
+    if not isinstance(incident_id, str) or not incident_id or not isinstance(incidents, list):
+        return alert
+    title = ""
+    for item in incidents:
+        if getattr(item, "incident_id", None) == incident_id:
+            title = item.title if isinstance(getattr(item, "title", None), str) else ""
+            break
+    if not title:
+        return alert
+    copied = dict(alert)
+    copied["detail"] = title
+    return copied
 
 
 def _fetched_alert(tenant, notice, position_rows, approvals, fetched: FetchReport):
