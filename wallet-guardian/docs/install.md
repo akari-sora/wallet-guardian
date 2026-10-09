@@ -1,6 +1,6 @@
 # 安裝唯讀監控程式
 
-license: pending。這個套件名稱是 `guardian`。不要從 PyPI 執行 `pip install guardian`：PyPI 上的同名套件不是這個專案，這個名稱也沒有被保留。
+授權：AGPL-3.0-only。這個套件名稱是 `guardian`。不要從 PyPI 執行 `pip install guardian`：PyPI 上的同名套件不是這個專案，這個名稱也沒有被保留。
 
 只安裝你從 GitLab release 下載、而且 SHA256 對過的 wheel。需要 Python 3.12 或更新的版本，以及 [uv](https://docs.astral.sh/uv/) 或 pip。Docker 不在這份說明裡。
 

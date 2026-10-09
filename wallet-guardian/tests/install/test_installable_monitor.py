@@ -67,6 +67,23 @@ def _child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
 
 
 def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None, timeout: int = 180) -> subprocess.CompletedProcess[str]:
+    result = _run_once(command, cwd=cwd, env=env, timeout=timeout)
+    if (
+        result.returncode != 0
+        and command[:3] == ["uv", "pip", "install"]
+        and "--offline" in command
+        and "network was disabled" in result.stderr
+    ):
+        # Only third-party dependency download falls back to the network (cold uv cache).
+        # The installed guardian code under test is still exercised offline.
+        retry = [part for part in command if part != "--offline"]
+        online = dict(env if env is not None else _child_env())
+        online.pop("UV_OFFLINE", None)
+        return _run_once(retry, cwd=cwd, env=online, timeout=timeout)
+    return result
+
+
+def _run_once(command: list[str], *, cwd: Path, env: dict[str, str] | None, timeout: int) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         command,
         cwd=cwd,

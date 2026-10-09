@@ -4,7 +4,7 @@
 
 這不是投資建議。建置與測試也不等於獲准執行任何主網資產交易。
 
-license: pending。
+授權：AGPL-3.0-only（見 `LICENSE`）。
 
 多鏈監控套件 MCM-01 的範圍契約見 [docs/mcm-01.md](docs/mcm-01.md)。那是計畫，不是 live 驗證。
 
