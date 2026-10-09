@@ -81,7 +81,7 @@ Watch-only 地址只代表「拿來觀察」，不代表這個系統可以動用
 
 ## 安裝
 
-發行 wheel 的安裝、釘選的 constraints、XDG 私人目錄、升級與降版見 [docs/install.md](docs/install.md)。不要從 PyPI 執行 `pip install guardian`：這個名稱沒有被保留。
+發行 wheel 的安裝、釘選的 constraints、XDG 私人目錄、升級與降版見 [docs/install.md](docs/install.md)。發行套件名稱是 `wallet-guardian-monitor`（匯入名稱與命令仍是 `guardian`）；預覽版沒有上傳到任何套件索引，名稱也沒有被保留。
 
 在這個 checkout 裡開發：
 

@@ -99,7 +99,7 @@ cp -a "$XDG_STATE_HOME/guardian" "$XDG_STATE_HOME/guardian.backup-$(date -u +%Y%
 解除安裝：
 
 ```bash
-uv tool uninstall guardian
+uv tool uninstall wallet-guardian-monitor
 ```
 
 若是 venv，刪掉那個 venv 即可。XDG 裡的設定與狀態不會被解除安裝刪掉。確定不再需要時，自行刪除 `~/.config/guardian` 與 `~/.local/state/guardian`（或你覆寫的目錄）。
