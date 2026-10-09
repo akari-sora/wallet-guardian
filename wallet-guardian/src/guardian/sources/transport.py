@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import ipaddress
+import os
 import socket
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -19,6 +20,12 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 from guardian.configuration import MaskedSecret
 from guardian.errors import ConfigError, GuardianError, SecurityError
 from guardian.security.ssrf import validate_url
+from guardian.sources.resolver import (
+    BENCHMARK_MESSAGE,
+    assert_direct_transport,
+    direct_client_kwargs,
+    egress_evidence,
+)
 from guardian.security.transport_policy import Operation, assert_operation_allowed
 from guardian.sources.budget import BudgetBook, BudgetGroup
 from guardian.sources.fixtures import FixtureMiss, PreparedCall, RawResponse, canonical_body
@@ -31,6 +38,7 @@ _METADATA_HOSTS = frozenset({"metadata", "metadata.google.internal"})
 _METADATA_IP = ipaddress.ip_address("169.254.169.254")
 _SSRF_REASON = {
     "dns answer points at a blocked address": "private_endpoint",
+    BENCHMARK_MESSAGE: "benchmark_address",
     "dns resolution failed": "dns_failed",
     "dns returned no addresses": "dns_failed",
     "local host is not allowed": "private_endpoint",
@@ -80,6 +88,7 @@ class TransportResult:
     reason: str
     headers: dict[str, str]
     detail: str = ""
+    egress: dict[str, Any] | None = None
 
     @property
     def ok(self) -> bool:
@@ -91,7 +100,14 @@ class TransportResult:
 
 
 class HttpxBackend:
-    """Production backend. Redirects stay off. gRPC is not spoken here."""
+    """Production backend. Redirects stay off. gRPC is not spoken here.
+
+    The client this class constructs does not trust ambient proxy variables and
+    does not disable TLS verification. That is not proof the path honored the
+    pinned destination address.
+    """
+
+    verifies_tls = True
 
     def __init__(self, *, timeout: float = 20, max_response_bytes: int = 1_048_576, client: Any = None) -> None:
         self.timeout = timeout
@@ -104,7 +120,9 @@ class HttpxBackend:
         import httpx
 
         owns = self._client is None
-        client = self._client or httpx.Client(timeout=self.timeout, follow_redirects=False)
+        if owns:
+            assert_direct_transport(os.environ)
+        client = self._client or httpx.Client(**direct_client_kwargs(timeout=self.timeout))
         url, headers, extensions = pinned_request(call)
         try:
             with client.stream(
@@ -245,6 +263,7 @@ class ReadOnlyTransport:
                 current = target
                 continue
             result = _finish(source_id, operation.protocol, raw, self.max_response_bytes)
+            result.egress = self._egress_for(current)
             ledger = getattr(self, "provenance", None)
             if ledger is not None:
                 ledger.observe(source, operation, result)
@@ -325,6 +344,17 @@ class ReadOnlyTransport:
                     headers=lowered,
                 )
             return _finish(source_id, "xml", raw, cap)
+
+    def _egress_for(self, url: str) -> dict[str, Any]:
+        resolver = getattr(self, "egress_resolver", None)
+        https = urlsplit(url).scheme == "https"
+        verifies = bool(getattr(self.backend, "verifies_tls", False))
+        return egress_evidence(
+            resolver_verified=bool(getattr(resolver, "last_verified", False)),
+            tls_hostname_verified=https and verifies,
+            destination_policy_enforced=False,
+            enforcement_location="unproven",
+        )
 
     def _source(self, source_id: str) -> RegisteredSource:
         return self.endpoints.get(source_id)

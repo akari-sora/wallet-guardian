@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from typing import Any
 import httpx
 from eth_abi import decode, encode
@@ -12,6 +13,7 @@ from guardian.errors import RpcError, SecurityError
 from guardian.security.redact import redact
 from guardian.security.rpc_guard import assert_agent_method
 from guardian.security.ssrf import next_redirect, validate_url
+from guardian.sources.resolver import assert_direct_transport, direct_client_kwargs
 
 IMPLEMENTATION_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
 LISTA_PROXY = "0x1adB950d8bB3dA4bE104211D5AB038628e477fE6"
@@ -42,7 +44,9 @@ class RpcClient:
             if self._client is not None:
                 response = self._client.post(self.url, json=payload)
             else:
-                with httpx.Client(timeout=self.timeout, follow_redirects=False) as client:
+                validate_url(self.url)
+                assert_direct_transport(os.environ)
+                with httpx.Client(**direct_client_kwargs(timeout=self.timeout)) as client:
                     response = client.post(self.url, json=payload)
         except httpx.HTTPError as exc:
             raise RpcError(redact(str(exc))) from exc
@@ -173,7 +177,8 @@ def read_lista_state(rpc: RpcClient, wallet: str) -> dict[str, Any]:
 def safe_get_text(url: str, *, resolve=None, timeout: float = 30) -> tuple[int, str]:
     current = validate_url(url, resolve=resolve)
     hops = 0
-    with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+    assert_direct_transport(os.environ)
+    with httpx.Client(**direct_client_kwargs(timeout=timeout)) as client:
         while True:
             response = client.get(current)
             if response.status_code in {301, 302, 303, 307, 308}:
@@ -187,7 +192,8 @@ def safe_get_text(url: str, *, resolve=None, timeout: float = 30) -> tuple[int, 
 
 def safe_post_json(url: str, payload: dict[str, Any], *, timeout: float = 20) -> tuple[int, Any]:
     validate_url(url)
-    with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+    assert_direct_transport(os.environ)
+    with httpx.Client(**direct_client_kwargs(timeout=timeout)) as client:
         response = client.post(url, json=payload)
     try:
         body = response.json()

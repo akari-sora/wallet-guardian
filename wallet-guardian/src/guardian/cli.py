@@ -169,6 +169,12 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_sub = monitor.add_subparsers(dest="monitor_command", required=True)
     plan = monitor_sub.add_parser("plan", parents=[common])
     plan.add_argument("--mcm-config", required=True)
+
+    egress = sub.add_parser("egress-doctor", parents=[common])
+    egress.add_argument("--mcm-config", default=None)
+    egress.add_argument("--egress-config", default=None)
+    egress.add_argument("--qualification", choices=("formal", "preview"), default="formal")
+    egress.add_argument("--mode", choices=("system", "doh"), default=None)
     return parser
 
 
@@ -178,7 +184,10 @@ def dispatch(
     backend: Any = None,
     sender: Any = None,
     clock: Callable[[], float] | None = None,
+    egress_hooks: Any = None,
 ) -> tuple[dict, int]:
+    if args.command == "egress-doctor":
+        return _egress_doctor(args, egress_hooks)
     if args.command == "doctor":
         return doctor(), 0
     if args.command == "run-once":
@@ -354,6 +363,23 @@ def _action(args: argparse.Namespace) -> tuple[dict, int]:
         found["reason"] = "postconditions are not marked complete without a user-submitted receipt"
         return found, 0
     raise GuardianError("unknown action command")
+
+
+def _egress_doctor(args: argparse.Namespace, hooks: Any) -> tuple[dict, int]:
+    """Host diagnosis only. Accounts and secret profiles are not opened."""
+    from guardian.sources.resolver import diagnose_egress
+
+    document = None
+    if getattr(args, "mcm_config", None):
+        document = load_public_config(args.mcm_config).document
+    return diagnose_egress(
+        document=document,
+        environ=os.environ,
+        egress_config=getattr(args, "egress_config", None),
+        qualification=args.qualification,
+        mode=args.mode,
+        hooks=hooks,
+    )
 
 
 def _open_mcm(path: str):
@@ -576,6 +602,7 @@ def main(
     backend: Any = None,
     sender: Any = None,
     clock: Callable[[], float] | None = None,
+    egress_hooks: Any = None,
 ) -> int:
     load_local_env()
     parser = build_parser()
@@ -584,7 +611,9 @@ def main(
         # Touch config validation early for discover/run so a bad address fails closed.
         if args.command in {"run-once", "wallets"} and getattr(args, "config", None):
             load_config(Path(args.config))
-        payload, code = dispatch(args, backend=backend, sender=sender, clock=clock)
+        payload, code = dispatch(
+            args, backend=backend, sender=sender, clock=clock, egress_hooks=egress_hooks,
+        )
     except GuardianError as exc:
         payload = {"status": "error", "error_type": type(exc).__name__, "error": redact(str(exc))}
         code = exc.exit_code

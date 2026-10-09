@@ -7,6 +7,7 @@ import socket
 from urllib.parse import urljoin, urlsplit
 
 from guardian.errors import SecurityError
+from guardian.sources.resolver import BENCHMARK_MESSAGE, destination_block_reason
 
 _LOCAL_NAMES = {
     "localhost",
@@ -16,27 +17,25 @@ _LOCAL_NAMES = {
 }
 
 
-# Hosts that may resolve through transparent egress proxies (e.g. 198.18.0.0/15).
-_PROXY_OK_HOSTS = {
-    "api.etherscan.io",
-    "api.etherscan.io.",
-}
-
 def _blocked_ip(addr: str, *, host: str | None = None) -> bool:
-    ip = ipaddress.ip_address(addr)
-    # Cloudflare/WARP-style synthetic answers for allowlisted public APIs.
-    if host and host.lower().rstrip(".") in {h.rstrip(".") for h in _PROXY_OK_HOSTS}:
-        if ip in ipaddress.ip_network("198.18.0.0/15"):
-            return False
-    return (
-        not ip.is_global
-        or ip.is_loopback
-        or ip.is_private
-        or ip.is_link_local
-        or ip.is_reserved
-        or ip.is_multicast
-        or ip.is_unspecified
-    )
+    """Blocked when the address is not a global unicast destination.
+
+    The hostname does not create an exception. 198.18.0.0/15 stays blocked,
+    including answers for public API names.
+    """
+    del host
+    return destination_block_reason(addr) is not None
+
+
+def _reject_resolved(addr: str, *, literal: bool) -> None:
+    reason = destination_block_reason(addr)
+    if reason is None:
+        return
+    if reason == "benchmark":
+        raise SecurityError(BENCHMARK_MESSAGE)
+    if literal:
+        raise SecurityError("private or non-global ip is not allowed")
+    raise SecurityError("dns answer points at a blocked address")
 
 
 def _default_resolve(host: str) -> list[str]:
@@ -59,8 +58,8 @@ def validate_url(url: str, *, resolve=None) -> str:
         literal = ipaddress.ip_address(lowered)
     except ValueError:
         literal = None
-    if literal is not None and _blocked_ip(str(literal), host=lowered):
-        raise SecurityError("private or non-global ip is not allowed")
+    if literal is not None:
+        _reject_resolved(str(literal), literal=True)
     if literal is None:
         resolver = resolve or _default_resolve
         try:
@@ -70,8 +69,7 @@ def validate_url(url: str, *, resolve=None) -> str:
         if not addresses:
             raise SecurityError("dns returned no addresses")
         for addr in addresses:
-            if _blocked_ip(addr, host=lowered):
-                raise SecurityError("dns answer points at a blocked address")
+            _reject_resolved(addr, literal=False)
     return url
 
 
