@@ -133,7 +133,7 @@ An empty outbox is not all clear. It means no new alert row was committed. Cover
 | --- | --- |
 | Config directory | The five init files above, plus `.env.local` if you put one there |
 | State directory `monitor.sqlite` | Coverage, cursors, alerts, outbox, runs. Created by `run-once`, not by `init`. Sidecars `-wal` and `-shm` appear while the database is open |
-| State directory | `guardian doctor` also writes `environment_report.json`, `source_registry.json`, and `provider_benchmark.json` here |
+| State directory | `guardian doctor` also writes `environment_report.json`, `source_registry.json`, and `provider_benchmark.json` here. The default doctor is offline; `--live` is the bounded probe |
 | `shadow-slots.json` | Slot ledger (`guardian.shadow-slots.v1`) when the slot recorder runs. See [scheduling.md](scheduling.md) |
 
 Defaults: config `~/.config/guardian`, state `~/.local/state/guardian`. Overrides: `GUARDIAN_CONFIG_DIR`, `GUARDIAN_STATE_DIR`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`. On POSIX, private directories are mode `0700` and new private files are mode `0600`. Windows does not enforce those bits.

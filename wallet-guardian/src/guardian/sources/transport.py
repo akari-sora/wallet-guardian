@@ -434,11 +434,11 @@ def _lookup_endpoint(env_name: str, secrets: Mapping[str, str], environ: Mapping
 def _lookup_credential(env_name: Any, secrets: Mapping[str, str], environ: Mapping[str, str]) -> MaskedSecret | None:
     if not isinstance(env_name, str) or not env_name:
         return None
-    for pool in (secrets, environ):
-        value = pool.get(env_name)
-        if isinstance(value, str) and value.strip():
-            return MaskedSecret(value.strip())
-    return MaskedSecret("")
+    from guardian.credentials import resolve_named
+
+    # Same profile-then-env choice as doctor. A 401 does not look up the other source.
+    found = resolve_named(env_name, secrets, environ)
+    return MaskedSecret(found.reveal() if found.present else "")
 
 
 def _credential_present(source: RegisteredSource) -> bool:

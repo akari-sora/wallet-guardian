@@ -30,6 +30,7 @@ from guardian.identities import (
     parse_address,
 )
 from guardian.jsonschema_lite import SchemaError, ValidationError, validate
+from guardian.network_aliases import apply_account_aliases, apply_public_aliases
 from guardian.network_registry import load_registry
 from guardian.resources import resource_path
 from guardian.security.redact import redact
@@ -168,6 +169,7 @@ def load_public_config(path: str | Path) -> PublicConfig:
     if _text_has_secret(_scrub_log_contracts(text)):
         raise ConfigError("forbidden value")
     document = _read_object(text, "public config")
+    apply_public_aliases(document, load_registry(resource_path("config", "chains")))
     _validate_document(document, resource_path("schemas", "monitor.schema.json"), "monitor")
     reject_private_material(document)
     _semantic_public(document)
@@ -180,8 +182,9 @@ def load_accounts(path: str | Path, *, registry: dict[str, dict[str, Any]] | Non
     if not path.is_file():
         raise ConfigError("accounts file was not found")
     document = _read_object(path.read_text(encoding="utf-8"), "accounts")
-    _validate_document(document, resource_path("schemas", "accounts.schema.json"), "accounts")
     networks = registry if registry is not None else load_registry(resource_path("config", "chains"))
+    apply_account_aliases(document, networks)
+    _validate_document(document, resource_path("schemas", "accounts.schema.json"), "accounts")
     seen_ids: set[str] = set()
     records: list[AccountRecord] = []
     identities: list[WalletIdentity] = []
@@ -453,13 +456,9 @@ def _source_status(document: dict[str, Any], profile: dict[str, str], environ: M
 
 
 def _credential_present(name: str, profile: dict[str, str], environ: Mapping[str, str]) -> bool:
-    wrapped = MaskedSecret(profile.get(name, ""))
-    if wrapped.present:
-        return True
-    fallback = environ.get(name)
-    if not isinstance(fallback, str):
-        return False
-    return MaskedSecret(fallback).present
+    from guardian.credentials import resolve_named
+
+    return resolve_named(name, profile, environ).present
 
 
 def _load_secret_profile(path: Path) -> dict[str, str]:

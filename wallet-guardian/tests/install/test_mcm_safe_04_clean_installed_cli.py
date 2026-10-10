@@ -227,7 +227,24 @@ def _outside_checkout() -> Path:
 
 def _child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     # Minimal environment: no operator settings or credentials are inherited.
-    env = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "LANG", "LC_ALL", "UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR") if key in os.environ}
+    # TEMP/TMP stay so uv can unpack a wheel. On Windows an env without them
+    # writes under C:\WINDOWS and the install is denied. The values are
+    # directory paths, not credentials.
+    env = {
+        key: os.environ[key]
+        for key in (
+            "PATH",
+            "SYSTEMROOT",
+            "LANG",
+            "LC_ALL",
+            "UV_CACHE_DIR",
+            "UV_PYTHON_INSTALL_DIR",
+            "TEMP",
+            "TMP",
+            "TMPDIR",
+        )
+        if key in os.environ
+    }
     if "UV_CACHE_DIR" not in env:
         cache = subprocess.run(["uv", "cache", "dir"], text=True, capture_output=True, check=False).stdout.strip()
         if cache:

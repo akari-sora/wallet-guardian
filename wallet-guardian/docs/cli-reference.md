@@ -26,14 +26,19 @@ options:
 ## `guardian doctor`
 
 ```text
-usage: guardian doctor [-h] [--db DB] [--tenant TENANT] [--json]
+usage: guardian doctor [-h] [--db DB] [--tenant TENANT] [--json] [--mcm-config MCM_CONFIG] [--live]
 
 options:
-  -h, --help       show this help message and exit
-  --db DB          sqlite path
-  --tenant TENANT  local tenant scope (required when ambiguous)
-  --json           print JSON (this is always on)
+  -h, --help            show this help message and exit
+  --db DB               sqlite path
+  --tenant TENANT       local tenant scope (required when ambiguous)
+  --json                print JSON (this is always on)
+  --mcm-config MCM_CONFIG
+  --live                live probe with a 5 second whole-call deadline per probe;
+                        omitted doctor stays offline
 ```
+
+Offline unless `--live` is passed. `--live` runs a provider probe and stops each probe at a 5 second whole-call deadline. That bound is remaining time: a later request in that probe does not start, and the open client is closed. Unusable resolver settings are reported and not probed. When they load, connections go to the validated address and the original hostname stays on the Host header, SNI, and the certificate check. It does not qualify egress. DoH enabled is not a qualified path. With `--mcm-config`, credential lines name the variable, `selected_from` (`profile`, `env`, or `absent`), `present`, and `shadowed`. They do not print values. `--live` with `--mcm-config` is a legacy provider probe: it does not prove the selected profile's connectivity.
 
 ## `guardian run-once`
 
@@ -97,6 +102,8 @@ usage: guardian providers [-h] [--db DB] [--tenant TENANT] [--json] {verify} ...
 
 positional arguments:
   {verify}
+    verify              legacy provider probe; does not prove a selected
+                        profile's connectivity
 
 options:
   -h, --help       show this help message and exit
@@ -116,6 +123,8 @@ options:
   --tenant TENANT  local tenant scope (required when ambiguous)
   --json           print JSON (this is always on)
 ```
+
+`providers verify` is a legacy provider probe. It does not prove that a selected monitor profile can reach its configured sources.
 
 ## `guardian wallets`
 

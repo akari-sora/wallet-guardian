@@ -107,3 +107,39 @@ def test_docs_cli_reference_flags_match_help() -> None:
     assert "--apply" in service
     assert "--from" in _flags(documented[("init",)])
     assert "--mcm-config" in _flags(documented[("coverage",)])
+    # START-03. Doctor and coverage flags in this file are the flags --help prints.
+    for key in (("doctor",), ("coverage",)):
+        assert key in documented
+        assert _flags(documented[key]) == _flags(live[key]), key
+    assert "--live" in _flags(documented[("doctor",)])
+    assert "--mcm-config" in _flags(documented[("doctor",)])
+    assert "--mcm-config" in _flags(documented[("coverage",)])
+
+
+def test_start03_docs_name_aliases_doh_and_secret_precedence() -> None:
+    """START-03. The operator docs name the alias table, DoH variables, and profile-then-env."""
+    root = ROOT
+    faq = (root / "docs" / "faq-troubleshooting.md").read_text(encoding="utf-8")
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    keys = (root / "docs" / "api-keys.md").read_text(encoding="utf-8")
+    host = (root / "docs" / "host-network.md").read_text(encoding="utf-8")
+    reference = REFERENCE.read_text(encoding="utf-8")
+    for text in (faq, readme, keys, host):
+        assert "GUARDIAN_RESOLVER_MODE" in text
+        assert "GUARDIAN_DOH_ENDPOINTS" in text
+        assert "GUARDIAN_DOH_BOOTSTRAP" in text
+    for typed, canonical in (
+        ("arbitrum-mainnet", "arbitrum-one"),
+        ("polygon-mainnet", "polygon-pos"),
+        ("arbitrum-one", "arbitrum-one"),
+        ("polygon-pos", "polygon-pos"),
+    ):
+        assert typed in faq
+        assert canonical in faq
+    assert "nonempty" in keys.lower() or "nonempty" in keys
+    assert "secret profile" in keys.lower()
+    assert "process environment" in keys.lower()
+    assert "401" in keys
+    assert "selected_from" in reference
+    assert "DoH enabled is not a qualified path" in faq
+    assert "DoH enabled is not a qualified path" in host

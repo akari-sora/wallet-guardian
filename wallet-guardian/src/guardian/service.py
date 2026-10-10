@@ -13,6 +13,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -31,7 +32,16 @@ from guardian.domain import (
 )
 from guardian.canonical import digest_body
 from guardian.errors import ConfigError, RpcError, SecurityError
-from guardian.providers import LISTA_PROXY, SLISBNB, RpcClient, read_lista_state, safe_get_text, safe_post_json
+from guardian.providers import (
+    LISTA_PROXY,
+    SLISBNB,
+    ProbeDeadline,
+    RpcClient,
+    install_probe_deadline,
+    read_lista_state,
+    safe_get_text,
+    safe_post_json,
+)
 from guardian.security.address import parse_evm_address
 from guardian.security.redact import redact
 from guardian.security.rpc_guard import FORBIDDEN_RPC_METHODS
@@ -179,13 +189,31 @@ def load_local_env(path: Path | None = None) -> list[str]:
     return loaded
 
 
-def _secret_flags() -> dict[str, str]:
-    return {name: "configured" if os.environ.get(name) else "not_configured" for name in SECRET_ENV}
+def _secret_flags(
+    environ: Mapping[str, str] | None = None,
+    profile_env: str = "MONITOR_SECRET_PROFILE",
+) -> dict[str, str]:
+    """Presence only. The value stays in the shared resolver and is not returned."""
+    from guardian.credentials import profile_from_environ, resolve_named
+
+    pool = os.environ if environ is None else environ
+    profile = profile_from_environ(pool, profile_env)
+    return {
+        name: "configured" if resolve_named(name, profile, pool).present else "not_configured"
+        for name in SECRET_ENV
+    }
 
 
-def etherscan_chainlist_probe(get_text=safe_get_text) -> dict[str, Any]:
-    """V2 chainlist is LIVE_PASS only when ETHERSCAN_API_KEY is set and the call returns rows."""
-    key = (os.environ.get("ETHERSCAN_API_KEY") or "").strip()
+def etherscan_chainlist_probe(get_text=safe_get_text, *, api_key: str | None = None) -> dict[str, Any]:
+    """V2 chainlist is LIVE_PASS only when the selected ETHERSCAN_API_KEY is set and the call returns rows.
+
+    ``api_key`` is that one selection. When it is passed, including as an empty
+    string, the process environment is not consulted and a 401 does not try another source.
+    """
+    if api_key is None:
+        key = (os.environ.get("ETHERSCAN_API_KEY") or "").strip()
+    else:
+        key = api_key.strip()
     if not key:
         return {
             "level": "LIMITED_DISCOVERY",
@@ -249,7 +277,10 @@ def _systemd_state() -> str:
         return "unavailable"
 
 
-def environment_report() -> dict[str, Any]:
+def environment_report(
+    environ: Mapping[str, str] | None = None,
+    profile_env: str = "MONITOR_SECRET_PROFILE",
+) -> dict[str, Any]:
     root = Path(os.fspath(ROOT))
     ensure_private_dir(root)
     usage = shutil.disk_usage(root)
@@ -277,16 +308,61 @@ def environment_report() -> dict[str, Any]:
         "shared_computer_is_isolation": False,
         "https_webhook_receiver": False,
         "webhook_reason": "no verified public callback and the private seed disallows a public webhook",
-        "credential_slots": _secret_flags(),
+        "credential_slots": _secret_flags(environ, profile_env),
         "paid_subscription_changes": "not_performed",
         "guardian_version": __version__,
     }
 
 
-def _probe(name: str, func) -> dict[str, Any]:
+_CLEANUP_SECONDS = 0.05
+
+
+def _call_with_deadline(func, seconds: float):
+    """Run ``func`` until ``seconds`` of monotonic time have passed.
+
+    The worker shares one deadline. Each request uses the time still left as
+    its timeout and does not start after the deadline. Connect and TLS use that
+    remaining time, and an expired handshake closes its stream before request
+    bytes are written. On expiry the open clients and streams are closed, then
+    the worker is joined for a short bounded cleanup. The worker is a daemon so
+    process exit is not held open.
+    """
+    import threading
+
+    deadline = ProbeDeadline(seconds)
+    outcome: dict[str, Any] = {}
+
+    def run() -> None:
+        install_probe_deadline(deadline)
+        try:
+            outcome["value"] = func()
+        except Exception as exc:  # noqa: BLE001 - handed back to the probe reporter
+            outcome["error"] = exc
+        finally:
+            install_probe_deadline(None)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(max(deadline.remaining(), 0.0))
+    if thread.is_alive():
+        deadline.cancel()
+        thread.join(_CLEANUP_SECONDS)
+        raise TimeoutError("probe_deadline")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["value"]
+
+
+def _probe(name: str, func, *, deadline_seconds: float | None = None) -> dict[str, Any]:
     started = datetime.now(timezone.utc)
+
+    def invoke():
+        if deadline_seconds is None:
+            return func()
+        return _call_with_deadline(func, deadline_seconds)
+
     try:
-        payload = func()
+        payload = invoke()
         level = payload.pop("level")
     except Exception as exc:  # noqa: BLE001 - provider failures must be reported, not hidden
         return {
@@ -305,14 +381,57 @@ def _probe(name: str, func) -> dict[str, Any]:
     return payload
 
 
-def provider_probes() -> list[dict[str, Any]]:
-    flags = _secret_flags()
+def _probe_resolver(document: Mapping[str, Any] | None, environ: Mapping[str, str]):
+    """The effective resolver, or None when those settings cannot be loaded."""
+    from guardian.sources.resolver import HostnameResolver, load_resolver_settings
+
+    try:
+        settings = load_resolver_settings(document, environ)
+    except (ConfigError, SecurityError):
+        return None
+    return HostnameResolver(settings).resolve
+
+
+def _flags_from_resolutions(resolutions: list[Any] | None) -> dict[str, str]:
+    if resolutions is None:
+        return _secret_flags()
+    return {
+        name: "configured"
+        if any(item.variable == name and item.present for item in resolutions)
+        else "not_configured"
+        for name in SECRET_ENV
+    }
+
+
+def _selected_api_key(resolutions: list[Any] | None, name: str) -> str | None:
+    """The one selected value, or None when the caller did not pass a context."""
+    if resolutions is None:
+        return None
+    for item in resolutions:
+        if item.variable == name:
+            return item.reveal() if item.present else ""
+    return ""
+
+
+def provider_probes(
+    *,
+    live_timeout: float | None = None,
+    resolutions: list[Any] | None = None,
+    resolve=None,
+    deadline_seconds: float | None = None,
+) -> list[dict[str, Any]]:
+    flags = _flags_from_resolutions(resolutions)
+    timeout = 20.0 if live_timeout is None else live_timeout
+    etherscan_key = _selected_api_key(resolutions, "ETHERSCAN_API_KEY")
 
     def etherscan() -> dict[str, Any]:
-        return etherscan_chainlist_probe()
+        return etherscan_chainlist_probe(
+            get_text=lambda url: safe_get_text(url, timeout=timeout, resolve=resolve),
+            api_key=etherscan_key,
+        )
 
     def bsc() -> dict[str, Any]:
-        rpc = RpcClient(BSC_RPC)
+        rpc = RpcClient(BSC_RPC, timeout=timeout, resolve=resolve)
         chain_id = int(rpc.call("eth_chainId", []), 16)
         block = rpc.call("eth_getBlockByNumber", ["latest", False])
         if chain_id != 56:
@@ -325,12 +444,17 @@ def provider_probes() -> list[dict[str, Any]]:
         }
 
     def hyperliquid() -> dict[str, Any]:
-        status, body = safe_post_json("https://api.hyperliquid.xyz/info", {"type": "meta"})
+        status, body = safe_post_json(
+            "https://api.hyperliquid.xyz/info",
+            {"type": "meta"},
+            timeout=timeout,
+            resolve=resolve,
+        )
         ok = status == 200 and isinstance(body, dict)
         return {"level": "LIVE_PASS" if ok else "LIVE_FAIL", "http": status}
 
     def ofac() -> dict[str, Any]:
-        status, text = safe_get_text(OFAC_URL)
+        status, text = safe_get_text(OFAC_URL, timeout=timeout, resolve=resolve)
         import re
 
         addresses = re.findall(r"0x[a-fA-F0-9]{40}", text)
@@ -377,10 +501,10 @@ def provider_probes() -> list[dict[str, Any]]:
         blocked.append({"source_id": name, "level": "BLOCKED", "reason": reason, "latency_ms": 0})
 
     return [
-        _probe("etherscan_v2_chainlist", etherscan),
-        _probe("bsc_official_rpc", bsc),
-        _probe("hyperliquid_info", hyperliquid),
-        _probe("ofac_sdn_csv", ofac),
+        _probe("etherscan_v2_chainlist", etherscan, deadline_seconds=deadline_seconds),
+        _probe("bsc_official_rpc", bsc, deadline_seconds=deadline_seconds),
+        _probe("hyperliquid_info", hyperliquid, deadline_seconds=deadline_seconds),
+        _probe("ofac_sdn_csv", ofac, deadline_seconds=deadline_seconds),
         goplus(),
         *blocked,
         {
@@ -398,13 +522,78 @@ def provider_probes() -> list[dict[str, Any]]:
     ]
 
 
-def doctor() -> dict[str, Any]:
-    load_local_env()
-    env = environment_report()
-    probes = provider_probes()
+def doctor(
+    *,
+    live: bool = False,
+    mcm_config: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+    legacy_probe: bool = False,
+) -> dict[str, Any]:
+    """Offline host and credential report. ``live=True`` is the only bounded probe.
+
+    Requested resolver mode, effective resolver mode, connectivity, and egress
+    qualification stay separate. DoH enabled is not a qualified path. One
+    credential context is resolved and then used for the report and, when live,
+    for the probe requests. A 401 does not select the other source. Unusable
+    resolver settings are reported and not probed. Each live probe has a 5
+    second remaining-time deadline: a request does not start after it expires,
+    the handshake stream is closed before request bytes are written, and the
+    open client is closed. With ``--mcm-config`` the live calls stay
+    on the legacy provider endpoints; that does not prove the selected
+    profile's connectivity.
+    """
+    from guardian.configuration import load_public_config
+    from guardian.credentials import profile_from_environ, resolve_named
+    from guardian.diagnostics import credential_names, diagnostic_fields, refuse_secret_leaks
+
+    if environ is None:
+        load_local_env()
+        pool: Mapping[str, str] = os.environ
+    else:
+        pool = environ
+    document = None
+    if mcm_config:
+        document = load_public_config(mcm_config).document
+    profile_env = "MONITOR_SECRET_PROFILE"
+    if isinstance(document, dict):
+        private = document.get("private_inputs")
+        if isinstance(private, dict) and isinstance(private.get("secret_profile_file_env"), str):
+            profile_env = private["secret_profile_file_env"]
+    env = environment_report(pool, profile_env)
+    report_names = credential_names(document, SECRET_ENV)
+    probe_names = list(dict.fromkeys([*report_names, *SECRET_ENV]))
+    profile = profile_from_environ(pool, profile_env)
+    resolved = [resolve_named(name, profile, pool) for name in probe_names]
+    by_name = {item.variable: item for item in resolved}
+    report_resolutions = [by_name[name] for name in report_names]
+    probes = []
+    probed = False
+    if live:
+        resolve = _probe_resolver(document, pool)
+        if resolve is not None:
+            probed = True
+            probes = provider_probes(
+                live_timeout=5.0,
+                resolutions=resolved,
+                resolve=resolve,
+                deadline_seconds=5.0,
+            )
+    fields = diagnostic_fields(
+        document,
+        pool,
+        fallback_names=SECRET_ENV,
+        resolutions=report_resolutions,
+    )
+    fields["connectivity"] = {
+        "probed": probed,
+        "bounded": True,
+        "timeout_seconds": 5 if probed else None,
+        "timeout_kind": "whole_call" if probed else None,
+    }
     report = {
         "status": "completed_with_limitations",
         "mode": "READ_ONLY",
+        "offline": not live,
         "monitoring_active": False,
         "monitoring_mode": monitoring_mode(scheduler_verified=False, next_run_read_back=False),
         "environment": env,
@@ -413,17 +602,39 @@ def doctor() -> dict[str, Any]:
         "assisted_actions_enabled": False,
         "mainnet_test_transactions_authorized": False,
         "agent_may_sign": False,
-        "user_mainnet_send_env": os.environ.get(MAINNET_SEND_ENV, "false").lower() == "true",
+        "user_mainnet_send_env": str(pool.get(MAINNET_SEND_ENV, "false")).lower() == "true",
         "writes_enabled": False,
+        **fields,
     }
+    if live and (mcm_config or legacy_probe):
+        report["live_probe"] = {
+            "kind": "legacy_provider_probe",
+            "proves_selected_profile_connectivity": False,
+            "note": "legacy probe; does not prove the selected profile's connectivity",
+        }
+    secrets = [item.reveal() for item in resolved if item.present]
+    refuse_secret_leaks(report, secrets)
     secure_write_text(ROOT / "environment_report.json", json.dumps(report["environment"], indent=2) + "\n")
     secure_write_text(
         ROOT / "source_registry.json",
-        json.dumps({"generated_at_taipei": now_local(), "providers": probes}, indent=2) + "\n",
+        json.dumps(
+            {"generated_at_taipei": now_local(), "offline": not live, "providers": probes},
+            indent=2,
+        )
+        + "\n",
     )
     secure_write_text(
         ROOT / "provider_benchmark.json",
-        json.dumps({"generated_at_taipei": now_local(), "results": probes, "stress_tests": "BLOCKED"}, indent=2) + "\n",
+        json.dumps(
+            {
+                "generated_at_taipei": now_local(),
+                "offline": not live,
+                "results": probes,
+                "stress_tests": "NOT_RUN" if not live else "BLOCKED",
+            },
+            indent=2,
+        )
+        + "\n",
     )
     return report
 

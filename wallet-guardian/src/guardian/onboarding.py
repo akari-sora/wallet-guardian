@@ -24,6 +24,7 @@ from guardian.configuration import git_work_tree, load_accounts, load_public_con
 from guardian.errors import ConfigError
 from guardian.identities import IdentityError, parse_address
 from guardian.locations import config_dir, ensure_private_dir, secure_write_text, state_dir
+from guardian.network_aliases import canonical_network
 from guardian.network_registry import load_registry
 from guardian.resources import resource_path
 
@@ -289,10 +290,15 @@ def _normalize_account(item: Any) -> dict[str, Any]:
     if own_group is not None and (not isinstance(own_group, str) or _OWN_GROUP.fullmatch(own_group) is None):
         raise ConfigError("own_group is invalid")
     registry = _registry()
+    canonical_names: list[str] = []
     for network in networks:
-        entry = registry.get(network)
-        if entry is None or entry.get("family") != family:
-            raise ConfigError("network family mismatch")
+        name = canonical_network(network, registry)
+        entry = registry[name]
+        if entry.get("family") != family:
+            raise ConfigError(f"network family mismatch: {name}")
+        if name not in canonical_names:
+            canonical_names.append(name)
+    networks = canonical_names
     try:
         if family == "cosmos":
             normalized = parse_address(family, address.strip(), networks[0])
