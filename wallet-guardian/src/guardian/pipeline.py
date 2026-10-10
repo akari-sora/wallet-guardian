@@ -263,10 +263,6 @@ def run_capability_pipeline(
     from guardian.balances.native import RoundBudget, prime_native_balances
 
     round_budget = RoundBudget(clock, started_at, deadline)
-    _drain_explanations(
-        database, tenant, transport, clock, round_budget, public_config, private_inputs, account_by_wallet,
-    )
-
     balance_prime = prime_native_balances(
         public_config=public_config,
         private_inputs=private_inputs,

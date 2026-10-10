@@ -168,6 +168,8 @@ class ListaBackend:
         self.report_printed = False
         self.deadline_on_status = False
         self.advance_on_storage = True
+        self.explanation_delay = False
+        self.before_explanation: dict | None = None
         self.alert_rows: list[tuple[str, ...]] | None = None
         manifest = load_manifest(json.loads(APPROVED.read_text(encoding="utf-8")))
         assert manifest is not None
@@ -183,6 +185,17 @@ class ListaBackend:
         self._build(manifest)
 
     def send(self, call: object) -> RawResponse:
+        timeout = getattr(call, "timeout", None)
+        if (
+            self.explanation_delay
+            and isinstance(timeout, (int, float))
+            and not isinstance(timeout, bool)
+            and timeout > 0
+        ):
+            if self.before_explanation is None:
+                self.before_explanation = self._explanation_observation()
+            if self.clock_box is not None:
+                self.clock_box[0] += 6
         url = str(getattr(call, "url", ""))
         body = getattr(call, "body", b"") or b""
         if not body:
@@ -317,6 +330,31 @@ class ListaBackend:
 
     def mark_report_printed(self) -> None:
         self.report_printed = True
+
+    def _explanation_observation(self) -> dict:
+        connection = sqlite3.connect(self.state / "state" / "monitor.sqlite", timeout=5)
+        try:
+            alerts = connection.execute("SELECT payload FROM alerts").fetchall()
+            outbox = connection.execute("SELECT payload FROM outbox").fetchall()
+        finally:
+            connection.close()
+
+        def has_delta(rows: list) -> bool:
+            for row in rows:
+                payload = row[0]
+                if not isinstance(payload, str):
+                    continue
+                body = json.loads(payload)
+                if isinstance(body, dict) and body.get("kind") == "balance_delta":
+                    return True
+            return False
+
+        return {
+            "alerts": has_delta(alerts),
+            "clock": None if self.clock_box is None else self.clock_box[0],
+            "outbox": has_delta(outbox),
+            "report_printed": self.report_printed,
+        }
 
     def _snapshot_alerts(self) -> None:
         connection = sqlite3.connect(self.state / "state" / "monitor.sqlite", timeout=5)
@@ -1707,3 +1745,58 @@ def test_expl_fix_unexpired_lease_is_not_stolen(tmp_path: Path) -> None:
     finally:
         database.close()
     assert _other_process_claim(path, event_id) == ("claimed", "2")
+
+
+def test_expl_fix_explanation_follows_the_balance_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A new movement is committed before slow explanation work, which cannot spend the balance budget."""
+    _inject_approved(monkeypatch)
+    config = _desk(tmp_path, monkeypatch)
+    document = json.loads(config.read_text(encoding="utf-8"))
+    document["polling"]["round_deadline_seconds"] = 180
+    config.write_text(json.dumps(document), encoding="utf-8")
+    box = [CLOCK]
+    backend = ListaBackend("match", tmp_path)
+    backend.clock_box = box
+
+    def clock() -> float:
+        return box[0]
+
+    backend.head = backend.old
+    backend.balance = ONE
+    _run(config, backend, capsys, clock=clock)
+    database = _db(tmp_path)
+    try:
+        for index in range(6):
+            event_id = f"backlog-{index}"
+            old_block = 80 + index
+            enqueue(
+                database, TENANT, event_id,
+                account=OWNER, network="bsc-mainnet", wallet_id=WALLET,
+                payload={
+                    "asset": ASSET,
+                    "dedup_key": event_id,
+                    "direction": "increase",
+                    "kind": "balance_delta",
+                    "network": "bsc-mainnet",
+                    "new_checkpoint": {"block_hash": _hash(backend.new), "block_number": str(backend.new)},
+                    "old_checkpoint": {"block_hash": _hash(old_block), "block_number": str(old_block)},
+                    "signed_delta_raw": str(PAY + index),
+                    "wallet_id": WALLET,
+                },
+            )
+    finally:
+        database.close()
+    backend.explanation_delay = True
+    backend.head = backend.new
+    backend.balance = ONE + backend.payment + backend.extra
+    box[0] = CLOCK
+    _run(config, backend, capsys, clock=clock)
+    seen = backend.before_explanation
+    assert seen is not None
+    assert seen["clock"] == CLOCK
+    assert seen["report_printed"] is True
+    assert seen["alerts"] is True
+    assert seen["outbox"] is True
+    assert _deltas(tmp_path)
