@@ -198,7 +198,7 @@ def _stored_transfer(
         return False
     if body.get("wallet_id") != wallet or body.get("network") != network:
         return False
-    if body.get("execution_evidence") == "limited" or body.get("attribution") == "indexer_reported":
+    if body.get("execution_evidence") != "evidenced" or body.get("attribution") == "indexer_reported":
         return False
     found_asset = body.get("asset")
     if asset and isinstance(found_asset, str) and found_asset and found_asset.lower() != asset:
@@ -211,11 +211,12 @@ def _stored_transfer(
 
 
 def _insufficient(item: Any) -> bool:
+    """Positive execution evidence is required. Missing markers stay limited."""
     evidence = getattr(item, "execution_evidence", None)
     attribution = getattr(item, "attribution", None)
-    if evidence == "limited" or attribution == "indexer_reported":
+    if attribution == "indexer_reported":
         return True
-    return evidence not in {None, "evidenced"}
+    return evidence != "evidenced"
 
 
 def _asset_mismatch(item: Any, asset: str) -> bool:
@@ -281,6 +282,8 @@ def _fee_rows(
         found_asset = body.get("asset")
         if asset and isinstance(found_asset, str) and found_asset and found_asset.lower() != asset:
             continue
+        if body.get("finality") == "orphaned":
+            continue
         if body.get("tx_status") != "success":
             return None
         amount = _as_int(body.get("raw_amount"))
@@ -309,3 +312,169 @@ def _as_int(value: Any) -> int | None:
 def _transfer_key(item: Any) -> str:
     identity = getattr(item, "identity", "")
     return str(identity)
+
+
+def claim_notification(conn: Any, tenant_id: str, alert: dict[str, Any]) -> bool:
+    """Decide a pending notification inside the caller's transaction.
+
+    Either producer may call this. False means the other record already holds
+    the movement: the alert may still be stored, and a sent outbox row is left
+    as it is. True means this call may insert the pending row.
+    """
+    kind = alert.get("kind")
+    if kind == "balance_delta":
+        keys, components = movement_link(conn, tenant_id, alert)
+        if not keys:
+            return True
+        alert["components"] = components
+        alert["linked_transfers"] = keys
+        dedup = alert.get("dedup_key")
+        if isinstance(dedup, str):
+            for key in keys:
+                _insert_link(conn, tenant_id, dedup, key)
+        return False
+    if kind in {"native_eth", "asset_usd", "native_unit"}:
+        found = _deltas_covering(conn, tenant_id, alert)
+        if not found:
+            return True
+        transfer_key = str(alert.get("identity") or alert.get("dedup_key") or "")
+        if not transfer_key:
+            return True
+        for dedup, components in found:
+            _enrich_stored_delta(conn, tenant_id, dedup, transfer_key, components)
+        return False
+    return True
+
+
+def _deltas_covering(conn: Any, tenant_id: str, alert: Mapping[str, Any]) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Stored balance deltas this transfer already explains, with their components."""
+    if alert.get("alert") is not True:
+        return []
+    if alert.get("execution_evidence") != "evidenced" or alert.get("attribution") == "indexer_reported":
+        return []
+    wallet = alert.get("wallet_id")
+    network = alert.get("network")
+    asset = str(alert.get("asset") or "").lower()
+    block = _as_int(alert.get("block_number"))
+    if block is None or alert.get("direction") not in {"in", "out"}:
+        return []
+    rows = conn.execute("SELECT payload FROM alerts WHERE tenant_id=?", (tenant_id,)).fetchall()
+    bodies: list[dict[str, Any]] = []
+    for row in rows:
+        payload = row["payload"]
+        body = payload if isinstance(payload, dict) else json.loads(payload)
+        if isinstance(body, dict):
+            bodies.append(body)
+    identity = str(alert.get("identity") or alert.get("dedup_key") or "")
+    found: list[tuple[str, list[dict[str, Any]]]] = []
+    for body in bodies:
+        if body.get("kind") != "balance_delta" or body.get("alert") is not True:
+            continue
+        if body.get("wallet_id") != wallet or body.get("network") != network:
+            continue
+        window = _window(body)
+        if window is None:
+            continue
+        signed, old_block, new_block = window
+        if not old_block < block <= new_block:
+            continue
+        delta_asset = str(body.get("asset") or "").lower()
+        if asset and delta_asset and asset != delta_asset:
+            continue
+        scoped = asset or delta_asset
+        matched: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for other in bodies:
+            if not _stored_transfer(other, wallet, network, scoped, old_block, new_block):
+                continue
+            key = str(other.get("identity") or other.get("dedup_key") or "")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            matched.append(other)
+        if identity and identity not in seen and _stored_transfer(alert, wallet, network, scoped, old_block, new_block):
+            matched.append(alert)
+        if not matched:
+            continue
+        total = 0
+        broken = False
+        for item in matched:
+            amount = _as_int(item.get("raw_amount"))
+            if amount is None:
+                broken = True
+                break
+            if item.get("direction") == "in":
+                total += amount
+            elif item.get("direction") == "out":
+                total -= amount
+            else:
+                broken = True
+                break
+        if broken:
+            continue
+        fees = _fee_rows(conn, tenant_id, wallet, network, scoped, old_block, new_block)
+        if fees is None:
+            continue
+        if total - sum(int(item["raw_amount"]) for item in fees) != signed:
+            continue
+        directions = {item.get("direction") for item in matched}
+        if len(directions) > 1 and signed == 0:
+            continue
+        components = [
+            {
+                "asset": item.get("asset") or scoped,
+                "direction": item.get("direction"),
+                "raw_amount": str(item.get("raw_amount")),
+                "role": "transfer",
+                "tx_id": item.get("tx_id"),
+            }
+            for item in matched
+        ]
+        components.extend(fees)
+        dedup = body.get("dedup_key")
+        if isinstance(dedup, str) and dedup:
+            found.append((dedup, components))
+    return found
+
+
+def _insert_link(conn: Any, tenant_id: str, observation_key: str, transfer_key: str) -> None:
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO balance_explanations(tenant_id, observation_key, transfer_key)
+        VALUES (?, ?, ?)
+        """,
+        (tenant_id, observation_key, transfer_key),
+    )
+
+
+def _enrich_stored_delta(
+    conn: Any, tenant_id: str, dedup: str, transfer_key: str, components: list[dict[str, Any]],
+) -> None:
+    """Attach the transfer to the stored delta. Pending payload may follow. Sent rows stay sent."""
+    row = conn.execute(
+        "SELECT id, payload FROM alerts WHERE tenant_id=? AND dedup_key=?",
+        (tenant_id, dedup),
+    ).fetchone()
+    _insert_link(conn, tenant_id, dedup, transfer_key)
+    if row is None:
+        return
+    payload = row["payload"]
+    body = payload if isinstance(payload, dict) else json.loads(payload)
+    if not isinstance(body, dict):
+        return
+    links = [str(item) for item in body.get("linked_transfers") or [] if isinstance(item, str) and item]
+    if transfer_key not in links:
+        links.append(transfer_key)
+    body["linked_transfers"] = links
+    body["components"] = components
+    if body.get("attribution") in {None, "", "unavailable"}:
+        body["attribution"] = "reconciled"
+    encoded = json.dumps(body, sort_keys=True, ensure_ascii=False, allow_nan=False)
+    conn.execute("UPDATE alerts SET payload=? WHERE id=?", (encoded, row["id"]))
+    for outbox in conn.execute("SELECT id, status, payload FROM outbox WHERE tenant_id=?", (tenant_id,)):
+        if outbox["status"] != "pending":
+            continue
+        current = outbox["payload"]
+        found = current if isinstance(current, dict) else json.loads(current)
+        if isinstance(found, dict) and found.get("dedup_key") == dedup:
+            conn.execute("UPDATE outbox SET payload=? WHERE id=?", (encoded, outbox["id"]))

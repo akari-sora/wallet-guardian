@@ -181,6 +181,7 @@ def prime_native_balances(
             fetched.append(item)
             continue
         item["transport"] = transport
+        item["budget"] = budget
         read = read_definite_balance(transport, source_id, account.normalized.canonical, policy, budget)
         item["read"] = read
         if read.eligible and read.raw is not None and read.block_number is not None and read.block_hash:
@@ -750,8 +751,11 @@ def _block_by_number(
         return None, failure or "read_error"
     result = body.get("result")
     if result is None:
+        # A successful envelope with a null result means the checkpoint is absent.
+        # That is distinct from an unsupported parameter or tag, including for
+        # finalized and safe. Callers must not treat it as a reason to read head.
         if isinstance(number, str):
-            return None, "unsupported_block"
+            return None, "checkpoint_unavailable"
         return None, "block_unreadable"
     parsed = _parse_block(result)
     if parsed is None:
@@ -909,7 +913,7 @@ def _error_message(body: Mapping[str, Any]) -> str:
 
 def _skip_latest(read: ReadResult) -> bool:
     failure = (read.failure or "").lower()
-    if failure in {"deadline", "malformed_response", "rate_limited", "reorg_during_read"}:
+    if failure in {"checkpoint_unavailable", "deadline", "malformed_response", "rate_limited", "reorg_during_read"}:
         return True
     return _denied_fallback(failure)
 
@@ -1044,32 +1048,42 @@ def _rebaseline_if_proven(
     policy: ConfirmationPolicy,
     started: str,
 ) -> str:
-    """Replace the baseline only after the stored hash was re-read and is not canonical."""
+    """Prove the stored checkpoint is still canonical before any forward comparison.
+
+    An open conflict row is not required. A numeric-height fallback on the new
+    block does not prove the old hash. ``stop`` defers the comparison: no
+    continuous delta is written. ``moved`` means the old hash was re-read and
+    is not canonical, so the baseline was replaced without a movement alert.
+    """
     if stored is None or read.block_number is None or read.block_number <= int(stored["block_number"]):
         return "continue"
-    conflicts = database.native_conflicts_for(tenant, item["wallet_id"], item["network"], item["asset"])
-    open_rows = [
-        row for row in conflicts
-        if row.get("status") == "open" and int(row["block_number"]) == int(stored["block_number"])
-    ]
-    if not open_rows:
-        return "continue"
     transport = item.get("transport")
+    budget = item.get("budget")
+    if not isinstance(budget, RoundBudget):
+        budget = None
     if transport is None:
         return "stop"
-    canonical, failure = _block_by_number(transport, item["source_id"], int(stored["block_number"]), None)
+    if budget is not None and budget.expired():
+        return "stop"
+    canonical, _failure = _block_by_number(transport, item["source_id"], int(stored["block_number"]), budget)
     if canonical is None:
-        return "stop" if failure else "stop"
+        return "stop"
     stored_hash = str(stored["block_hash"]).lower()
     if canonical["hash"] == stored_hash:
-        database.close_native_conflicts(
-            tenant,
-            wallet_id=item["wallet_id"],
-            network=item["network"],
-            asset=item["asset"],
-            block_number=int(stored["block_number"]),
-            stored_hash=stored_hash,
-        )
+        conflicts = database.native_conflicts_for(tenant, item["wallet_id"], item["network"], item["asset"])
+        open_rows = [
+            row for row in conflicts
+            if row.get("status") == "open" and int(row["block_number"]) == int(stored["block_number"])
+        ]
+        if open_rows:
+            database.close_native_conflicts(
+                tenant,
+                wallet_id=item["wallet_id"],
+                network=item["network"],
+                asset=item["asset"],
+                block_number=int(stored["block_number"]),
+                stored_hash=stored_hash,
+            )
         return "continue"
     status = database.rebaseline_native(
         tenant,
@@ -1086,8 +1100,6 @@ def _rebaseline_if_proven(
     )
     if status == "committed":
         return "moved"
-    if status == "conflict":
-        return "stop"
     return "stop"
 
 

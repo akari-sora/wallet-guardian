@@ -82,6 +82,10 @@ class ScriptBackend:
         self.historical_reject = False
         self.balance_both = False
         self.finalized_429 = False
+        self.finalized_null = False
+        self.finalized_unsupported = False
+        self.exhaust_after_nonce = False
+        self.clock_box: list[float] | None = None
         self.fail_price = False
         self.block_at_price: int | None = None
         self.price_urls: list[str] = []
@@ -143,10 +147,16 @@ class ScriptBackend:
                 self.clock_jump[0] = True
             if tag == "finalized" and self.finalized_429:
                 return RawResponse(429, {}, b"")
+            if tag == "finalized" and self.finalized_null:
+                return _ok(None)
+            if tag == "finalized" and self.finalized_unsupported:
+                return _err("unsupported block tag", -32602)
             return _ok(self._block(params))
         if method == "eth_getBalance":
             return self._balance(params)
         if method == "eth_getTransactionCount":
+            if self.exhaust_after_nonce and self.clock_box is not None:
+                self.clock_box[0] = CLOCK + 100
             return _ok(hex(self.nonce))
         if method == "eth_getLogs":
             return _ok([])
@@ -1388,6 +1398,412 @@ def test_own_wallet_pair_stays_net_even_with_a_native_floor() -> None:
         candidate("wallet-a", "", "out", "two"),
     ])
     assert [item.kind for item in separate if item.alert] == ["native_unit", "native_unit"]
+
+
+def test_a07_null_checkpoint_is_not_an_unsupported_tag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A07. result null is an absent checkpoint. An explicit tag rejection may still read head."""
+    from guardian.balances.native import ConfirmationPolicy, read_definite_balance
+    from guardian.sources.transport import TransportResult
+
+    class TagTransport:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object]] = []
+
+        def request(self, source_id: str, operation: object, priority: str = "high") -> TransportResult:
+            del priority
+            method = str(getattr(operation, "method", ""))
+            params = getattr(operation, "params", None)
+            tag = params[0] if isinstance(params, list) and params else None
+            self.calls.append((method, tag))
+            body = {"id": 1, "jsonrpc": "2.0", "result": None}
+            return TransportResult(source_id, 200, body, "ok", "ok", False, False, "", {})
+
+    for tag in ("finalized", "safe"):
+        transport = TagTransport()
+        policy = ConfirmationPolicy("checkpoint", tag, 15, tag == "finalized")
+        read = read_definite_balance(transport, "rpc", ADDRESS, policy)
+        assert read.eligible is False
+        assert read.failure == "checkpoint_unavailable"
+        assert [method for method, _used in transport.calls] == ["eth_getBlockByNumber"]
+        assert transport.calls[0][1] == tag
+
+    config = _desk(tmp_path, monkeypatch)
+    backend = ScriptBackend()
+    backend.finalized_null = True
+    backend.at(10, NINE)
+    report = _run(config, backend, capsys, expect_ok=False)
+    methods = [call["method"] for call in backend.calls]
+    assert "eth_getBalance" not in methods
+    balance_blocks = [
+        call for call in backend.calls
+        if call["method"] == "eth_getBlockByNumber" and call["params"][:1] == ["finalized"]
+    ]
+    assert balance_blocks
+    assert "checkpoint_unavailable" in _coverage(report, "balances.native")["reason_codes"]
+    assert _baseline(tmp_path) is None
+    assert _deltas(tmp_path) == []
+
+    allowed = tmp_path / "unsupported-tag"
+    allowed_config = _desk(allowed, monkeypatch)
+    allowed_backend = ScriptBackend()
+    allowed_backend.finalized_unsupported = True
+    allowed_backend.at(10, ONE)
+    _run(allowed_config, allowed_backend, capsys)
+    assert "eth_blockNumber" in [call["method"] for call in allowed_backend.calls]
+    stored = _baseline(allowed)
+    assert stored is not None
+    assert stored["block_number"] == 10
+    assert int(stored["raw_balance"]) == ONE
+
+
+def test_c05_forward_fork_does_not_emit_continuous(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """C05. Re-read the stored height before a forward delta, even with no open conflict."""
+    config = _desk(tmp_path, monkeypatch)
+    backend = ScriptBackend()
+    backend.at(100, ONE)
+    _run(config, backend, capsys)
+    backend.canonical_hashes[100] = _hash(900)
+    backend.at(101, NINE)
+    backend.calls.clear()
+    _run(config, backend, capsys)
+    proofs = [
+        call for call in backend.calls
+        if call["method"] == "eth_getBlockByNumber" and call["params"][:1] == [hex(100)]
+    ]
+    assert proofs
+    moved = _baseline(tmp_path)
+    assert moved is not None
+    assert moved["block_number"] == 101
+    assert moved["continuity"] == "rebaseline"
+    assert int(moved["raw_balance"]) == NINE
+    assert _deltas(tmp_path) == []
+
+
+def test_e04_revalidation_uses_the_round_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """E04. A nonce read that exhausts the deadline must not start the old-checkpoint proof."""
+    config = _desk(tmp_path, monkeypatch, deadline=5)
+    backend = ScriptBackend()
+    backend.at(100, ONE)
+    _run(config, backend, capsys)
+    box = [CLOCK]
+    backend.clock_box = box
+    backend.exhaust_after_nonce = True
+    backend.canonical_hashes[100] = _hash(900)
+    backend.at(101, NINE)
+    backend.calls.clear()
+
+    def clock() -> float:
+        return box[0]
+
+    _run(config, backend, capsys, clock=clock, expect_ok=False)
+    proofs = [
+        call for call in backend.calls
+        if call["method"] == "eth_getBlockByNumber" and call["params"][:1] == [hex(100)]
+    ]
+    methods = [call["method"] for call in backend.calls]
+    assert "eth_getBalance" in methods
+    assert "eth_getTransactionCount" in methods
+    assert proofs == []
+    stored = _baseline(tmp_path)
+    assert stored is not None
+    assert stored["block_number"] == 100
+    assert stored["continuity"] != "rebaseline"
+    assert _deltas(tmp_path) == []
+
+
+def test_g05_missing_execution_evidence_is_not_reconciled(tmp_path: Path) -> None:
+    """G05. An external native candidate with no execution marker is not explained away."""
+    from guardian.balances.reconcile import reconcile_native
+    from guardian.rules import Candidate
+
+    database = Database(tmp_path / "g05.sqlite")
+    try:
+        _seed_delta(database, signed=5 * ONE)
+        candidate = Candidate(
+            tenant_id=TENANT,
+            wallet_id=WALLET,
+            network="bsc-mainnet",
+            capability="history.native_external",
+            identity="external-without-evidence",
+            kind="asset",
+            raw_amount=5 * ONE,
+            is_native=True,
+            direction="in",
+            tx_id="0x" + "51" * 32,
+            transfer_origin="evm_external",
+            block_number=15,
+            asset=ASSET,
+        )
+        pending = [candidate]
+        assert reconcile_native(database, TENANT, pending) == []
+        assert pending == [candidate]
+        stored = next(item for item in database.alerts_for(TENANT) if item.get("kind") == "balance_delta")
+        assert stored.get("attribution") != "reconciled"
+        assert stored.get("explained_by") in (None, [])
+    finally:
+        database.close()
+
+
+def test_g06_orphaned_fee_does_not_complete_reconciliation(tmp_path: Path) -> None:
+    """G06. An orphaned fee is excluded. A confirmed fee can still complete the sum."""
+    from guardian.balances.reconcile import reconcile_native
+    from guardian.events import ChainEvent
+    from guardian.rules import Candidate
+
+    def fee(tx: str, finality: str) -> ChainEvent:
+        return ChainEvent(
+            tenant_id=TENANT,
+            wallet_id=WALLET,
+            network="bsc-mainnet",
+            chain_uid="eip155:56",
+            tx_id=tx,
+            sub_index="fee",
+            kind="fee",
+            asset=ASSET,
+            raw_amount=str(ONE),
+            block_number="15",
+            block_hash=_hash(15),
+            tx_status="success",
+            finality=finality,
+            source_ids=("nodereal",),
+            observed_at="2023-11-14T22:13:20Z",
+        )
+
+    def candidate(identity: str) -> Candidate:
+        return Candidate(
+            tenant_id=TENANT,
+            wallet_id=WALLET,
+            network="bsc-mainnet",
+            capability="history.native_internal",
+            identity=identity,
+            kind="asset",
+            raw_amount=5 * ONE,
+            is_native=True,
+            direction="in",
+            tx_id="0x" + "61" * 32,
+            transfer_origin="evm_internal",
+            execution_evidence="evidenced",
+            attribution="trace",
+            block_number=15,
+            asset=ASSET,
+        )
+
+    orphaned_only = Database(tmp_path / "orphaned.sqlite")
+    try:
+        _seed_delta(orphaned_only, signed=4 * ONE)
+        orphaned_only.commit_capability_cycle(
+            TENANT, events=[fee("0x" + "62" * 32, "orphaned")], capability_rows=[], cursors=[], alerts=[],
+        )
+        pending = [candidate("orphaned-only")]
+        assert reconcile_native(orphaned_only, TENANT, pending) == []
+        assert len(pending) == 1
+    finally:
+        orphaned_only.close()
+
+    mixed = Database(tmp_path / "mixed.sqlite")
+    try:
+        _seed_delta(mixed, signed=4 * ONE)
+        mixed.commit_capability_cycle(
+            TENANT,
+            events=[fee("0x" + "63" * 32, "orphaned"), fee("0x" + "64" * 32, "confirmed")],
+            capability_rows=[],
+            cursors=[],
+            alerts=[],
+        )
+        pending = [candidate("mixed-fees")]
+        removed = reconcile_native(mixed, TENANT, pending)
+        assert removed == ["mixed-fees"]
+        assert pending == []
+        stored = next(item for item in mixed.alerts_for(TENANT) if item.get("kind") == "balance_delta")
+        assert stored["attribution"] == "reconciled"
+        fee_rows = [item for item in stored["components"] if item.get("role") == "fee"]
+        assert len(fee_rows) == 1
+        assert fee_rows[0]["raw_amount"] == str(ONE)
+    finally:
+        mixed.close()
+
+
+def test_f06_malformed_native_amount_is_a_parsing_gap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """F06. A relevant internal row with a bad native amount is not an empty history."""
+    from guardian.balances.internal import normalize_internal_batch
+
+    row = _internal("0x" + "71" * 32, ONE, 12, "1")
+    row["value"] = "0xnothex"
+    parsed = normalize_internal_batch([row], chain_id=56, owner=ADDRESS)
+    assert parsed.rows == ()
+    assert parsed.gap == "parsing_gap"
+    raw_only = _internal("0x" + "72" * 32, ONE, 12, "1")
+    raw_only.pop("value")
+    raw_only["rawContract"] = {"value": "0xnothex"}
+    raw_parsed = normalize_internal_batch([raw_only], chain_id=56, owner=ADDRESS)
+    assert raw_parsed.rows == ()
+    assert raw_parsed.gap == "parsing_gap"
+    stranger = dict(row)
+    stranger["from"] = OTHER
+    stranger["to"] = OTHER
+    ignored = normalize_internal_batch([stranger], chain_id=56, owner=ADDRESS)
+    assert ignored.rows == ()
+    assert ignored.gap is None
+
+    config = _desk(tmp_path, monkeypatch, nodereal_key=True)
+    backend = ScriptBackend()
+    backend.at(10, ONE)
+    backend.by_category["internal"] = [row]
+    report = _run(config, backend, capsys)
+    internal = _coverage(report, "history.native_internal")
+    assert "parsing_gap" in internal["reason_codes"]
+    assert internal.get("quality") != "complete"
+    assert _events(tmp_path) == []
+
+
+def test_g07_interleaved_commits_notify_once(tmp_path: Path) -> None:
+    """G07. History judges first, balance commits, then history commits: one pending notification."""
+    from guardian.balances.reconcile import reconcile_native
+    from guardian.rules import AlertPolicy, Candidate
+
+    path = tmp_path / "interleave.sqlite"
+    history = Database(path)
+    balance = Database(path)
+    try:
+        candidate = Candidate(
+            tenant_id=TENANT,
+            wallet_id=WALLET,
+            network="bsc-mainnet",
+            capability="history.native_internal",
+            identity="interleaved-transfer",
+            kind="asset",
+            raw_amount=5 * ONE,
+            is_native=True,
+            direction="in",
+            tx_id="0x" + "81" * 32,
+            transfer_origin="evm_internal",
+            execution_evidence="evidenced",
+            attribution="trace",
+            block_number=15,
+            asset=ASSET,
+        )
+        judged_candidates = [candidate]
+        assert reconcile_native(history, TENANT, judged_candidates) == []
+        assert judged_candidates == [candidate]
+        history.conn.rollback()
+        decision = AlertPolicy(Decimal("0.5"), Decimal("1000"), {"bsc-mainnet": Decimal("1.0")}).apply(judged_candidates)
+        assert len(decision) == 1
+        assert decision[0].alert is True
+        assert decision[0].kind == "native_unit"
+        transfer = decision[0].as_dict()
+
+        assert balance.commit_native_observation(
+            TENANT,
+            wallet_id=WALLET,
+            network="bsc-mainnet",
+            asset=ASSET,
+            expected_version=0,
+            checkpoint=_checkpoint(10, ONE),
+            continuity="baseline",
+            retention_blocks=15,
+            reset_checkpoints=False,
+            alert=None,
+            record_failure=None,
+        ) == "committed"
+        delta = {
+            "alert": True,
+            "asset": ASSET,
+            "attribution": "unavailable",
+            "dedup_key": "delta-interleaved",
+            "direction": "increase",
+            "kind": "balance_delta",
+            "network": "bsc-mainnet",
+            "new_checkpoint": {"block_hash": _hash(20), "block_number": "20"},
+            "old_checkpoint": {"block_hash": _hash(10), "block_number": "10"},
+            "signed_delta_raw": str(5 * ONE),
+            "wallet_id": WALLET,
+        }
+        assert balance.commit_native_observation(
+            TENANT,
+            wallet_id=WALLET,
+            network="bsc-mainnet",
+            asset=ASSET,
+            expected_version=1,
+            checkpoint=_checkpoint(20, ONE + 5 * ONE),
+            continuity="continuous",
+            retention_blocks=15,
+            reset_checkpoints=False,
+            alert=delta,
+            record_failure=None,
+            decision=delta,
+        ) == "committed"
+        with balance.conn:
+            balance.conn.execute(
+                "INSERT INTO deliveries(tenant_id, payload) VALUES(?, ?)",
+                (TENANT, '{"receipt":"kept"}'),
+            )
+
+        history.commit_capability_cycle(
+            TENANT, events=[], capability_rows=[], cursors=[], alerts=[transfer],
+        )
+        outbox = history.outbox_for(TENANT)
+        movements = [
+            row for row in outbox
+            if row["payload"].get("kind") in {"asset_usd", "balance_delta", "native_eth", "native_unit"}
+        ]
+        assert len(movements) == 1
+        assert movements[0]["status"] == "pending"
+        assert movements[0]["payload"]["kind"] == "balance_delta"
+        kinds = [item["kind"] for item in history.alerts_for(TENANT)]
+        assert "balance_delta" in kinds
+        assert "native_unit" in kinds
+        assert history.conn.execute("SELECT COUNT(*) FROM balance_explanations").fetchone()[0] >= 1
+        assert "kept" in history.conn.execute("SELECT payload FROM deliveries").fetchone()[0]
+        sent = [row["status"] for row in outbox]
+        assert sent == ["pending"]
+    finally:
+        history.close()
+        balance.close()
+
+
+def _seed_delta(database: Database, *, signed: int) -> None:
+    assert database.commit_native_observation(
+        TENANT,
+        wallet_id=WALLET,
+        network="bsc-mainnet",
+        asset=ASSET,
+        expected_version=0,
+        checkpoint=_checkpoint(10, ONE),
+        continuity="baseline",
+        retention_blocks=15,
+        reset_checkpoints=False,
+        alert=None,
+        record_failure=None,
+    ) == "committed"
+    delta = {
+        "alert": True,
+        "asset": ASSET,
+        "attribution": "unavailable",
+        "dedup_key": "delta-seed",
+        "direction": "increase",
+        "kind": "balance_delta",
+        "network": "bsc-mainnet",
+        "new_checkpoint": {"block_hash": _hash(20), "block_number": "20"},
+        "old_checkpoint": {"block_hash": _hash(10), "block_number": "10"},
+        "signed_delta_raw": str(signed),
+        "wallet_id": WALLET,
+    }
+    assert database.commit_native_observation(
+        TENANT,
+        wallet_id=WALLET,
+        network="bsc-mainnet",
+        asset=ASSET,
+        expected_version=1,
+        checkpoint=_checkpoint(20, ONE + signed),
+        continuity="continuous",
+        retention_blocks=15,
+        reset_checkpoints=False,
+        alert=delta,
+        record_failure=None,
+        decision=delta,
+    ) == "committed"
 
 
 def test_unknown_native_unit_key_is_a_config_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

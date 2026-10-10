@@ -310,19 +310,25 @@ class Database:
         return [json.loads(row["payload"]) for row in rows]
 
     def _add_alert(self, tenant_id: str, dedup_key: str, payload: dict[str, Any], *, notify: bool = True) -> bool:
-        encoded = _json(payload)
         cursor = self.conn.execute(
             "INSERT OR IGNORE INTO alert_dedup(tenant_id, dedup_key) VALUES(?, ?)",
             (tenant_id, dedup_key),
         )
         if not cursor.rowcount:
             return False
+        # Recheck inside this transaction, for whichever producer is inserting.
+        # A false result still stores the evidence and does not touch a sent receipt.
+        if notify:
+            from guardian.balances.reconcile import claim_notification
+
+            notify = claim_notification(self.conn, tenant_id, payload)
+        encoded = _json(payload)
         self.conn.execute(
             "INSERT INTO alerts(tenant_id, dedup_key, payload) VALUES(?, ?, ?)",
             (tenant_id, dedup_key, encoded),
         )
         # Pending is not a delivery claim. No sender is enabled by this change.
-        # notify is false when an earlier transfer alert already covers this movement.
+        # notify is false when the other producer already holds this movement.
         if notify:
             self.conn.execute(
                 "INSERT INTO outbox(tenant_id, status, payload) VALUES(?, 'pending', ?)",

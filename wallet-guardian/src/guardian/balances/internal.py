@@ -106,12 +106,10 @@ def _classify(item: Any, *, chain_id: int | None, owner: str) -> tuple[str, dict
     receiver = _address(item.get("to"))
     if owner and sender != owner and receiver != owner:
         return "drop", None
-    amount = _amount(item.get("value"))
-    if amount is None:
-        raw = item.get("rawContract")
-        if isinstance(raw, Mapping):
-            amount = _amount(raw.get("value"))
-    if amount is None or amount <= 0:
+    state, amount = _native_amount(item)
+    if state == "malformed":
+        return "gap", None
+    if state != "ok" or amount is None:
         return "drop", None
     tx = _hash(item.get("hash") or item.get("tx_hash") or item.get("transactionHash"))
     block = _block(item)
@@ -258,11 +256,41 @@ def _address(value: Any) -> str:
     return text
 
 
-def _amount(value: Any) -> int | None:
-    parsed = _int(value)
-    if parsed is None or parsed < 0:
-        return None
-    return parsed
+def _native_amount(item: Mapping[str, Any]) -> tuple[str, int | None]:
+    """Read the native value. A present but unreadable amount is malformed."""
+    if "value" in item:
+        state, amount = _amount_state(item.get("value"))
+        if state != "absent":
+            return state, amount
+    raw = item.get("rawContract")
+    if isinstance(raw, Mapping) and "value" in raw:
+        state, amount = _amount_state(raw.get("value"))
+        if state != "absent":
+            return state, amount
+    return "absent", None
+
+
+def _amount_state(value: Any) -> tuple[str, int | None]:
+    """Return absent, malformed, nonpositive, or ok."""
+    if value is None:
+        return "absent", None
+    if isinstance(value, bool):
+        return "malformed", None
+    if isinstance(value, int):
+        if value <= 0:
+            return "nonpositive", value
+        return "ok", value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return "absent", None
+        parsed = _int(text)
+        if parsed is None:
+            return "malformed", None
+        if parsed <= 0:
+            return "nonpositive", parsed
+        return "ok", parsed
+    return "malformed", None
 
 
 def _block(item: Mapping[str, Any]) -> int | None:
