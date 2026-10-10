@@ -15,18 +15,6 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 - Explicit network aliases: `arbitrum-mainnet` and `polygon-mainnet` normalize to the registry ids `arbitrum-one` and `polygon-pos` on accounts, routes, and enabled networks. Typing the registry id keeps that id, so an existing baseline stays the state key. Unknown names fail with the valid ids and suggestions.
 - One credential resolver for doctor, coverage, and the read adapters. A nonempty secret-profile value wins over the process environment. Diagnostics show the variable name, `selected_from` (`profile`, `env`, or `absent`), presence, and whether the other source was shadowed. Values are not printed. A 401 does not switch source.
 - `guardian doctor` is offline unless `--live` is set. The report separates requested resolver mode, effective resolver mode, connectivity, and egress qualification. DoH enabled is not a qualified path. `providers verify` still runs the bounded provider probe.
-
-### Fixed
-
-- Diagnostics do not echo an unusable resolver mode or a network name that is a URL or an address. `resolver.requested_mode` is only `system`, `doh`, or `invalid`. Network errors quote an identifier-shaped name, otherwise `<invalid name>`.
-- Alias normalization collapses identical routes and rejects conflicting source lists or source order for the same canonical network and capability. The conflict is a config error. State keys are not rewritten and sources are not merged.
-- `guardian doctor --live` resolves credentials once and uses that selection for the report and the probe requests. A profile value is what the probe sends when it wins, including when the environment is empty, and a 401 does not switch source. Unusable resolver settings, including `doh` with endpoints or bootstrap pins that do not load, set `resolver.error`, leave `effective_mode` null, and do not open a provider connection. When the settings load, each probe connects to the validated address and keeps the original hostname for the Host header, SNI, and certificate check. The 5 second bound is remaining monotonic time: connect and TLS use the time still left, an expired deadline closes the stream before request bytes are written, the open client is closed, and that probe does not continue to its next call. With `--mcm-config`, the live check is labelled as a legacy provider probe and does not prove the selected profile's connectivity. `providers verify` is that same labelled legacy probe.
-- The test suite points home and the XDG config, state, and data directories at a per-test directory and clears inherited monitor path, endpoint, and resolver settings so a developer secret profile or `.env.local` is not reloaded.
-
-### Changed
-
-- `guardian doctor` no longer contacts providers unless `--live` is passed. `--live` uses a 5 second whole-call deadline per probe.
-- A blank secret-profile value can use a key inherited from the process environment. Unattended services should start from a deliberately scoped environment.
 - A net native-balance change can be a `balance_delta` alert without a nonce change and without a history source. The first valid observation is a quiet baseline. A failed read is not stored as zero. See `docs/balance-deltas.md`.
 - `alerts.native_unit_thresholds` is an optional per-network native-unit floor. The existing 0.5 native-ETH floor stays on ethereum-mainnet, arbitrum-one, base-mainnet, and optimism-mainnet.
 - BSC NodeReal category `internal` uses its own `history.native_internal` cursor. Offline fixtures only. No live internal probe is claimed.
@@ -34,12 +22,21 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 
 ### Fixed
 
+- Diagnostics do not echo an unusable resolver mode or a network name that is a URL or an address. `resolver.requested_mode` is only `system`, `doh`, or `invalid`. Network errors quote an identifier-shaped name, otherwise `<invalid name>`.
+- Alias normalization collapses identical routes and rejects conflicting source lists or source order for the same canonical network and capability. The conflict is a config error. State keys are not rewritten and sources are not merged.
+- `guardian doctor --live` resolves credentials once and uses that selection for the report and the probe requests. A profile value is what the probe sends when it wins, including when the environment is empty, and a 401 does not switch source. Unusable resolver settings, including `doh` with endpoints or bootstrap pins that do not load, set `resolver.error`, leave `effective_mode` null, and do not open a provider connection. When the settings load, each probe connects to the validated address and keeps the original hostname for the Host header, SNI, and certificate check. The 5 second bound is remaining monotonic time: connect and TLS use the time still left, an expired deadline closes the stream before request bytes are written, the open client is closed, and that probe does not continue to its next call. With `--mcm-config`, the live check is labelled as a legacy provider probe and does not prove the selected profile's connectivity. `providers verify` is that same labelled legacy probe.
+- The test suite points home and the XDG config, state, and data directories at a per-test directory and clears inherited monitor path, endpoint, and resolver settings so a developer secret profile or `.env.local` is not reloaded.
 - A numeric block-height balance is used only when the endpoint rejects the EIP-1898 parameter or tag. Canonical, historical, rate-limit, and mixed result/error responses are not eligible checkpoints.
 - An observation commits against the baseline version read before the fetch. One lower block does not reset that baseline. A same-height hash conflict is retained. Rebaseline runs only after the stored hash is re-read and is not canonical. Retention prunes old checkpoints and is not treated as a missed round. Non-alert decisions are stored with the observation.
 - A native-threshold hit is committed before optional pricing, so a pricing failure keeps the observation. Quote requests use the selected credential, clock, and sleeper, and keep the quote source and timestamps.
 - Internal history does not treat a failed receipt, a trace error, or `DELEGATECALL` / `STATICCALL` as a successful native transfer. An ambiguous row is a coverage gap. Reconciliation does not mark limited or indexer-reported history as explained only because the amount matches.
 - A native transfer and a balance delta for the same movement share one pending notification, in either arrival order. A sent delivery row stays sent.
 - `native_unit_thresholds` applies to native-transfer candidates as well as balance deltas. An unknown network key is a config error. `1.0` BNB is not a shipped default.
+
+### Changed
+
+- `guardian doctor` no longer contacts providers unless `--live` is passed. `--live` uses a 5 second whole-call deadline per probe.
+- A blank secret-profile value can use a key inherited from the process environment. Unattended services should start from a deliberately scoped environment.
 
 ### Not claimed
 

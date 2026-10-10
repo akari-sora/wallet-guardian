@@ -38,3 +38,15 @@ A static label such as Lista StakeManager attaches only to a counterparty alread
 - It does not claim a cause. Transaction hash, counterparty, and withdrawal text appear only when a separate read supports them.
 - No-key BSC alerts on a native movement when a configured native-unit floor is met, or when a usable USD quote meets the USD floor. With neither, the decision is `threshold_unavailable` and there is no outbox alert. Internal history stays `credential_missing` when the key is absent. A configured `1.0` BNB floor is part of the operator's private profile, not a global default.
 - This document does not claim a live balance probe or a live internal-transfer probe.
+
+## What this closes, and what the older patrol already did
+
+The older private legacy patrol is outside this package. On 2026-10-10 its 11:20 run did report the +8.421285 BNB claim (ListaStakeManager `claimWithdrawFor`, tx `0xc79b5c45440267284140fcf8ff59a7b7c4c59e6839ea83fc972232b7faa99218`, block 126733521, nonce unchanged) through the NodeReal `internal` transfer category. It reported the claim about three hours after it landed. So the BSC patrol path did list internal transfers.
+
+The gaps this package addresses are narrower:
+
+- Latency: the patrol had no balance-delta check and no cheap probe, so a large move waited for the next scheduled run. `docs/balance-probe-design.md` is a design only, with no scheduler.
+- Other chains: the patrol made no large-inflow judgment on non-BSC chains. A balance delta does not depend on a history source, so it covers every network with a readable native balance.
+- This package's history layer: before it, `history.native_internal` was `not_queried` in rc.3. Now only BSC via NodeReal `internal` is queried, with offline fixtures. Other networks stay `not_queried` or `unsupported`.
+
+A known protocol sender such as the Lista StakeManager is a static label. It is labelled, and the counterparty stays UNVERIFIED unless a source proves it.
