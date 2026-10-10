@@ -90,6 +90,8 @@
 - `native_balance_conflicts`
 - `native_balance_decisions`
 - `balance_explanations`
+- `explanation_jobs`
+- `explanation_revisions`
 - `mcm_schema_migrations`
 - `wallet_identities`
 - `wallet_label_aliases`
@@ -103,6 +105,8 @@ W3 建立 `chain_events`、`capability_state` 與 `capability_cursors`。`PRAGMA
 W9 建立 `delivery_leases` 與 `delivery_attempts`。`PRAGMA user_version` 仍是 1。舊的 `run-once` 不寫這兩張表。
 
 原生餘額觀測建立 `native_balance_baselines`、`native_balance_checkpoints`、`native_balance_conflicts`、`native_balance_decisions` 與 `balance_explanations`。`PRAGMA user_version` 仍是 1。失敗的讀取不寫 0。同一高度不同區塊雜湊留在 `native_balance_conflicts`，不改基準。`native_balance_decisions` 連同觀測留下門檻判斷，包含沒有進 outbox 的判斷。`balance_explanations` 只記下已對上的轉移，不把淨額告警改成已查明的原因。
+
+流入解釋另外建立 `explanation_jobs` 與 `explanation_revisions`。`PRAGMA user_version` 仍是 1。原生餘額增加告警提交之後，`run-once` 把工作寫進 `explanation_jobs`，解釋結果寫進 `explanation_revisions`。這兩張表不改 `alerts` 的嚴重度、歸因或安全標籤。解釋失敗不會刪掉告警。
 
 目前 `run-once` 路徑實際會寫入的表：
 

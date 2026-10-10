@@ -429,6 +429,20 @@ def run_capability_pipeline(
         handoff=handoff,
         clock=clock,
     )
+    try:
+        from guardian.balances.native import RoundBudget
+        from guardian.explanations.engine import drain_pending
+
+        drain_pending(
+            database,
+            tenant,
+            transport,
+            clock,
+            round_budget=RoundBudget(clock, started_at, deadline),
+            source_for=lambda network: _family_source(public_config, private_inputs, network, "evm_rpc"),
+        )
+    except Exception:
+        pass
     unknown = [
         _req_key(row["wallet_id"], row["network"], row["capability"])
         for row in rows

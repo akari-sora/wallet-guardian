@@ -87,6 +87,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("approvals", parents=[common])
     explain = sub.add_parser("explain", parents=[common])
     explain.add_argument("--event-id", required=True)
+    explain.add_argument("--mcm-config", default=None)
+    explain.add_argument(
+        "--refresh",
+        action="store_true",
+        help="re-read historical state through --mcm-config; read-only, no send",
+    )
     coverage = sub.add_parser("coverage", parents=[common])
     coverage.add_argument("--mcm-config", default=None)
     replay = sub.add_parser("replay", parents=[common])
@@ -268,7 +274,7 @@ def dispatch(
     if args.command in {"snapshot", "reconcile", "claims", "approvals", "actions"}:
         return _stored(args)
     if args.command == "explain":
-        return _explain(args)
+        return _explain(args, backend=backend, clock=clock)
     if args.command == "diagnose":
         return _task_view(args, args.task)
     if args.command == "alerts":
@@ -373,18 +379,47 @@ def _stored(args: argparse.Namespace) -> tuple[dict, int]:
         database.close()
 
 
-def _explain(args: argparse.Namespace) -> tuple[dict, int]:
+def _explain(args: argparse.Namespace, *, backend: Any = None, clock: Callable[[], float] | None = None) -> tuple[dict, int]:
+    if getattr(args, "refresh", False):
+        if not getattr(args, "mcm_config", None):
+            return {"status": "error", "error": "explain --refresh requires --mcm-config"}, 2
+        public, private, database = _open_mcm(args.mcm_config)
+        try:
+            from guardian.explanations.engine import refresh_event
+            from guardian.pipeline import _family_source, _transport
+
+            transport = _transport(public, _chosen_backend(backend), time.time if clock is None else clock)
+            refresh_event(
+                database,
+                private.accounts.tenant_id,
+                args.event_id,
+                transport,
+                time.time if clock is None else clock,
+                lambda network: _family_source(public, private, network, "evm_rpc"),
+            )
+            return _render_explanation(database, private.accounts.tenant_id, args.event_id)
+        finally:
+            database.close()
     path = Path(args.db) if args.db else ROOT / "data" / "guardian.sqlite"
     if not path.exists():
         return {"status": "not_found", "event_id": args.event_id}, 0
     database = Database(path)
     try:
         tenant = resolve_tenant(database, getattr(args, "tenant", None))
-        rows = database.alerts_for(tenant) if tenant is not None else []
+        return _render_explanation(database, tenant, args.event_id)
     finally:
         database.close()
+
+
+def _render_explanation(database: Database, tenant: str | None, event_id: str) -> tuple[dict, int]:
+    rows = database.alerts_for(tenant) if tenant is not None else []
+    explanation = None
+    if tenant is not None:
+        from guardian.explanations.store import latest_revision
+
+        explanation = latest_revision(database, tenant, event_id)
     for payload in rows:
-        if payload.get("dedup_key") == args.event_id:
+        if payload.get("dedup_key") == event_id:
             from guardian.security.display_text import render_alert
 
             rendered = render_alert(payload)
@@ -395,8 +430,9 @@ def _explain(args: argparse.Namespace) -> tuple[dict, int]:
                 "html": rendered["html"],
                 "markdown": rendered["markdown"],
                 "text": rendered["plain"],
+                "explanation": explanation,
             }, 0
-    return {"status": "not_found", "event_id": args.event_id}, 0
+    return {"status": "not_found", "event_id": event_id}, 0
 
 
 def _task_view(args: argparse.Namespace, task_id: str) -> tuple[dict, int]:

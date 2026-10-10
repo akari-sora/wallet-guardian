@@ -157,6 +157,7 @@ def prime_native_balances(
             "source_id": source_id or "",
             "symbol": symbol,
             "wallet_id": wallet_id,
+            "account": account.normalized.canonical,
         }
         _bind_baseline(database, tenant, item)
         if source_id is None:
@@ -456,6 +457,14 @@ def commit_eligible(
             decision=decision,
         )
         if status == "committed":
+            alert = planned.get("alert")
+            if isinstance(alert, dict):
+                try:
+                    from guardian.explanations.engine import note_increase
+
+                    note_increase(database, tenant, item, alert)
+                except Exception:
+                    pass
             return (1 if planned.get("alert") else 0), decision
         if status == "rejected":
             return 0, decision
@@ -1128,6 +1137,12 @@ def _rebaseline_if_proven(
         },
     )
     if status == "committed":
+        try:
+            from guardian.explanations.store import supersede_checkpoint
+
+            supersede_checkpoint(database, tenant, str(item["network"]), stored_hash)
+        except Exception:
+            pass
         return "moved"
     return "stop"
 

@@ -520,6 +520,50 @@ def test_mcm_share_s4_05_upgrade_rollback_artifact_hygiene(release_dist: Path) -
         shutil.rmtree(work, ignore_errors=True)
 
 
+def test_expl_09_installed_explain_stays_offline(release_dist: Path) -> None:
+    """EXPL-09. The installed monitor loads the explainer and does not open a socket to explain."""
+    work = _outside_checkout()
+    try:
+        venv = work / "venv"
+        created = _run(["uv", "venv", "--python", sys.executable, "--offline", str(venv)], cwd=work)
+        assert created.returncode == 0, created.stderr
+        python = _venv_python(venv)
+        installed = _run(
+            [
+                "uv", "pip", "install", "--offline", "--python", str(python),
+                "--constraints", str(release_dist / "constraints.txt"), str(_wheel(release_dist)),
+            ],
+            cwd=work,
+        )
+        assert installed.returncode == 0, installed.stderr
+        guardian = _venv_guardian(venv)
+        help_run = _run([str(guardian), "explain", "--help"], cwd=work)
+        assert help_run.returncode == 0, help_run.stderr
+        assert "--refresh" in help_run.stdout
+        assert "--mcm-config" in help_run.stdout
+        assert "--event-id" in help_run.stdout
+        script = (
+            "from guardian.cli import main\n"
+            "from guardian.explanations.registry import load_packaged\n"
+            "import socket\n"
+            "def blocked(*_args, **_kwargs):\n"
+            "    raise AssertionError('network is disabled')\n"
+            "socket.socket = blocked\n"
+            "socket.create_connection = blocked\n"
+            "found = load_packaged()\n"
+            "assert len(found) == 1\n"
+            "assert found[0].explainer_id == 'lista-stakemanager'\n"
+            "assert found[0].document['source']['live_bytecode_verified'] is False\n"
+            "assert found[0].document['source']['commit'] == '2a60d77d9d9c7059736385a4425ca38492425c8e'\n"
+            "raise SystemExit(main(['explain', '--event-id', 'missing-event']))\n"
+        )
+        probed = _run([str(python), "-c", script], cwd=work)
+        assert probed.returncode == 0, probed.stderr + probed.stdout
+        assert "not_found" in probed.stdout
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def _assert_archives_clean(dist: Path) -> None:
     required = (
         "schemas/coverage.schema.json",
