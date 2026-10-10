@@ -318,7 +318,9 @@ class Database:
             return False
         # Recheck inside this transaction, for whichever producer is inserting.
         # A false result still stores the evidence and does not touch a sent receipt.
-        if notify:
+        # A batch sets _defer_alert_notify so every sibling is stored before a notice.
+        defer_notify = bool(getattr(self, "_defer_alert_notify", False))
+        if notify and not defer_notify:
             from guardian.balances.reconcile import claim_notification
 
             notify = claim_notification(self.conn, tenant_id, payload)
@@ -329,12 +331,31 @@ class Database:
         )
         # Pending is not a delivery claim. No sender is enabled by this change.
         # notify is false when the other producer already holds this movement.
-        if notify:
+        if notify and not defer_notify:
             self.conn.execute(
                 "INSERT INTO outbox(tenant_id, status, payload) VALUES(?, 'pending', ?)",
                 (tenant_id, encoded),
             )
         return True
+
+    def _queue_notification(self, tenant_id: str, payload: dict[str, Any]) -> None:
+        """Notify after every alert in this transaction is already stored."""
+        from guardian.balances.reconcile import claim_notification
+
+        before = _json(payload)
+        allow = claim_notification(self.conn, tenant_id, payload)
+        encoded = _json(payload)
+        dedup = payload.get("dedup_key")
+        if encoded != before and isinstance(dedup, str):
+            self.conn.execute(
+                "UPDATE alerts SET payload=? WHERE tenant_id=? AND dedup_key=?",
+                (encoded, tenant_id, dedup),
+            )
+        if allow:
+            self.conn.execute(
+                "INSERT INTO outbox(tenant_id, status, payload) VALUES(?, 'pending', ?)",
+                (tenant_id, encoded),
+            )
 
     def add_alert(self, tenant_id: str, dedup_key: str, payload: dict[str, Any]) -> bool:
         with self.conn:
@@ -960,6 +981,8 @@ class Database:
 
         A failure rolls every write back, so a cursor cannot move without its events.
         A cursor moves backwards only when the caller sets rollback=True.
+        Alert evidence is stored before any new notification is queued, so a
+        multi-transfer batch is reserved as one set.
         """
         coerced = [_coerce_event(tenant_id, item) for item in events]
         rows = [_capability_row(item) for item in capability_rows]
@@ -978,9 +1001,17 @@ class Database:
                 self._upsert_capability_state(tenant_id, row)
             for cursor in cursor_rows:
                 self._upsert_capability_cursor(tenant_id, cursor)
-            for alert in alert_rows:
-                if self._add_alert(tenant_id, alert["dedup_key"], alert):
-                    emitted.append(alert)
+            fresh: list[dict[str, Any]] = []
+            self._defer_alert_notify = True
+            try:
+                for alert in alert_rows:
+                    if self._add_alert(tenant_id, alert["dedup_key"], alert):
+                        emitted.append(alert)
+                        fresh.append(alert)
+                for alert in fresh:
+                    self._queue_notification(tenant_id, alert)
+            finally:
+                self._defer_alert_notify = False
             self.conn.commit()
         except Exception:
             self.conn.rollback()

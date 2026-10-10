@@ -90,6 +90,9 @@ class ScriptBackend:
         self.block_at_price: int | None = None
         self.price_urls: list[str] = []
         self.canonical_hashes: dict[int, str] = {}
+        self.reply_number: dict[int, int] = {}
+        self.null_heights: set[int] = set()
+        self.stall_height: int | None = None
         self.clock_jump: list[object] | None = None
         self.price_retry = False
         self._price_attempts = 0
@@ -143,6 +146,7 @@ class ScriptBackend:
             return _ok(hex(self.head))
         if method == "eth_getBlockByNumber":
             tag = params[0] if params else None
+            self._stall(tag)
             if self.clock_jump is not None and not self.clock_jump[0]:
                 self.clock_jump[0] = True
             if tag == "finalized" and self.finalized_429:
@@ -172,6 +176,11 @@ class ScriptBackend:
                 asked = int(tag, 16)
             except ValueError:
                 return None
+            if asked in self.null_heights:
+                return None
+            if asked in self.reply_number:
+                lied = self.reply_number[asked]
+                return {"hash": _hash(lied), "number": hex(lied), "timestamp": hex(1_700_000_000)}
             if asked in self.canonical_hashes:
                 return {"hash": self.canonical_hashes[asked], "number": hex(asked), "timestamp": hex(1_700_000_000)}
             if asked != number:
@@ -183,6 +192,18 @@ class ScriptBackend:
         if self.after_mismatch and isinstance(tag, str) and tag.startswith("0x"):
             digest = _hash(number + 1)
         return {"hash": digest, "number": hex(number), "timestamp": hex(1_700_000_000)}
+
+    def _stall(self, tag: object) -> None:
+        if self.stall_height is None or self.clock_box is None or not isinstance(tag, str):
+            return
+        if tag in {"finalized", "latest", "safe"}:
+            return
+        try:
+            asked = int(tag, 16)
+        except ValueError:
+            return
+        if asked == self.stall_height:
+            self.clock_box[0] = CLOCK + 6
 
     def _assigned_block(self) -> int:
         if self.barrier is None:
@@ -1511,6 +1532,73 @@ def test_e04_revalidation_uses_the_round_budget(tmp_path: Path, monkeypatch: pyt
     assert _deltas(tmp_path) == []
 
 
+def test_c07_e05_bad_checkpoint_proof_preserves_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """C07 and E05. A wrong height or a late proof does not move the baseline.
+
+    An absent proof still defers. A matching proof inside the budget still advances.
+    """
+
+    def proofs(backend: ScriptBackend) -> list[dict]:
+        return [
+            call for call in backend.calls
+            if call["method"] == "eth_getBlockByNumber" and call["params"][:1] == [hex(10)]
+        ]
+
+    def open_round(name: str) -> tuple[Path, Path, ScriptBackend]:
+        path = tmp_path / name
+        config = _desk(path, monkeypatch, deadline=5)
+        backend = ScriptBackend()
+        backend.at(10, ONE)
+        _run(config, backend, capsys)
+        backend.calls.clear()
+        backend.at(20, NINE)
+        return path, config, backend
+
+    def preserved(path: Path, backend: ScriptBackend) -> None:
+        assert proofs(backend)
+        stored = _baseline(path)
+        assert stored is not None
+        assert int(stored["version"]) == 1
+        assert stored["block_number"] == 10
+        assert int(stored["raw_balance"]) == ONE
+        assert stored["block_hash"] == _hash(10)
+        assert stored["continuity"] != "rebaseline"
+        assert _deltas(path) == []
+
+    wrong_path, wrong_config, wrong = open_round("wrong-height")
+    wrong.reply_number[10] = 9
+    _run(wrong_config, wrong, capsys)
+    preserved(wrong_path, wrong)
+
+    late_path, late_config, late = open_round("late-proof")
+    box = [CLOCK]
+    late.clock_box = box
+    late.stall_height = 10
+
+    def clock() -> float:
+        return box[0]
+
+    _run(late_config, late, capsys, clock=clock, expect_ok=False)
+    preserved(late_path, late)
+
+    missing_path, missing_config, missing = open_round("unavailable-proof")
+    missing.null_heights.add(10)
+    _run(missing_config, missing, capsys)
+    preserved(missing_path, missing)
+
+    valid_path, valid_config, valid = open_round("within-budget")
+    _run(valid_config, valid, capsys)
+    assert proofs(valid)
+    moved = _baseline(valid_path)
+    assert moved is not None
+    assert moved["block_number"] == 20
+    assert int(moved["raw_balance"]) == NINE
+    assert moved["continuity"] == "continuous"
+    assert _deltas(valid_path)[0]["payload"]["signed_delta_raw"] == str(DELTA)
+
+
 def test_g05_missing_execution_evidence_is_not_reconciled(tmp_path: Path) -> None:
     """G05. An external native candidate with no execution marker is not explained away."""
     from guardian.balances.reconcile import reconcile_native
@@ -1761,6 +1849,200 @@ def test_g07_interleaved_commits_notify_once(tmp_path: Path) -> None:
     finally:
         history.close()
         balance.close()
+
+
+def test_g09_multi_transfer_interleave_keeps_one_notice(tmp_path: Path) -> None:
+    """G09. Two inflows committed together must not leave the partial pending notice."""
+    from guardian.balances.reconcile import reconcile_native
+    from guardian.rules import AlertPolicy, Candidate
+
+    three = 3 * ONE
+    rest = DELTA - three
+    policy = AlertPolicy(Decimal("0.5"), Decimal("1000"), {"bsc-mainnet": Decimal("1.0")})
+
+    def candidate(identity: str, raw: int, block: int, tx: str) -> Candidate:
+        return Candidate(
+            tenant_id=TENANT,
+            wallet_id=WALLET,
+            network="bsc-mainnet",
+            capability="history.native_internal",
+            identity=identity,
+            kind="asset",
+            raw_amount=raw,
+            is_native=True,
+            direction="in",
+            tx_id=tx,
+            transfer_origin="evm_internal",
+            execution_evidence="evidenced",
+            attribution="trace",
+            block_number=block,
+            asset=ASSET,
+        )
+
+    def alert_for(item: Candidate) -> dict:
+        decided = policy.apply([item])
+        assert len(decided) == 1 and decided[0].alert is True and decided[0].kind == "native_unit"
+        return decided[0].as_dict()
+
+    part_3 = candidate("part-3", three, 12, "0x" + "31" * 32)
+    part_rest = candidate("part-rest", rest, 16, "0x" + "51" * 32)
+    outside = candidate("outside-window", 4 * ONE, 25, "0x" + "91" * 32)
+
+    same = Database(tmp_path / "same-run.sqlite")
+    try:
+        _seed_delta(same, signed=DELTA)
+        pending = [part_3, part_rest, outside]
+        removed = reconcile_native(same, TENANT, pending)
+        assert set(removed) == {"part-3", "part-rest"}
+        assert [item.identity for item in pending] == ["outside-window"]
+        rows = same.outbox_for(TENANT)
+        assert [row["status"] for row in rows] == ["pending"]
+        assert rows[0]["payload"]["kind"] == "balance_delta"
+    finally:
+        same.close()
+
+    path = tmp_path / "interleave.sqlite"
+    history = Database(path)
+    balance = Database(path)
+    try:
+        judged = [part_3, part_rest]
+        assert reconcile_native(history, TENANT, judged) == []
+        assert [item.identity for item in judged] == ["part-3", "part-rest"]
+        history.conn.rollback()
+        decided = policy.apply(judged)
+        assert [item.kind for item in decided] == ["native_unit", "native_unit"]
+        transfers = [item.as_dict() for item in decided]
+        assert balance.commit_native_observation(
+            TENANT,
+            wallet_id=WALLET,
+            network="bsc-mainnet",
+            asset=ASSET,
+            expected_version=0,
+            checkpoint=_checkpoint(10, ONE),
+            continuity="baseline",
+            retention_blocks=15,
+            reset_checkpoints=False,
+            alert=None,
+            record_failure=None,
+        ) == "committed"
+        delta = {
+            "alert": True,
+            "asset": ASSET,
+            "attribution": "unavailable",
+            "dedup_key": "delta-g09",
+            "direction": "increase",
+            "kind": "balance_delta",
+            "network": "bsc-mainnet",
+            "new_checkpoint": {"block_hash": _hash(20), "block_number": "20"},
+            "old_checkpoint": {"block_hash": _hash(10), "block_number": "10"},
+            "signed_delta_raw": str(DELTA),
+            "wallet_id": WALLET,
+        }
+        assert balance.commit_native_observation(
+            TENANT,
+            wallet_id=WALLET,
+            network="bsc-mainnet",
+            asset=ASSET,
+            expected_version=1,
+            checkpoint=_checkpoint(20, ONE + DELTA),
+            continuity="continuous",
+            retention_blocks=15,
+            reset_checkpoints=False,
+            alert=delta,
+            record_failure=None,
+            decision=delta,
+        ) == "committed"
+        with balance.conn:
+            balance.conn.execute(
+                "INSERT INTO deliveries(tenant_id, payload) VALUES(?, ?)",
+                (TENANT, '{"receipt":"kept"}'),
+            )
+            balance.conn.execute(
+                "INSERT INTO outbox(tenant_id, status, payload) VALUES(?, 'sent', ?)",
+                (TENANT, json.dumps({"dedup_key": "already-sent", "identity": "already-sent", "kind": "native_unit"})),
+            )
+        history.commit_capability_cycle(
+            TENANT, events=[], capability_rows=[], cursors=[], alerts=transfers,
+        )
+        outbox = history.outbox_for(TENANT)
+        pending = [
+            row for row in outbox
+            if row["status"] == "pending"
+            and row["payload"].get("kind") in {"asset_usd", "balance_delta", "native_eth", "native_unit"}
+        ]
+        assert len(pending) == 1
+        assert pending[0]["payload"]["kind"] == "balance_delta"
+        assert pending[0]["payload"]["signed_delta_raw"] == str(DELTA)
+        amounts = {
+            item["raw_amount"]
+            for item in pending[0]["payload"].get("components") or []
+            if item.get("role") == "transfer"
+        }
+        assert amounts == {str(three), str(rest)}
+        for row in outbox:
+            if row["payload"].get("identity") in {"part-3", "part-rest"}:
+                assert row["status"] == "superseded"
+                assert row["payload"].get("superseded_by") == "delta-g09"
+                assert row["status"] != "sent"
+        assert [row["status"] for row in outbox if row["payload"].get("identity") == "already-sent"] == ["sent"]
+        kinds = [item["kind"] for item in history.alerts_for(TENANT)]
+        assert kinds.count("native_unit") == 2
+        assert kinds.count("balance_delta") == 1
+        assert history.conn.execute("SELECT COUNT(*) FROM balance_explanations").fetchone()[0] >= 2
+        assert "kept" in history.conn.execute("SELECT payload FROM deliveries").fetchone()[0]
+
+        history.commit_capability_cycle(
+            TENANT, events=[], capability_rows=[], cursors=[], alerts=[alert_for(outside)],
+        )
+        outbox = history.outbox_for(TENANT)
+        pending_kinds = [row["payload"]["kind"] for row in outbox if row["status"] == "pending"]
+        assert pending_kinds.count("balance_delta") == 1
+        assert pending_kinds.count("native_unit") == 1
+        outside_rows = [row for row in outbox if row["payload"].get("identity") == "outside-window"]
+        assert len(outside_rows) == 1
+        assert outside_rows[0]["status"] == "pending"
+        assert not any(
+            row["status"] == "pending" and row["payload"].get("identity") in {"part-3", "part-rest"}
+            for row in outbox
+        )
+        assert [row["status"] for row in outbox if row["payload"].get("identity") == "already-sent"] == ["sent"]
+    finally:
+        history.close()
+        balance.close()
+
+    later = Database(tmp_path / "already-pending.sqlite")
+    try:
+        _seed_delta(later, signed=DELTA)
+        later.commit_capability_cycle(
+            TENANT, events=[], capability_rows=[], cursors=[], alerts=[alert_for(part_3)],
+        )
+        pending_kinds = [row["payload"]["kind"] for row in later.outbox_for(TENANT) if row["status"] == "pending"]
+        assert pending_kinds.count("balance_delta") == 1
+        assert pending_kinds.count("native_unit") == 1
+        later.commit_capability_cycle(
+            TENANT, events=[], capability_rows=[], cursors=[], alerts=[alert_for(part_rest)],
+        )
+        outbox = later.outbox_for(TENANT)
+        pending = [row for row in outbox if row["status"] == "pending"]
+        assert len(pending) == 1
+        assert pending[0]["payload"]["kind"] == "balance_delta"
+        amounts = {
+            item["raw_amount"]
+            for item in pending[0]["payload"].get("components") or []
+            if item.get("role") == "transfer"
+        }
+        assert amounts == {str(three), str(rest)}
+        superseded = [row for row in outbox if row["status"] == "superseded"]
+        assert len(superseded) == 1
+        assert superseded[0]["payload"]["identity"] == "part-3"
+        assert superseded[0]["payload"]["superseded_by"] == "delta-seed"
+        assert superseded[0]["status"] != "sent"
+        kinds = [item["kind"] for item in later.alerts_for(TENANT)]
+        assert kinds.count("native_unit") == 2
+        assert kinds.count("balance_delta") == 1
+        assert later.conn.execute("SELECT COUNT(*) FROM balance_explanations").fetchone()[0] >= 2
+    finally:
+        later.close()
 
 
 def _seed_delta(database: Database, *, signed: int) -> None:

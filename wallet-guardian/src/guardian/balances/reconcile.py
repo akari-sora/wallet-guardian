@@ -319,7 +319,10 @@ def claim_notification(conn: Any, tenant_id: str, alert: dict[str, Any]) -> bool
 
     Either producer may call this. False means the other record already holds
     the movement: the alert may still be stored, and a sent outbox row is left
-    as it is. True means this call may insert the pending row.
+    as it is. True means this call may insert the pending row. A transfer is
+    judged with every eligible sibling already stored in this transaction. When
+    that complete set covers a delta that already has a notification, pending
+    component notices are marked superseded and linked. They are not marked sent.
     """
     kind = alert.get("kind")
     if kind == "balance_delta":
@@ -337,16 +340,16 @@ def claim_notification(conn: Any, tenant_id: str, alert: dict[str, Any]) -> bool
         found = _deltas_covering(conn, tenant_id, alert)
         if not found:
             return True
-        transfer_key = str(alert.get("identity") or alert.get("dedup_key") or "")
-        if not transfer_key:
-            return True
-        for dedup, components in found:
-            _enrich_stored_delta(conn, tenant_id, dedup, transfer_key, components)
+        for dedup, components, link_keys in found:
+            _enrich_stored_delta(conn, tenant_id, dedup, link_keys, components)
+            _supersede_pending_components(conn, tenant_id, dedup, link_keys)
         return False
     return True
 
 
-def _deltas_covering(conn: Any, tenant_id: str, alert: Mapping[str, Any]) -> list[tuple[str, list[dict[str, Any]]]]:
+def _deltas_covering(
+    conn: Any, tenant_id: str, alert: Mapping[str, Any],
+) -> list[tuple[str, list[dict[str, Any]], list[str]]]:
     """Stored balance deltas this transfer already explains, with their components."""
     if alert.get("alert") is not True:
         return []
@@ -366,7 +369,7 @@ def _deltas_covering(conn: Any, tenant_id: str, alert: Mapping[str, Any]) -> lis
         if isinstance(body, dict):
             bodies.append(body)
     identity = str(alert.get("identity") or alert.get("dedup_key") or "")
-    found: list[tuple[str, list[dict[str, Any]]]] = []
+    found: list[tuple[str, list[dict[str, Any]], list[str]]] = []
     for body in bodies:
         if body.get("kind") != "balance_delta" or body.get("alert") is not True:
             continue
@@ -432,8 +435,10 @@ def _deltas_covering(conn: Any, tenant_id: str, alert: Mapping[str, Any]) -> lis
         ]
         components.extend(fees)
         dedup = body.get("dedup_key")
-        if isinstance(dedup, str) and dedup:
-            found.append((dedup, components))
+        link_keys = [_body_key(item) for item in matched]
+        link_keys = [key for key in link_keys if key]
+        if isinstance(dedup, str) and dedup and link_keys:
+            found.append((dedup, components, link_keys))
     return found
 
 
@@ -447,15 +452,58 @@ def _insert_link(conn: Any, tenant_id: str, observation_key: str, transfer_key: 
     )
 
 
+def _body_key(item: Mapping[str, Any]) -> str:
+    return str(item.get("identity") or item.get("dedup_key") or "")
+
+
+def _supersede_pending_components(conn: Any, tenant_id: str, dedup: str, link_keys: list[str]) -> None:
+    """Retire pending component notices once the delta already holds the movement.
+
+    A sent receipt is left sent. The evidence alert row is not rewritten.
+    """
+    keys = {key for key in link_keys if key}
+    if not keys:
+        return
+    rows = list(conn.execute("SELECT id, status, payload FROM outbox WHERE tenant_id=?", (tenant_id,)))
+    delta_held = False
+    targets: list[tuple[int, dict[str, Any]]] = []
+    for outbox in rows:
+        current = outbox["payload"]
+        body = current if isinstance(current, dict) else json.loads(current)
+        if not isinstance(body, dict):
+            continue
+        if body.get("dedup_key") == dedup and body.get("kind") == "balance_delta":
+            delta_held = True
+        if outbox["status"] != "pending":
+            continue
+        if body.get("kind") == "balance_delta" and body.get("dedup_key") == dedup:
+            continue
+        identity = body.get("identity")
+        own = body.get("dedup_key")
+        if (isinstance(identity, str) and identity in keys) or (isinstance(own, str) and own in keys):
+            targets.append((int(outbox["id"]), body))
+    if not delta_held:
+        return
+    for outbox_id, body in targets:
+        body["superseded_by"] = dedup
+        encoded = json.dumps(body, sort_keys=True, ensure_ascii=False, allow_nan=False)
+        conn.execute(
+            "UPDATE outbox SET status='superseded', payload=? WHERE id=? AND status='pending'",
+            (encoded, outbox_id),
+        )
+
+
 def _enrich_stored_delta(
-    conn: Any, tenant_id: str, dedup: str, transfer_key: str, components: list[dict[str, Any]],
+    conn: Any, tenant_id: str, dedup: str, transfer_keys: list[str], components: list[dict[str, Any]],
 ) -> None:
-    """Attach the transfer to the stored delta. Pending payload may follow. Sent rows stay sent."""
+    """Attach the transfers to the stored delta. Pending payload may follow. Sent rows stay sent."""
     row = conn.execute(
         "SELECT id, payload FROM alerts WHERE tenant_id=? AND dedup_key=?",
         (tenant_id, dedup),
     ).fetchone()
-    _insert_link(conn, tenant_id, dedup, transfer_key)
+    for transfer_key in transfer_keys:
+        if transfer_key:
+            _insert_link(conn, tenant_id, dedup, transfer_key)
     if row is None:
         return
     payload = row["payload"]
@@ -463,8 +511,9 @@ def _enrich_stored_delta(
     if not isinstance(body, dict):
         return
     links = [str(item) for item in body.get("linked_transfers") or [] if isinstance(item, str) and item]
-    if transfer_key not in links:
-        links.append(transfer_key)
+    for transfer_key in transfer_keys:
+        if transfer_key and transfer_key not in links:
+            links.append(transfer_key)
     body["linked_transfers"] = links
     body["components"] = components
     if body.get("attribution") in {None, "", "unavailable"}:

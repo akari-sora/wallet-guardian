@@ -760,6 +760,9 @@ def _block_by_number(
     parsed = _parse_block(result)
     if parsed is None:
         return None, "block_unreadable"
+    # A numeric height asks for that block. Another height, however well formed, is not it.
+    if isinstance(number, int) and not isinstance(number, bool) and parsed["number"] != number:
+        return None, "block_unreadable"
     return parsed, None
 
 
@@ -1039,6 +1042,26 @@ def _record_conflict(database: Any, tenant: str, item: Mapping[str, Any], stored
     )
 
 
+def _explicit_height_proof(block: Mapping[str, Any] | None, requested: int) -> bool:
+    """True when an explicit-height read returned that height and a 32-byte hash."""
+    if not isinstance(block, Mapping):
+        return False
+    number = block.get("number")
+    if isinstance(number, bool) or not isinstance(number, int) or number != requested:
+        return False
+    digest = block.get("hash")
+    if not isinstance(digest, str):
+        return False
+    text = digest.strip().lower()
+    if len(text) != 66 or not text.startswith("0x"):
+        return False
+    try:
+        int(text[2:], 16)
+    except ValueError:
+        return False
+    return True
+
+
 def _rebaseline_if_proven(
     database: Any,
     tenant: str,
@@ -1051,9 +1074,11 @@ def _rebaseline_if_proven(
     """Prove the stored checkpoint is still canonical before any forward comparison.
 
     An open conflict row is not required. A numeric-height fallback on the new
-    block does not prove the old hash. ``stop`` defers the comparison: no
-    continuous delta is written. ``moved`` means the old hash was re-read and
-    is not canonical, so the baseline was replaced without a movement alert.
+    block does not prove the old hash. The proof block's number has to be the
+    requested height and its hash has to be well formed. ``stop`` defers the
+    comparison: no continuous delta is written and the baseline stays. ``moved``
+    means the old hash was re-read inside the round budget and is not canonical,
+    so the baseline was replaced without a movement alert.
     """
     if stored is None or read.block_number is None or read.block_number <= int(stored["block_number"]):
         return "continue"
@@ -1065,8 +1090,12 @@ def _rebaseline_if_proven(
         return "stop"
     if budget is not None and budget.expired():
         return "stop"
-    canonical, _failure = _block_by_number(transport, item["source_id"], int(stored["block_number"]), budget)
-    if canonical is None:
+    requested = int(stored["block_number"])
+    canonical, _failure = _block_by_number(transport, item["source_id"], requested, budget)
+    # The read can return after the deadline. That response is not a proof.
+    if budget is not None and budget.expired():
+        return "stop"
+    if not isinstance(canonical, dict) or not _explicit_height_proof(canonical, requested):
         return "stop"
     stored_hash = str(stored["block_hash"]).lower()
     if canonical["hash"] == stored_hash:
@@ -1081,7 +1110,7 @@ def _rebaseline_if_proven(
                 wallet_id=item["wallet_id"],
                 network=item["network"],
                 asset=item["asset"],
-                block_number=int(stored["block_number"]),
+                block_number=requested,
                 stored_hash=stored_hash,
             )
         return "continue"
@@ -1093,7 +1122,7 @@ def _rebaseline_if_proven(
         expected_version=int(stored["version"]),
         checkpoint=_checkpoint_row(item, read, policy, started),
         proof={
-            "block_number": int(stored["block_number"]),
+            "block_number": requested,
             "canonical_hash": canonical["hash"],
             "stored_hash": stored_hash,
         },
