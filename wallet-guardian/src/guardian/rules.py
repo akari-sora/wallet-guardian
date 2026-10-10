@@ -10,8 +10,10 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from typing import Any
+
+from guardian.errors import ConfigError
 
 ETH_NETWORKS = frozenset({
     "ethereum-mainnet",
@@ -78,6 +80,12 @@ class AlertDecision:
     net: str | None = None
     tx_id: str | None = None
     counts: tuple[tuple[str, int], ...] = ()
+    asset: str | None = None
+    attribution: str | None = None
+    block_number: str | None = None
+    direction: str | None = None
+    execution_evidence: str | None = None
+    raw_amount: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Public fields only. No address and no price treated as zero."""
@@ -99,22 +107,35 @@ class AlertDecision:
             payload["net"] = self.net
         if self.tx_id:
             payload["tx_id"] = self.tx_id
+        for key in ("asset", "attribution", "block_number", "direction", "execution_evidence", "raw_amount"):
+            value = getattr(self, key)
+            if value is not None:
+                payload[key] = value
         return payload
 
 
 class AlertPolicy:
-    """OR of a native-ETH wei floor and a valued USD floor. Permissions ignore both."""
+    """OR of a native-unit floor and a valued USD floor. Permissions ignore both.
 
-    def __init__(self, native_eth: Decimal, usd: Decimal) -> None:
+    Own-wallet pairs are still judged on their net. A native-unit floor does
+    not turn that pair into two gross alerts.
+    """
+
+    def __init__(self, native_eth: Decimal, usd: Decimal, units: Mapping[str, Decimal] | None = None) -> None:
         self.native_eth = native_eth
         self.native_eth_wei = int((native_eth * _WEI).to_integral_value())
         self.usd = usd
+        self.units = dict(units or {})
 
     @classmethod
     def from_public(cls, alerts: Mapping[str, Any]) -> AlertPolicy:
         if not isinstance(alerts, Mapping):
             raise ValueError("alerts config is missing")
-        return cls(_decimal(alerts.get("native_eth_threshold"), "native_eth_threshold"), _decimal(alerts.get("asset_usd_threshold"), "asset_usd_threshold"))
+        return cls(
+            _decimal(alerts.get("native_eth_threshold"), "native_eth_threshold"),
+            _decimal(alerts.get("asset_usd_threshold"), "asset_usd_threshold"),
+            validate_native_unit_thresholds(alerts.get("native_unit_thresholds")),
+        )
 
     def apply(
         self,
@@ -153,14 +174,24 @@ class AlertPolicy:
         if candidate.permission_change:
             return self._permission(candidate)
         eth_hit = self._native_eth_hit(candidate)
+        unit_hit = self._native_unit_hit(candidate)
         usd_hit, unknown = self._usd_hit(candidate)
-        kind = "native_eth" if eth_hit else "asset_usd" if usd_hit else "below_threshold"
+        if eth_hit:
+            kind = "native_eth"
+        elif usd_hit:
+            kind = "asset_usd"
+        elif unit_hit:
+            kind = "native_unit"
+        else:
+            kind = "below_threshold"
+        movement = _native_movement(candidate) if kind in {"native_eth", "asset_usd", "native_unit"} else None
         return self._decision(
             candidate,
-            alert=eth_hit or usd_hit,
+            alert=eth_hit or unit_hit or usd_hit,
             kind=kind,
             valuation_unknown=unknown,
             identity=candidate.identity,
+            movement=movement,
         )
 
     def _permission(self, candidate: Candidate) -> AlertDecision:
@@ -209,13 +240,15 @@ class AlertPolicy:
             quote_quality=candidate.quote_quality,
         )
         eth_hit = self._native_eth_hit(probe)
+        unit_hit = self._native_unit_hit(probe)
         usd_hit, unknown = self._usd_hit(probe)
         if net == 0:
             eth_hit = False
+            unit_hit = False
             usd_hit = False
         return self._decision(
             candidate,
-            alert=eth_hit or usd_hit,
+            alert=eth_hit or unit_hit or usd_hit,
             kind="internal_transfer",
             valuation_unknown=unknown,
             identity=candidate.identity,
@@ -240,6 +273,16 @@ class AlertPolicy:
             wallet_id=wallet_id,
             network=network,
         )
+
+    def _native_unit_hit(self, candidate: Candidate) -> bool:
+        threshold = self.units.get(candidate.network)
+        if threshold is None or not candidate.is_native:
+            return False
+        raw = _as_int(candidate.raw_amount)
+        if raw is None:
+            return False
+        decimals = canonical_native_decimals().get(candidate.network, 18)
+        return abs(raw) >= native_threshold_raw(threshold, decimals)
 
     def _native_eth_hit(self, candidate: Candidate) -> bool:
         if not candidate.is_native or candidate.network not in ETH_NETWORKS:
@@ -274,11 +317,14 @@ class AlertPolicy:
         wallet_id: str | None = None,
         network: str | None = None,
         capability: str | None = None,
+        movement: Mapping[str, Any] | None = None,
     ) -> AlertDecision:
+        del capability
         if kind == "newly_added":
             kind = "first_observed"
         wallet = wallet_id or candidate.wallet_id
         net_id = network or candidate.network
+        extra = movement if isinstance(movement, Mapping) else {}
         return AlertDecision(
             alert=alert,
             kind=kind,
@@ -293,7 +339,80 @@ class AlertPolicy:
             net=net,
             tx_id=candidate.tx_id,
             counts=counts,
+            asset=_text_or_none(extra.get("asset")),
+            attribution=_text_or_none(extra.get("attribution")),
+            block_number=_text_or_none(extra.get("block_number")),
+            direction=_text_or_none(extra.get("direction")),
+            execution_evidence=_text_or_none(extra.get("execution_evidence")),
+            raw_amount=_text_or_none(extra.get("raw_amount")),
         )
+
+
+def native_threshold_raw(amount: Decimal, decimals: int) -> int:
+    """Smallest-unit integer for a native-unit threshold. Truncates toward zero."""
+    if isinstance(decimals, bool) or not isinstance(decimals, int) or decimals < 0:
+        raise ValueError("decimals")
+    return int((amount * (Decimal(10) ** decimals)).to_integral_value(rounding=ROUND_DOWN))
+
+
+def canonical_native_decimals() -> dict[str, int]:
+    """Decimals from the canonical network registry on this branch."""
+    found: dict[str, int] = {}
+    for network, entry in _canonical_registry().items():
+        native = entry.get("native_asset") if isinstance(entry.get("native_asset"), Mapping) else {}
+        places = native.get("decimals") if isinstance(native, Mapping) else None
+        if isinstance(places, bool) or not isinstance(places, int) or places < 0:
+            places = 18
+        found[network] = places
+    return found
+
+
+def validate_native_unit_thresholds(value: Any) -> dict[str, Decimal]:
+    """Map canonical network ids to native-unit floors. Unknown keys are refused."""
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ConfigError("native_unit_thresholds must be an object")
+    known = canonical_native_decimals()
+    unknown = [str(key) for key in value if not isinstance(key, str) or key not in known]
+    if unknown:
+        raise ConfigError(
+            "unknown native_unit_thresholds key(s): "
+            + ", ".join(sorted(unknown))
+            + "; valid networks: "
+            + ", ".join(sorted(known))
+        )
+    found: dict[str, Decimal] = {}
+    for network, raw in value.items():
+        found[str(network)] = _decimal(raw, "native_unit_thresholds")
+    return found
+
+
+def _native_movement(candidate: Candidate) -> dict[str, str] | None:
+    """Fields a later balance delta needs in order to recognise this transfer."""
+    if not candidate.is_native or candidate.transfer_origin not in {"evm_external", "evm_internal"}:
+        return None
+    found: dict[str, str] = {}
+    if isinstance(candidate.asset, str) and candidate.asset:
+        found["asset"] = candidate.asset
+    if isinstance(candidate.attribution, str) and candidate.attribution:
+        found["attribution"] = candidate.attribution
+    if isinstance(candidate.block_number, int) and not isinstance(candidate.block_number, bool):
+        found["block_number"] = str(candidate.block_number)
+    if isinstance(candidate.direction, str) and candidate.direction:
+        found["direction"] = candidate.direction
+    if isinstance(candidate.execution_evidence, str) and candidate.execution_evidence:
+        found["execution_evidence"] = candidate.execution_evidence
+    raw = _as_int(candidate.raw_amount)
+    if raw is not None:
+        found["raw_amount"] = str(raw)
+    return found or None
+
+
+def _text_or_none(value: Any) -> str | None:
+    if isinstance(value, str) and value:
+        return value
+    return None
 
 
 def dedup_key(tenant_id: str, wallet_id: str, network: str, kind: str, identity: str) -> str:
@@ -341,6 +460,19 @@ def _pair_internal(candidates: list[Candidate]) -> tuple[list[Candidate], list[C
         else:
             rest.extend(rows)
     return rest, internal
+
+
+_REGISTRY: dict[str, dict[str, Any]] | None = None
+
+
+def _canonical_registry() -> dict[str, dict[str, Any]]:
+    global _REGISTRY
+    if _REGISTRY is None:
+        from guardian.network_registry import load_registry
+        from guardian.resources import resource_path
+
+        _REGISTRY = load_registry(resource_path("config", "chains"))
+    return _REGISTRY
 
 
 def _decimal(value: Any, label: str) -> Decimal:

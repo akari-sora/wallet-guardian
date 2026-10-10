@@ -32,6 +32,15 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 - BSC NodeReal category `internal` uses its own `history.native_internal` cursor. Offline fixtures only. No live internal probe is claimed.
 - `docs/balance-probe-design.md` describes a future read-only probe command. The command is not implemented. No scheduler was added.
 
+### Fixed
+
+- A numeric block-height balance is used only when the endpoint rejects the EIP-1898 parameter or tag. Canonical, historical, rate-limit, and mixed result/error responses are not eligible checkpoints.
+- An observation commits against the baseline version read before the fetch. One lower block does not reset that baseline. A same-height hash conflict is retained. Rebaseline runs only after the stored hash is re-read and is not canonical. Retention prunes old checkpoints and is not treated as a missed round. Non-alert decisions are stored with the observation.
+- A native-threshold hit is committed before optional pricing, so a pricing failure keeps the observation. Quote requests use the selected credential, clock, and sleeper, and keep the quote source and timestamps.
+- Internal history does not treat a failed receipt, a trace error, or `DELEGATECALL` / `STATICCALL` as a successful native transfer. An ambiguous row is a coverage gap. Reconciliation does not mark limited or indexer-reported history as explained only because the amount matches.
+- A native transfer and a balance delta for the same movement share one pending notification, in either arrival order. A sent delivery row stays sent.
+- `native_unit_thresholds` applies to native-transfer candidates as well as balance deltas. An unknown network key is a config error. `1.0` BNB is not a shipped default.
+
 ### Not claimed
 
 - No live balance probe, no live NodeReal internal attribution, and no production or 72-hour shadow claim. The published preview `0.4.0rc3` (`wallet-guardian-monitor`) is unchanged.

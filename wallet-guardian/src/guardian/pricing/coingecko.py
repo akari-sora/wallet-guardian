@@ -213,13 +213,23 @@ class CoinGeckoClient:
                 continue
             quality, age, reason = price_age(now, updated, max_age_seconds=max_age_seconds)
             if quality != "available":
-                parsed[coin_id] = {"quality": quality, "reason": reason or quality, "age_seconds": age}
+                parsed[coin_id] = {
+                    "age_seconds": age,
+                    "last_updated_at": updated,
+                    "quality": quality,
+                    "quoted_at": now,
+                    "reason": reason or quality,
+                    "source": self.source_id,
+                }
                 continue
             parsed[coin_id] = {
                 "age_seconds": age,
+                "last_updated_at": updated,
                 "price": price,
                 "quality": "available",
+                "quoted_at": now,
                 "reason": "",
+                "source": self.source_id,
             }
         return parsed
 

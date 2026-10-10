@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import sqlite3
 import threading
 from decimal import Decimal
 from pathlib import Path
@@ -77,6 +78,17 @@ class ScriptBackend:
         self.barrier: threading.Barrier | None = None
         self._owners: dict[int, int] = {}
         self._split = False
+        self.canonical_reject = False
+        self.historical_reject = False
+        self.balance_both = False
+        self.finalized_429 = False
+        self.fail_price = False
+        self.block_at_price: int | None = None
+        self.price_urls: list[str] = []
+        self.canonical_hashes: dict[int, str] = {}
+        self.clock_jump: list[object] | None = None
+        self.price_retry = False
+        self._price_attempts = 0
 
     def at(self, block: int, balance: int, *, nonce: int = 7) -> None:
         self.block_number = block
@@ -98,8 +110,25 @@ class ScriptBackend:
             return self._rpc(method, payload.get("params") if isinstance(payload.get("params"), list) else [])
 
     def _rest(self, url: str) -> RawResponse:
-        if "simple/price" in url and isinstance(self.price, dict):
-            return RawResponse(200, {}, json.dumps(self.price).encode())
+        if "simple/price" in url:
+            self.price_urls.append(url)
+            state = os.environ.get("MONITOR_STATE_DIR")
+            if state:
+                connection = sqlite3.connect(os.path.join(state, "monitor.sqlite"))
+                try:
+                    row = connection.execute(
+                        "SELECT block_number FROM native_balance_baselines LIMIT 1"
+                    ).fetchone()
+                finally:
+                    connection.close()
+                self.block_at_price = None if row is None else int(row[0])
+            if self.fail_price:
+                raise RuntimeError("price down")
+            self._price_attempts += 1
+            if self.price_retry and self._price_attempts == 1:
+                return RawResponse(429, {"retry-after": "1"}, b"")
+            if isinstance(self.price, dict):
+                return RawResponse(200, {}, json.dumps(self.price).encode())
         return RawResponse(200, {}, b"{}")
 
     def _rpc(self, method: str, params: list) -> RawResponse:
@@ -109,6 +138,11 @@ class ScriptBackend:
         if method == "eth_blockNumber":
             return _ok(hex(self.head))
         if method == "eth_getBlockByNumber":
+            tag = params[0] if params else None
+            if self.clock_jump is not None and not self.clock_jump[0]:
+                self.clock_jump[0] = True
+            if tag == "finalized" and self.finalized_429:
+                return RawResponse(429, {}, b"")
             return _ok(self._block(params))
         if method == "eth_getBalance":
             return self._balance(params)
@@ -128,6 +162,8 @@ class ScriptBackend:
                 asked = int(tag, 16)
             except ValueError:
                 return None
+            if asked in self.canonical_hashes:
+                return {"hash": self.canonical_hashes[asked], "number": hex(asked), "timestamp": hex(1_700_000_000)}
             if asked != number:
                 return {"hash": _hash(asked), "number": hex(asked), "timestamp": hex(1_700_000_000)}
         if self.barrier is not None:
@@ -150,6 +186,18 @@ class ScriptBackend:
         if self.fail_balance:
             return _err("read failed")
         spec = params[1] if len(params) > 1 else None
+        if isinstance(spec, dict) and self.canonical_reject:
+            return _err("blockHash is not canonical")
+        if isinstance(spec, dict) and self.historical_reject:
+            return _err("historical state is not available")
+        if isinstance(spec, dict) and self.balance_both:
+            body = {
+                "error": {"code": -32000, "message": "stale"},
+                "id": 1,
+                "jsonrpc": "2.0",
+                "result": hex(self.balance),
+            }
+            return RawResponse(200, {}, json.dumps(body).encode())
         if isinstance(spec, dict) and self.reject_eip1898:
             return _err("invalid params")
         number = self._assigned_block()
@@ -202,6 +250,7 @@ def _desk(
     threshold: str | None = "1.0",
     prices: bool = False,
     nodereal_key: bool = False,
+    deadline: int | None = None,
 ) -> Path:
     tmp_path.mkdir(parents=True, exist_ok=True)
     document = json.loads(EXAMPLE.read_text(encoding="utf-8"))
@@ -209,6 +258,8 @@ def _desk(
     document["enabled_networks"] = [network]
     document["routing"] = [route for route in document["routing"] if route.get("network") == network]
     document["polling"]["bootstrap_origin"] = 1
+    if deadline is not None:
+        document["polling"]["round_deadline_seconds"] = deadline
     if threshold is None:
         document["alerts"].pop("native_unit_thresholds", None)
     else:
@@ -259,11 +310,12 @@ def _run(
     no_send: bool = True,
     sender: Sink | None = None,
     expect_ok: bool = True,
+    clock=None,
 ) -> dict:
     argv = ["run-once", "--mcm-config", str(config)]
     if no_send:
         argv.append("--no-send")
-    code = main(argv, backend=backend, sender=sender, clock=lambda: CLOCK)
+    code = main(argv, backend=backend, sender=sender, clock=clock or (lambda: CLOCK))
     payload = json.loads(capsys.readouterr().out)
     assert code in ({0} if expect_ok else {0, 1}), payload
     blob = json.dumps(payload)
@@ -551,8 +603,8 @@ def test_bal_03_failed_read_reorg_and_wrong_chain(tmp_path: Path, monkeypatch: p
     deep_backend.balance = NINE
     deep_backend.head = 100
     _run(deep_config, deep_backend, capsys)
-    assert _baseline(deep)["block_number"] == 70
-    assert int(_baseline(deep)["raw_balance"]) == NINE
+    assert _baseline(deep)["block_number"] == 100
+    assert int(_baseline(deep)["raw_balance"]) == ONE
     assert _deltas(deep) == []
     database = _db(deep)
     try:
@@ -561,7 +613,7 @@ def test_bal_03_failed_read_reorg_and_wrong_chain(tmp_path: Path, monkeypatch: p
         ).fetchall()
     finally:
         database.close()
-    assert old == []
+    assert len(old) == 1
 
     inconsistent = tmp_path / "inconsistent"
     inconsistent_config = _desk(inconsistent, monkeypatch)
@@ -788,14 +840,23 @@ def test_bal_06_atomic_concurrent_and_no_sender(tmp_path: Path, monkeypatch: pyt
     assert final["block_number"] == 30
     assert int(final["raw_balance"]) == NINE
     raced = _deltas(race)
-    assert len(raced) <= 1
-    if raced:
-        assert int(raced[0]["payload"]["new_checkpoint"]["block_number"]) == 30
-        assert int(raced[0]["payload"]["old_checkpoint"]["block_number"]) == 10
+    assert len(raced) == 1
+    assert int(raced[0]["payload"]["new_checkpoint"]["block_number"]) == 30
+    assert int(raced[0]["payload"]["old_checkpoint"]["block_number"]) == 10
+    assert raced[0]["payload"]["continuity"] != "gap"
 
 
 def _coverage(report: dict, capability: str) -> dict:
     return next(row for row in report["coverage"] if row["capability"] == capability and row["network"] == "bsc-mainnet")
+
+
+def _pending_movements(tmp_path: Path) -> list[str]:
+    kinds = {"asset_usd", "balance_delta", "native_eth", "native_unit"}
+    return [
+        row["payload"]["kind"]
+        for row in _outbox(tmp_path)
+        if row["status"] == "pending" and row["payload"].get("kind") in kinds
+    ]
 
 
 def _outbox(tmp_path: Path) -> list[dict]:
@@ -804,3 +865,540 @@ def _outbox(tmp_path: Path) -> list[dict]:
         return database.outbox_for(TENANT)
     finally:
         database.close()
+
+
+def _balance_params(backend: ScriptBackend) -> list[object]:
+    return [call["params"][1] for call in backend.calls if call["method"] == "eth_getBalance" and len(call["params"]) > 1]
+
+
+def _checkpoint(block: int, raw: int) -> dict:
+    return {
+        "binding": "eip1898_hash",
+        "block_hash": _hash(block),
+        "block_number": block,
+        "block_timestamp": 1,
+        "confirmation_policy": "bsc_bep126_fast_finality",
+        "nonce": "0x1",
+        "observed_at": "2023-11-14T22:13:20Z",
+        "raw_balance": str(raw),
+        "source_id": "rpc.bsc-mainnet",
+    }
+
+
+def test_a03_canonical_rejection_does_not_fall_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A03. "not canonical" is not an unsupported-parameter error and is not eligible."""
+    config = _desk(tmp_path, monkeypatch)
+    backend = ScriptBackend()
+    backend.at(10, ONE)
+    _run(config, backend, capsys)
+    backend.canonical_reject = True
+    backend.at(20, NINE)
+    backend.calls.clear()
+    _run(config, backend, capsys, expect_ok=False)
+    stored = _baseline(tmp_path)
+    assert stored is not None
+    assert stored["block_number"] == 10
+    assert int(stored["raw_balance"]) == ONE
+    assert _deltas(tmp_path) == []
+    specs = _balance_params(backend)
+    assert specs
+    assert all(isinstance(spec, dict) for spec in specs)
+
+
+def test_a04_mixed_envelope_and_false_ok_are_not_eligible(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A04. result+error, and a transport result that is not ok, never become a balance."""
+    from guardian.balances.native import ConfirmationPolicy, read_definite_balance
+    from guardian.sources.transport import TransportResult
+
+    config = _desk(tmp_path, monkeypatch)
+    backend = ScriptBackend()
+    backend.at(10, ONE)
+    _run(config, backend, capsys)
+    backend.balance_both = True
+    backend.at(20, NINE)
+    backend.calls.clear()
+    _run(config, backend, capsys, expect_ok=False)
+    stored = _baseline(tmp_path)
+    assert stored is not None and stored["block_number"] == 10
+    assert _deltas(tmp_path) == []
+    assert all(isinstance(spec, dict) for spec in _balance_params(backend))
+
+    class Transport:
+        def request(self, source_id: str, operation: object, priority: str = "high") -> TransportResult:
+            del priority
+            method = getattr(operation, "method", "")
+            if method == "eth_getBlockByNumber":
+                body = {
+                    "id": 1,
+                    "jsonrpc": "2.0",
+                    "result": {"hash": _hash(16), "number": "0x10", "timestamp": "0x1"},
+                }
+                return TransportResult(source_id, 200, body, "ok", "ok", False, False, "", {})
+            body = {"id": 1, "jsonrpc": "2.0", "result": "0x10"}
+            return TransportResult(source_id, 200, body, "error", "error", False, False, "rpc_error", {})
+
+    policy = ConfirmationPolicy("bsc_bep126_fast_finality", "finalized", 15, False)
+    read = read_definite_balance(Transport(), "rpc", ADDRESS, policy)
+    assert read.eligible is False
+    assert read.raw is None
+    assert read.failure == "malformed_response"
+
+
+def test_a05_finalized_429_does_not_read_head(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A05. A rate-limited finalized tag is not an unsupported tag and does not become latest."""
+    config = _desk(tmp_path, monkeypatch)
+    backend = ScriptBackend()
+    backend.finalized_429 = True
+    backend.at(10, NINE)
+    report = _run(config, backend, capsys, expect_ok=False)
+    methods = [call["method"] for call in backend.calls]
+    assert "eth_getBalance" not in methods
+    assert "rate_limited" in _coverage(report, "balances.native")["reason_codes"]
+    assert _baseline(tmp_path) is None
+    assert _deltas(tmp_path) == []
+
+
+def test_historical_state_does_not_fall_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    config = _desk(tmp_path, monkeypatch)
+    backend = ScriptBackend()
+    backend.at(10, ONE)
+    _run(config, backend, capsys)
+    backend.historical_reject = True
+    backend.at(20, NINE)
+    backend.calls.clear()
+    _run(config, backend, capsys, expect_ok=False)
+    assert _baseline(tmp_path)["block_number"] == 10
+    assert all(isinstance(spec, dict) for spec in _balance_params(backend))
+    assert _deltas(tmp_path) == []
+
+
+def test_c01_conflict_then_proven_rebaseline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """C01. A same-height hash is retained. Rebaseline waits until that hash is not canonical."""
+    config = _desk(tmp_path, monkeypatch)
+    backend = ScriptBackend()
+    backend.at(100, ONE)
+    _run(config, backend, capsys)
+    backend.block_number = 100
+    backend.head = 100
+    backend.block_hash = _hash(999)
+    backend.balance = ONE + (8 * ONE)
+    _run(config, backend, capsys)
+    held = _baseline(tmp_path)
+    assert held is not None
+    assert held["block_hash"] == _hash(100)
+    assert int(held["raw_balance"]) == ONE
+    assert _deltas(tmp_path) == []
+    database = _db(tmp_path)
+    try:
+        conflicts = database.native_conflicts_for(TENANT, WALLET, "bsc-mainnet", ASSET)
+    finally:
+        database.close()
+    assert len(conflicts) == 1
+    assert conflicts[0]["status"] == "open"
+    assert conflicts[0]["observed_hash"] == _hash(999)
+
+    backend.canonical_hashes[100] = _hash(999)
+    backend.at(101, ONE + (8 * ONE))
+    backend.canonical_hashes[100] = _hash(999)
+    _run(config, backend, capsys)
+    moved = _baseline(tmp_path)
+    assert moved is not None
+    assert moved["block_number"] == 101
+    assert moved["continuity"] == "rebaseline"
+    assert _deltas(tmp_path) == []
+    database = _db(tmp_path)
+    try:
+        conflicts = database.native_conflicts_for(TENANT, WALLET, "bsc-mainnet", ASSET)
+    finally:
+        database.close()
+    assert conflicts[0]["status"] == "rebaselined"
+
+
+def test_c02_retention_prunes_without_meaning_a_missed_round(tmp_path: Path) -> None:
+    """C02. One hundred and one checkpoints prune by retention. The distance is not a gap."""
+    database = Database(tmp_path / "retention.sqlite")
+    try:
+        version = 0
+        for block in range(1, 102):
+            status = database.commit_native_observation(
+                TENANT,
+                wallet_id=WALLET,
+                network="bsc-mainnet",
+                asset=ASSET,
+                expected_version=version,
+                checkpoint=_checkpoint(block, block),
+                continuity="continuous",
+                retention_blocks=15,
+                reset_checkpoints=False,
+                alert=None,
+                record_failure=None,
+            )
+            assert status == "committed"
+            version += 1
+        numbers = [
+            row[0]
+            for row in database.conn.execute(
+                "SELECT block_number FROM native_balance_checkpoints WHERE tenant_id=? ORDER BY block_number",
+                (TENANT,),
+            )
+        ]
+        assert numbers == list(range(86, 102))
+        stale = database.commit_native_observation(
+            TENANT,
+            wallet_id=WALLET,
+            network="bsc-mainnet",
+            asset=ASSET,
+            expected_version=0,
+            checkpoint=_checkpoint(10, 1),
+            continuity="continuous",
+            retention_blocks=15,
+            reset_checkpoints=False,
+            alert=None,
+            record_failure=None,
+        )
+        assert stale == "conflict"
+        assert database.native_balance_baseline(TENANT, WALLET, "bsc-mainnet", ASSET)["block_number"] == 101
+        refused = database.rebaseline_native(
+            TENANT,
+            wallet_id=WALLET,
+            network="bsc-mainnet",
+            asset=ASSET,
+            expected_version=101,
+            checkpoint=_checkpoint(70, 1),
+            proof={"block_number": 101, "canonical_hash": _hash(101), "stored_hash": _hash(101)},
+        )
+        assert refused == "rejected"
+        assert database.native_balance_baseline(TENANT, WALLET, "bsc-mainnet", ASSET)["block_number"] == 101
+    finally:
+        database.close()
+
+
+def test_polling_gap_is_not_retention_distance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    config = _desk(tmp_path, monkeypatch)
+    backend = ScriptBackend()
+    backend.at(10, ONE)
+    _run(config, backend, capsys)
+    backend.at(80, NINE)
+    _run(config, backend, capsys)
+    rows = _deltas(tmp_path)
+    assert len(rows) == 1
+    assert rows[0]["payload"]["continuity"] == "continuous"
+    database = _db(tmp_path)
+    try:
+        numbers = [row[0] for row in database.conn.execute("SELECT block_number FROM native_balance_checkpoints")]
+    finally:
+        database.close()
+    assert 10 not in numbers
+    assert 80 in numbers
+
+
+def test_e01_price_failure_keeps_the_native_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """E01. The observation is committed before the quote request."""
+    config = _desk(tmp_path, monkeypatch, prices=True)
+    backend = ScriptBackend()
+    backend.price = {"binancecoin": {"usd": 300, "last_updated_at": int(CLOCK)}}
+    backend.at(10, ONE)
+    _run(config, backend, capsys)
+    backend.fail_price = True
+    backend.at(20, NINE)
+    report = _run(config, backend, capsys)
+    assert report["status"] == "ok"
+    assert backend.block_at_price == 20
+    stored = _baseline(tmp_path)
+    assert stored is not None and stored["block_number"] == 20
+    assert len(_deltas(tmp_path)) == 1
+    assert _outbox(tmp_path)
+
+
+def test_e01_usd_only_failure_persists_unavailable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    config = _desk(tmp_path, monkeypatch, threshold=None, prices=True)
+    backend = ScriptBackend()
+    backend.price = {"binancecoin": {"usd": 300, "last_updated_at": int(CLOCK)}}
+    backend.at(10, ONE)
+    _run(config, backend, capsys)
+    backend.fail_price = True
+    backend.at(20, NINE)
+    _run(config, backend, capsys)
+    stored = _baseline(tmp_path)
+    assert stored is not None and stored["block_number"] == 20
+    assert _deltas(tmp_path) == []
+    database = _db(tmp_path)
+    try:
+        decisions = database.native_decisions_for(TENANT, WALLET, "bsc-mainnet", ASSET)
+    finally:
+        database.close()
+    assert any(row["payload"].get("threshold_decision") == "threshold_unavailable" for row in decisions)
+
+
+def test_e02_balance_path_stops_at_the_round_deadline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """E02. After identity, an expired round does not read a balance."""
+    config = _desk(tmp_path, monkeypatch, deadline=5)
+    backend = ScriptBackend()
+    jump = [False]
+    backend.clock_jump = jump
+
+    def clock() -> float:
+        return CLOCK + 10_000 if jump[0] else CLOCK
+
+    report = _run(config, backend, capsys, clock=clock, expect_ok=False)
+    methods = [call["method"] for call in backend.calls]
+    assert "eth_chainId" in methods
+    assert "eth_getBlockByNumber" in methods
+    assert "eth_getBalance" not in methods
+    assert "deadline" in _coverage(report, "balances.native")["reason_codes"]
+    assert _baseline(tmp_path) is None
+
+
+def test_e03_quote_uses_selected_credential_clock_and_sleeper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = _desk(tmp_path, monkeypatch, prices=True)
+    backend = ScriptBackend()
+    backend.price = {"binancecoin": {"usd": 3000, "last_updated_at": int(CLOCK)}}
+    backend.price_retry = True
+    backend.slept: list[float] = []
+    backend.budget_sleeper = lambda seconds: backend.slept.append(seconds)
+    backend.at(10, ONE)
+    _run(config, backend, capsys)
+    backend.at(11, ONE + (4 * ONE // 10))
+    _run(config, backend, capsys)
+    assert any("x_cg_demo_api_key=synthetic-price-key" in url for url in backend.price_urls)
+    assert 1.0 in backend.slept or 1 in backend.slept
+    row = _deltas(tmp_path)[0]["payload"]["threshold"]
+    assert row["basis"] == "usd"
+    assert row["quote_source"]
+    assert row["quoted_at"] == int(CLOCK)
+    assert row["last_updated_at"] == int(CLOCK)
+
+
+def test_g03_limited_amount_match_stays_unreconciled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """G03. An indexer row with no success evidence does not explain the delta."""
+    config = _desk(tmp_path, monkeypatch, nodereal_key=True)
+    backend = ScriptBackend()
+    backend.at(10, ONE)
+    _run(config, backend, capsys)
+    tx = "0x" + "77" * 32
+    row = _internal(tx, DELTA, 15, "0")
+    row.pop("status")
+    row.pop("traceId")
+    backend.by_category["internal"] = [row]
+    backend.at(20, NINE)
+    _run(config, backend, capsys)
+    payload = _deltas(tmp_path)[0]["payload"]
+    assert payload["attribution"] == "unavailable"
+    assert payload.get("explained_by") in (None, [])
+    assert tx not in {item["tx_id"] for item in _events(tmp_path) if item.get("execution_evidence") == "evidenced"}
+
+
+def test_internal_rows_drop_failures_and_gap_on_ambiguity() -> None:
+    from guardian.balances.internal import normalize_internal_batch
+
+    owner = ADDRESS
+    failed_receipt = _internal("0x" + "81" * 32, ONE, 15, "0")
+    failed_receipt.pop("status")
+    failed_receipt["receiptsStatus"] = "0"
+    reverted = _internal("0x" + "82" * 32, ONE, 15, "0")
+    reverted.pop("status")
+    reverted["callError"] = "execution reverted"
+    delegated = _internal("0x" + "83" * 32, ONE, 15, "0")
+    delegated["type"] = "DELEGATECALL"
+    ambiguous = _internal("0x" + "84" * 32, ONE, 15, "0")
+    ambiguous["type"] = "NOT_A_CALL"
+    contradictory = _internal("0x" + "86" * 32, ONE, 15, "0")
+    contradictory["callError"] = "execution reverted"
+    dropped = normalize_internal_batch([failed_receipt, reverted, delegated], chain_id=56, owner=owner)
+    assert dropped.rows == ()
+    assert dropped.gap is None
+    conflicted = normalize_internal_batch([contradictory], chain_id=56, owner=owner)
+    assert conflicted.gap == "parsing_gap"
+    gapped = normalize_internal_batch([ambiguous], chain_id=56, owner=owner)
+    assert gapped.rows == ()
+    assert gapped.gap == "parsing_gap"
+    page = normalize_internal_batch("not-a-list", chain_id=56, owner=owner)
+    assert page.gap == "parsing_gap"
+
+
+def test_ambiguous_internal_page_is_not_complete_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = _desk(tmp_path, monkeypatch, nodereal_key=True)
+    backend = ScriptBackend()
+    backend.at(10, ONE)
+    row = _internal("0x" + "85" * 32, ONE, 12, "0")
+    row["type"] = "NOT_A_CALL"
+    backend.by_category["internal"] = [row]
+    report = _run(config, backend, capsys)
+    internal = _coverage(report, "history.native_internal")
+    assert "parsing_gap" in internal["reason_codes"]
+    assert internal.get("quality") != "complete"
+    assert _events(tmp_path) == []
+
+
+def test_g04_transfer_then_delta_notifies_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """G04. A later balance delta links to the transfer and does not add a second pending row."""
+    config = _desk(tmp_path, monkeypatch, nodereal_key=True)
+    backend = ScriptBackend()
+    backend.at(10, ONE)
+    _run(config, backend, capsys)
+    backend.fail_balance = True
+    backend.at(16, ONE)
+    backend.by_category["internal"] = [_internal("0x" + "91" * 32, 5 * ONE, 15, "1")]
+    _run(config, backend, capsys, expect_ok=False)
+    assert _baseline(tmp_path)["block_number"] == 10
+    assert _pending_movements(tmp_path) == ["native_unit"]
+    backend.fail_balance = False
+    backend.by_category["internal"] = []
+    backend.at(20, ONE + 5 * ONE)
+    _run(config, backend, capsys)
+    pending = _pending_movements(tmp_path)
+    assert pending.count("native_unit") == 1
+    assert "balance_delta" not in pending
+    database = _db(tmp_path)
+    try:
+        delta = next(item for item in database.alerts_for(TENANT) if item.get("kind") == "balance_delta")
+        links = database.conn.execute("SELECT COUNT(*) FROM balance_explanations").fetchone()[0]
+    finally:
+        database.close()
+    assert delta["linked_transfers"]
+    assert links >= 1
+
+
+def test_sent_transfer_receipt_survives_the_later_delta(tmp_path: Path) -> None:
+    database = Database(tmp_path / "sent.sqlite")
+    try:
+        assert database.commit_native_observation(
+            TENANT,
+            wallet_id=WALLET,
+            network="bsc-mainnet",
+            asset=ASSET,
+            expected_version=0,
+            checkpoint=_checkpoint(10, ONE),
+            continuity="baseline",
+            retention_blocks=15,
+            reset_checkpoints=False,
+            alert=None,
+            record_failure=None,
+        ) == "committed"
+        transfer = {
+            "alert": True,
+            "asset": ASSET,
+            "block_number": "15",
+            "dedup_key": "transfer-key",
+            "direction": "in",
+            "execution_evidence": "evidenced",
+            "identity": "tx-transfer",
+            "kind": "native_unit",
+            "network": "bsc-mainnet",
+            "raw_amount": str(5 * ONE),
+            "tenant_id": TENANT,
+            "wallet_id": WALLET,
+        }
+        assert database.add_alert(TENANT, "transfer-key", transfer) is True
+        with database.conn:
+            database.conn.execute("UPDATE outbox SET status='sent' WHERE tenant_id=?", (TENANT,))
+            database.conn.execute(
+                "INSERT INTO deliveries(tenant_id, payload) VALUES(?, ?)",
+                (TENANT, '{"receipt":"kept"}'),
+            )
+        delta = {
+            "alert": True,
+            "asset": ASSET,
+            "dedup_key": "delta-key",
+            "direction": "increase",
+            "kind": "balance_delta",
+            "network": "bsc-mainnet",
+            "new_checkpoint": {"block_hash": _hash(20), "block_number": 20},
+            "old_checkpoint": {"block_hash": _hash(10), "block_number": 10},
+            "signed_delta_raw": str(5 * ONE),
+            "wallet_id": WALLET,
+        }
+        assert database.commit_native_observation(
+            TENANT,
+            wallet_id=WALLET,
+            network="bsc-mainnet",
+            asset=ASSET,
+            expected_version=1,
+            checkpoint=_checkpoint(20, ONE + 5 * ONE),
+            continuity="continuous",
+            retention_blocks=15,
+            reset_checkpoints=False,
+            alert=delta,
+            record_failure=None,
+            decision=delta,
+        ) == "committed"
+        outbox = database.outbox_for(TENANT)
+        assert len(outbox) == 1
+        assert outbox[0]["status"] == "sent"
+        assert outbox[0]["payload"]["kind"] == "native_unit"
+        kinds = [item["kind"] for item in database.alerts_for(TENANT)]
+        assert "native_unit" in kinds and "balance_delta" in kinds
+        assert database.conn.execute("SELECT COUNT(*) FROM balance_explanations").fetchone()[0] >= 1
+        assert "kept" in database.conn.execute("SELECT payload FROM deliveries").fetchone()[0]
+    finally:
+        database.close()
+
+
+def test_d08_opposing_transfers_alert_while_net_delta_stays_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """D08. +5 and -5 BNB each meet the 1.0 floor when there is no price. The net delta does not."""
+    config = _desk(tmp_path, monkeypatch, nodereal_key=True, prices=False)
+    backend = ScriptBackend()
+    backend.at(10, 10 * ONE)
+    _run(config, backend, capsys)
+    incoming = _internal("0x" + "a1" * 32, 5 * ONE, 15, "0")
+    outgoing = _internal("0x" + "a2" * 32, 5 * ONE, 16, "0", sender=ADDRESS)
+    outgoing["to"] = OTHER
+    backend.by_category["external"] = [incoming, outgoing]
+    backend.at(20, 10 * ONE)
+    _run(config, backend, capsys)
+    assert _deltas(tmp_path) == []
+    assert _kinds(tmp_path).count("native_unit") == 2
+
+
+def test_own_wallet_pair_stays_net_even_with_a_native_floor() -> None:
+    from guardian.rules import AlertPolicy, Candidate
+
+    policy = AlertPolicy(Decimal("0.5"), Decimal("1000"), {"bsc-mainnet": Decimal("1.0")})
+
+    def candidate(wallet: str, other: str, direction: str, identity: str) -> Candidate:
+        return Candidate(
+            tenant_id=TENANT,
+            wallet_id=wallet,
+            network="bsc-mainnet",
+            capability="history.native_external",
+            identity=identity,
+            kind="asset",
+            raw_amount=5 * ONE,
+            is_native=True,
+            direction=direction,
+            counterparty_wallet_id=other,
+            transfer_origin="evm_external",
+        )
+
+    paired = policy.apply([
+        candidate("wallet-a", "wallet-b", "out", "same-tx"),
+        candidate("wallet-b", "wallet-a", "in", "same-tx"),
+    ])
+    assert len(paired) == 1
+    assert paired[0].kind == "internal_transfer"
+    assert paired[0].alert is False
+    separate = policy.apply([
+        candidate("wallet-a", "", "in", "one"),
+        candidate("wallet-a", "", "out", "two"),
+    ])
+    assert [item.kind for item in separate if item.alert] == ["native_unit", "native_unit"]
+
+
+def test_unknown_native_unit_key_is_a_config_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    config = _desk(tmp_path, monkeypatch)
+    document = json.loads(config.read_text(encoding="utf-8"))
+    document["alerts"]["native_unit_thresholds"] = {"not-a-network": "1.0"}
+    config.write_text(json.dumps(document), encoding="utf-8")
+    code = main(["run-once", "--mcm-config", str(config), "--no-send"], backend=ScriptBackend(), clock=lambda: CLOCK)
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 2
+    assert payload["error_type"] == "ConfigError"
+    assert "not-a-network" in payload["error"]
+    assert "bsc-mainnet" in payload["error"]
+    assert ADDRESS.lower() not in json.dumps(payload).lower()

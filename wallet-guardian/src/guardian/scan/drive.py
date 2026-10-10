@@ -809,9 +809,23 @@ def _walk_bsc_internal(scan, client, source, source_id, wallet_id, address) -> N
         read = _nodereal_sides(client, "internal", address, start, end, None)
         if read is None or getattr(read, "blocked", False) or read.category == "error" or not read.pagination_complete:
             return read
-        items = normalize_internal_batch(read.items, chain_id=chain_id, owner=address)
-        name = "empty" if not items else "ok"
-        return HistoryRead("history.native_internal", tuple(items), True, True, (), str(end), name, False, "", (), "")
+        normalized = normalize_internal_batch(read.items, chain_id=chain_id, owner=address)
+        if normalized.gap:
+            return HistoryRead(
+                "history.native_internal",
+                normalized.rows,
+                False,
+                False,
+                (normalized.gap,),
+                None,
+                "partial",
+                False,
+                normalized.gap,
+                (normalized.gap,),
+                "",
+            )
+        name = "empty" if not normalized.rows else "ok"
+        return HistoryRead("history.native_internal", normalized.rows, True, True, (), str(end), name, False, "", (), "")
 
     outcome = _walk_pages(
         scan, chunks, origin, wallet_id, "history.native_internal", source_id, True, fetch, cursor=True,

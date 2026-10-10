@@ -309,7 +309,7 @@ class Database:
         ).fetchall()
         return [json.loads(row["payload"]) for row in rows]
 
-    def _add_alert(self, tenant_id: str, dedup_key: str, payload: dict[str, Any]) -> bool:
+    def _add_alert(self, tenant_id: str, dedup_key: str, payload: dict[str, Any], *, notify: bool = True) -> bool:
         encoded = _json(payload)
         cursor = self.conn.execute(
             "INSERT OR IGNORE INTO alert_dedup(tenant_id, dedup_key) VALUES(?, ?)",
@@ -322,10 +322,12 @@ class Database:
             (tenant_id, dedup_key, encoded),
         )
         # Pending is not a delivery claim. No sender is enabled by this change.
-        self.conn.execute(
-            "INSERT INTO outbox(tenant_id, status, payload) VALUES(?, 'pending', ?)",
-            (tenant_id, encoded),
-        )
+        # notify is false when an earlier transfer alert already covers this movement.
+        if notify:
+            self.conn.execute(
+                "INSERT INTO outbox(tenant_id, status, payload) VALUES(?, 'pending', ?)",
+                (tenant_id, encoded),
+            )
         return True
 
     def add_alert(self, tenant_id: str, dedup_key: str, payload: dict[str, Any]) -> bool:
@@ -368,13 +370,16 @@ class Database:
         reset_checkpoints: bool,
         alert: dict[str, Any] | None,
         record_failure: str | None,
+        decision: dict[str, Any] | None = None,
+        notify: bool = True,
     ) -> str:
         """Write one observation, its decision, and the outbox row together.
 
         ``conflict`` means another writer moved the version. ``rejected`` means
         this call had nothing safe to store. A failed read never inserts zero.
+        ``retention_blocks`` deletes checkpoints older than that distance from
+        the new block. It does not decide whether a round was missed.
         """
-        del retention_blocks
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             row = self.conn.execute(
@@ -437,6 +442,15 @@ class Database:
                     checkpoint["confirmation_policy"], checkpoint.get("nonce"),
                 ),
             )
+            if isinstance(retention_blocks, int) and not isinstance(retention_blocks, bool) and retention_blocks >= 0:
+                oldest = int(checkpoint["block_number"]) - retention_blocks
+                self.conn.execute(
+                    """
+                    DELETE FROM native_balance_checkpoints
+                    WHERE tenant_id=? AND wallet_id=? AND network=? AND asset=? AND block_number < ?
+                    """,
+                    (tenant_id, wallet_id, network, asset, oldest),
+                )
             version = expected_version + 1
             values = (
                 tenant_id, wallet_id, network, asset, version, checkpoint["raw_balance"],
@@ -476,7 +490,32 @@ class Database:
                     self.conn.rollback()
                     return "conflict"
             if isinstance(alert, dict) and alert.get("alert") is True and isinstance(alert.get("dedup_key"), str):
-                self._add_alert(tenant_id, alert["dedup_key"], alert)
+                from guardian.balances.reconcile import movement_link
+
+                keys, components = movement_link(self.conn, tenant_id, alert)
+                if keys:
+                    notify = False
+                    alert = dict(alert)
+                    alert["components"] = components
+                    alert["linked_transfers"] = keys
+                    if decision is alert or decision is None:
+                        decision = alert
+                    elif isinstance(decision, dict) and decision.get("dedup_key") == alert.get("dedup_key"):
+                        decision = alert
+                self._add_alert(tenant_id, str(alert["dedup_key"]), alert, notify=notify)
+                for key in keys:
+                    self.conn.execute(
+                        """
+                        INSERT OR IGNORE INTO balance_explanations(tenant_id, observation_key, transfer_key)
+                        VALUES (?, ?, ?)
+                        """,
+                        (tenant_id, alert["dedup_key"], key),
+                    )
+            stored_decision = decision if isinstance(decision, dict) else None
+            if isinstance(stored_decision, dict):
+                _store_native_decision(
+                    self.conn, tenant_id, wallet_id, network, asset, checkpoint, stored_decision,
+                )
             self.conn.commit()
             return "committed"
         except Exception:
@@ -507,8 +546,10 @@ class Database:
             encoded = _json(payload)
             self.conn.execute("UPDATE alerts SET payload=? WHERE id=?", (encoded, row["id"]))
             for outbox in self.conn.execute(
-                "SELECT id, payload FROM outbox WHERE tenant_id=?", (tenant_id,),
+                "SELECT id, status, payload FROM outbox WHERE tenant_id=?", (tenant_id,),
             ):
+                if outbox["status"] != "pending":
+                    continue
                 body = json.loads(outbox["payload"])
                 if isinstance(body, dict) and body.get("dedup_key") == dedup_key:
                     self.conn.execute("UPDATE outbox SET payload=? WHERE id=?", (encoded, outbox["id"]))
@@ -527,6 +568,190 @@ class Database:
                 """,
                 (tenant_id, observation_key, transfer_key),
             )
+
+    def record_native_conflict(
+        self,
+        tenant_id: str,
+        *,
+        wallet_id: str,
+        network: str,
+        asset: str,
+        block_number: int,
+        stored_hash: str,
+        observed_hash: str,
+        observed_at: str,
+    ) -> None:
+        """Remember a same-height or revalidated hash disagreement. Does not move the baseline."""
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO native_balance_conflicts(
+                  tenant_id, wallet_id, network, asset, block_number, stored_hash, observed_hash,
+                  observed_at, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open')
+                """,
+                (
+                    tenant_id, wallet_id, network, asset, int(block_number), stored_hash, observed_hash,
+                    observed_at,
+                ),
+            )
+
+    def close_native_conflicts(
+        self,
+        tenant_id: str,
+        *,
+        wallet_id: str,
+        network: str,
+        asset: str,
+        block_number: int,
+        stored_hash: str,
+    ) -> None:
+        """The stored hash is still canonical. Later blocks may compare with it."""
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE native_balance_conflicts SET status='canonical'
+                WHERE tenant_id=? AND wallet_id=? AND network=? AND asset=? AND block_number=?
+                  AND stored_hash=? AND status='open'
+                """,
+                (tenant_id, wallet_id, network, asset, int(block_number), stored_hash.lower()),
+            )
+
+    def native_conflicts_for(
+        self, tenant_id: str, wallet_id: str, network: str, asset: str,
+    ) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT block_number, stored_hash, observed_hash, observed_at, status
+            FROM native_balance_conflicts
+            WHERE tenant_id=? AND wallet_id=? AND network=? AND asset=?
+            ORDER BY block_number, observed_hash
+            """,
+            (tenant_id, wallet_id, network, asset),
+        ).fetchall()
+        return [{key: row[key] for key in row.keys()} for row in rows]
+
+    def native_decisions_for(
+        self, tenant_id: str, wallet_id: str, network: str, asset: str,
+    ) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT observation_key, block_number, block_hash, payload
+            FROM native_balance_decisions
+            WHERE tenant_id=? AND wallet_id=? AND network=? AND asset=?
+            ORDER BY block_number, observation_key
+            """,
+            (tenant_id, wallet_id, network, asset),
+        ).fetchall()
+        found = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            found.append({
+                "block_hash": row["block_hash"],
+                "block_number": row["block_number"],
+                "observation_key": row["observation_key"],
+                "payload": payload,
+            })
+        return found
+
+    def rebaseline_native(
+        self,
+        tenant_id: str,
+        *,
+        wallet_id: str,
+        network: str,
+        asset: str,
+        expected_version: int,
+        checkpoint: dict[str, Any],
+        proof: dict[str, Any],
+    ) -> str:
+        """Replace the baseline only when the stored hash was rechecked and is not canonical.
+
+        A lower block number alone is not proof. This writes no movement alert.
+        """
+        if not isinstance(checkpoint, dict) or not isinstance(proof, dict):
+            return "rejected"
+        stored_hash = proof.get("stored_hash")
+        canonical_hash = proof.get("canonical_hash")
+        if not _block_hash_text(stored_hash) or not _block_hash_text(canonical_hash):
+            return "rejected"
+        stored_hash = str(stored_hash).strip().lower()
+        canonical_hash = str(canonical_hash).strip().lower()
+        if stored_hash == canonical_hash:
+            return "rejected"
+        try:
+            proof_block = int(proof.get("block_number"))
+        except (TypeError, ValueError):
+            return "rejected"
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.conn.execute(
+                """
+                SELECT version, block_number, block_hash FROM native_balance_baselines
+                WHERE tenant_id=? AND wallet_id=? AND network=? AND asset=?
+                """,
+                (tenant_id, wallet_id, network, asset),
+            ).fetchone()
+            if row is None or int(row["version"]) != expected_version:
+                self.conn.rollback()
+                return "conflict" if row is not None else "rejected"
+            if int(row["block_number"]) != proof_block or str(row["block_hash"]).lower() != stored_hash:
+                self.conn.rollback()
+                return "rejected"
+            self.conn.execute(
+                """
+                DELETE FROM native_balance_checkpoints
+                WHERE tenant_id=? AND wallet_id=? AND network=? AND asset=?
+                """,
+                (tenant_id, wallet_id, network, asset),
+            )
+            self.conn.execute(
+                """
+                INSERT INTO native_balance_checkpoints(
+                  tenant_id, wallet_id, network, asset, block_number, block_hash, raw_balance,
+                  block_timestamp, observed_at, source_id, binding, confirmation_policy, nonce
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tenant_id, wallet_id, network, asset, int(checkpoint["block_number"]),
+                    checkpoint["block_hash"], checkpoint["raw_balance"], checkpoint.get("block_timestamp"),
+                    checkpoint["observed_at"], checkpoint["source_id"], checkpoint["binding"],
+                    checkpoint["confirmation_policy"], checkpoint.get("nonce"),
+                ),
+            )
+            version = expected_version + 1
+            changed = self.conn.execute(
+                """
+                UPDATE native_balance_baselines SET
+                  version=?, raw_balance=?, block_number=?, block_hash=?, block_timestamp=?,
+                  observed_at=?, source_id=?, confirmation_policy=?, binding=?, continuity=?,
+                  last_failed_at=NULL, nonce=?
+                WHERE tenant_id=? AND wallet_id=? AND network=? AND asset=? AND version=?
+                """,
+                (
+                    version, checkpoint["raw_balance"], int(checkpoint["block_number"]),
+                    checkpoint["block_hash"], checkpoint.get("block_timestamp"), checkpoint["observed_at"],
+                    checkpoint["source_id"], checkpoint["confirmation_policy"], checkpoint["binding"],
+                    "rebaseline", checkpoint.get("nonce"), tenant_id, wallet_id, network, asset,
+                    expected_version,
+                ),
+            )
+            if changed.rowcount != 1:
+                self.conn.rollback()
+                return "conflict"
+            self.conn.execute(
+                """
+                UPDATE native_balance_conflicts SET status='rebaselined'
+                WHERE tenant_id=? AND wallet_id=? AND network=? AND asset=? AND block_number=?
+                  AND stored_hash=? AND status='open'
+                """,
+                (tenant_id, wallet_id, network, asset, proof_block, stored_hash),
+            )
+            self.conn.commit()
+            return "committed"
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def health_for(self, tenant_id: str) -> dict[str, Any]:
         row = self.conn.execute(
@@ -1027,6 +1252,40 @@ class Database:
             self.conn.rollback()
             raise
         return {"orphaned": orphaned, "cursors": moved}
+
+
+def _store_native_decision(conn: sqlite3.Connection, tenant_id: str, wallet_id: str, network: str, asset: str, checkpoint: dict[str, Any], decision: dict[str, Any]) -> None:
+    key = decision.get("identity") if isinstance(decision.get("identity"), str) and decision.get("identity") else decision.get("dedup_key")
+    if not isinstance(key, str) or not key:
+        return
+    conn.execute(
+        """
+        INSERT INTO native_balance_decisions(
+          tenant_id, observation_key, wallet_id, network, asset, block_number, block_hash, payload
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, observation_key) DO UPDATE SET
+          block_number=excluded.block_number,
+          block_hash=excluded.block_hash,
+          payload=excluded.payload
+        """,
+        (
+            tenant_id, key, wallet_id, network, asset, int(checkpoint["block_number"]),
+            checkpoint["block_hash"], _json(decision),
+        ),
+    )
+
+
+def _block_hash_text(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    text = value.strip().lower()
+    if not text.startswith("0x") or len(text) != 66:
+        return False
+    try:
+        int(text[2:], 16)
+    except ValueError:
+        return False
+    return True
 
 
 def _normalized_sql(path: Path) -> str:

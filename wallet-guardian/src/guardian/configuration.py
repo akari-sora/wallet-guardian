@@ -337,7 +337,12 @@ def path_inside_work_tree(path: Path, root: Path | None = None) -> bool:
 
 
 def _semantic_public(document: dict[str, Any]) -> None:
+    from guardian.rules import validate_native_unit_thresholds
+
     registry = load_registry(resource_path("config", "chains"))
+    alerts = document.get("alerts")
+    if isinstance(alerts, dict):
+        validate_native_unit_thresholds(alerts.get("native_unit_thresholds"))
     enabled = set(document["enabled_networks"])
     for network in enabled:
         if network not in registry:
