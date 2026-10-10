@@ -13,6 +13,7 @@ import threading
 import time
 from typing import Any
 from urllib.parse import urljoin
+import httpcore
 import httpx
 from eth_abi import decode, encode
 from eth_utils import keccak
@@ -29,7 +30,11 @@ _PROBE_DEADLINE = threading.local()
 
 
 class ProbeDeadline:
-    """Remaining monotonic budget for one probe, shared by every request in it."""
+    """Remaining monotonic budget for one probe, shared by every request in it.
+
+    Cancelling closes open clients and any pinned stream already handed to this
+    deadline. A stream still inside HTTPCore's connect is not on the client yet.
+    """
 
     def __init__(self, seconds: float, *, clock=None) -> None:
         self._clock = clock or time.monotonic
@@ -103,6 +108,141 @@ def _close_quietly(client: Any) -> None:
         return
 
 
+def _phase_timeout(deadline: ProbeDeadline, requested: float | None) -> float:
+    """The time this connect phase may still use, from the budget that is left."""
+    if requested is None:
+        if deadline.expired():
+            raise TimeoutError("probe_deadline")
+        left = deadline.remaining()
+        if left <= 0:
+            raise TimeoutError("probe_deadline")
+        return left
+    return deadline.timeout_for(requested)
+
+
+class _DeadlineStream(httpcore.NetworkStream):
+    """Pinned socket that keeps the probe deadline across TCP, TLS, and the write.
+
+    ``client.close()`` does not reach the socket while HTTPCore is inside
+    ``_connect()`` and has not assigned the connection. After each phase, and
+    again before request bytes, an expired or cancelled deadline closes the
+    stream that just became available and raises.
+    """
+
+    def __init__(self, inner: Any, deadline: ProbeDeadline) -> None:
+        self._inner = inner
+        self._deadline = deadline
+        self._closed = False
+
+    def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        phase = self._budget(timeout)
+        return self._inner.read(max_bytes, phase)
+
+    def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        phase = self._budget(timeout)
+        self._inner.write(buffer, phase)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        _close_quietly(self._inner)
+
+    def start_tls(
+        self,
+        ssl_context: Any,
+        server_hostname: str | None = None,
+        timeout: float | None = None,
+    ) -> httpcore.NetworkStream:
+        try:
+            phase = _phase_timeout(self._deadline, timeout)
+        except TimeoutError:
+            self.close()
+            raise
+        try:
+            upgraded = self._inner.start_tls(ssl_context, server_hostname, phase)
+        except Exception:
+            self.close()
+            raise
+        return _adopt_stream(upgraded, self._deadline)
+
+    def get_extra_info(self, info: str) -> Any:
+        return self._inner.get_extra_info(info)
+
+    def _budget(self, timeout: float | None) -> float:
+        try:
+            phase = _phase_timeout(self._deadline, timeout)
+        except TimeoutError:
+            self.close()
+            raise
+        return phase
+
+
+def _adopt_stream(stream: Any, deadline: ProbeDeadline) -> _DeadlineStream:
+    """Own ``stream``. Close it and raise when the deadline is already spent."""
+    wrapped = _DeadlineStream(stream, deadline)
+    try:
+        if deadline.expired():
+            raise TimeoutError("probe_deadline")
+        deadline.watch(wrapped)
+    except TimeoutError:
+        wrapped.close()
+        raise
+    return wrapped
+
+
+class _DeadlineBackend(httpcore.NetworkBackend):
+    """Connect backend that recomputes the probe budget between TCP and TLS."""
+
+    def __init__(self, deadline: ProbeDeadline, inner: httpcore.NetworkBackend) -> None:
+        self._deadline = deadline
+        self._inner = inner
+
+    def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Any = None,
+    ) -> httpcore.NetworkStream:
+        phase = _phase_timeout(self._deadline, timeout)
+        stream = self._inner.connect_tcp(
+            host,
+            port,
+            timeout=phase,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+        return _adopt_stream(stream, self._deadline)
+
+    def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,
+        socket_options: Any = None,
+    ) -> httpcore.NetworkStream:
+        phase = _phase_timeout(self._deadline, timeout)
+        stream = self._inner.connect_unix_socket(path, timeout=phase, socket_options=socket_options)
+        return _adopt_stream(stream, self._deadline)
+
+
+def _arm_deadline_transport(client: Any) -> None:
+    """Carry the current probe deadline on the client's real connection pool.
+
+    A stand-in client used by tests has no pool, and this leaves that stand-in
+    in place. The production pool is HTTPCore 1.0.9's ``_network_backend``.
+    """
+    deadline = _current_deadline()
+    if deadline is None:
+        return
+    pool = getattr(getattr(client, "_transport", None), "_pool", None)
+    backend = getattr(pool, "_network_backend", None)
+    if pool is None or backend is None or isinstance(backend, _DeadlineBackend):
+        return
+    pool._network_backend = _DeadlineBackend(deadline, backend)
+
+
 def _pinned_exchange(
     method: str,
     url: str,
@@ -114,8 +254,11 @@ def _pinned_exchange(
 ) -> tuple[int, dict[str, str], str]:
     """One request to the validated IP, with the original hostname on Host and SNI.
 
-    The deadline is checked before DNS and again before the socket. The client
-    timeout is the time still left, and the deadline can close that client.
+    The deadline is checked before DNS and again before the socket. Connect and
+    TLS each use the time still left. After TCP, after TLS, and before any
+    request bytes, an expired or cancelled deadline closes that stream and
+    raises. Closing the client alone does not do this while the handshake is
+    still inside HTTPCore's ``_connect()``.
     """
     timeout = _budget_timeout(timeout)
     assert_direct_transport(os.environ)
@@ -126,6 +269,7 @@ def _pinned_exchange(
     if drop_accept:
         headers.pop("accept", None)
     client = httpx.Client(**direct_client_kwargs(timeout=timeout))
+    _arm_deadline_transport(client)
     try:
         _watch_client(client)
         response = client.request(

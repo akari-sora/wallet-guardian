@@ -321,9 +321,11 @@ def _call_with_deadline(func, seconds: float):
     """Run ``func`` until ``seconds`` of monotonic time have passed.
 
     The worker shares one deadline. Each request uses the time still left as
-    its timeout and does not start after the deadline. On expiry the open
-    clients are closed, then the worker is joined for a short bounded cleanup.
-    The worker is a daemon so process exit is not held open.
+    its timeout and does not start after the deadline. Connect and TLS use that
+    remaining time, and an expired handshake closes its stream before request
+    bytes are written. On expiry the open clients and streams are closed, then
+    the worker is joined for a short bounded cleanup. The worker is a daemon so
+    process exit is not held open.
     """
     import threading
 
@@ -535,7 +537,8 @@ def doctor(
     for the probe requests. A 401 does not select the other source. Unusable
     resolver settings are reported and not probed. Each live probe has a 5
     second remaining-time deadline: a request does not start after it expires,
-    and the open client is closed. With ``--mcm-config`` the live calls stay
+    the handshake stream is closed before request bytes are written, and the
+    open client is closed. With ``--mcm-config`` the live calls stay
     on the legacy provider endpoints; that does not prove the selected
     profile's connectivity.
     """

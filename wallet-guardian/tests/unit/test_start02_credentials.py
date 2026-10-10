@@ -663,3 +663,125 @@ def test_start_fix_deadline_does_not_start_the_next_rpc(monkeypatch: pytest.Monk
         assert operations.count("eth_getBlockByNumber") == 0
     finally:
         released.set()
+
+
+def test_start_fix_pinned_stream_does_not_write_after_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TCP and TLS that each finish under their phase timeout must not write past the total deadline.
+
+    The fake handshake delays and does not apply the timeout it is given, so both
+    phases return a live stream after the budget is gone. Request bytes have to
+    stay unsent, including the next RPC. A fast handshake under a longer budget
+    still writes ``eth_chainId``.
+    """
+    from httpcore._backends.sync import SyncBackend
+
+    from guardian.providers import RpcClient
+    from guardian.service import _call_with_deadline
+
+    pace = {"tcp": 0.0, "tls": 0.0}
+    writes: list[tuple[float, bytes]] = []
+    tcp_timeouts: list[float | None] = []
+    tls_timeouts: list[float | None] = []
+    connects = {"n": 0}
+    streams: list[object] = []
+
+    class _SlowStream:
+        def __init__(self) -> None:
+            body = b'{"jsonrpc":"2.0","id":1,"result":"0x1"}'
+            self._in = (
+                b"HTTP/1.1 200 OK\r\nContent-Length: "
+                + str(len(body)).encode("ascii")
+                + b"\r\nConnection: close\r\n\r\n"
+                + body
+            )
+            self._pos = 0
+            self.buf = bytearray()
+            self.closed = False
+
+        def write(self, data: bytes, timeout: float | None = None) -> None:
+            writes.append((time.monotonic(), bytes(data)))
+            self.buf.extend(data)
+
+        def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+            chunk = self._in[self._pos : self._pos + max_bytes]
+            self._pos += len(chunk)
+            return chunk
+
+        def close(self) -> None:
+            self.closed = True
+
+        def start_tls(
+            self,
+            ssl_context: ssl.SSLContext,
+            server_hostname: str | None = None,
+            timeout: float | None = None,
+        ) -> "_SlowStream":
+            tls_timeouts.append(timeout)
+            time.sleep(pace["tls"])
+            return self
+
+        def get_extra_info(self, info: str) -> None:
+            return None
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        connects["n"] += 1
+        tcp_timeouts.append(timeout)
+        time.sleep(pace["tcp"])
+        stream = _SlowStream()
+        streams.append(stream)
+        return stream
+
+    monkeypatch.setattr(SyncBackend, "connect_tcp", connect_tcp)
+    url = "https://bsc.example.invalid/rpc"
+    resolve = lambda _host: ["1.1.1.1"]
+
+    assert _call_with_deadline(
+        lambda: RpcClient(url, resolve=resolve, timeout=30).call("eth_chainId", []),
+        2.0,
+    ) == "0x1"
+    success = b"".join(payload for _stamp, payload in writes)
+    assert b"POST" in success
+    assert b"/rpc" in success
+    assert b"eth_chainId" in success
+
+    writes.clear()
+    tcp_timeouts.clear()
+    tls_timeouts.clear()
+    streams.clear()
+    connects["n"] = 0
+    pace["tcp"] = 0.6
+    pace["tls"] = 0.6
+    started_methods: list[str] = []
+    finished = threading.Event()
+    origin = {"t": 0.0}
+
+    def slow() -> None:
+        origin["t"] = time.monotonic()
+        try:
+            rpc = RpcClient(url, resolve=resolve, timeout=30)
+            started_methods.append("eth_chainId")
+            rpc.call("eth_chainId", [])
+            started_methods.append("eth_getBlockByNumber")
+            rpc.call("eth_getBlockByNumber", ["latest", False])
+        finally:
+            finished.set()
+
+    with pytest.raises(TimeoutError, match="probe_deadline"):
+        _call_with_deadline(slow, 1.0)
+    assert finished.wait(3.0)
+    sent = b"".join(payload for stamp, payload in writes if stamp > origin["t"] + 1.0)
+    assert sent == b""
+    assert b"POST" not in b"".join(payload for _stamp, payload in writes)
+    assert b"eth_chainId" not in b"".join(payload for _stamp, payload in writes)
+    assert "eth_getBlockByNumber" not in started_methods
+    assert connects["n"] == 1
+    assert tcp_timeouts and tls_timeouts
+    tcp_timeout = tcp_timeouts[0]
+    tls_timeout = tls_timeouts[0]
+    assert tcp_timeout is not None and tcp_timeout > 0.6
+    assert tls_timeout is not None and tls_timeout < 0.6
+    assert tls_timeout < tcp_timeout
+    stream = streams[-1]
+    assert isinstance(stream, _SlowStream)
+    assert stream.closed
+    assert stream.buf == b""
