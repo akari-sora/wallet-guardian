@@ -2,13 +2,15 @@
 
 A native balance increase is still a `balance_delta`. This page describes a separate revision that tries to attribute one BSC increase to a Lista StakeManager withdrawal. The revision does not change the alert, its severity, its attribution, or any safety label. `funds_marked_safe` is false. Labels stay `unverified`. A match is not a statement that the funds are safe.
 
-There is no live probe. The bytecode hashes in `config/explainers/lista-stakemanager.json` are specification pins of calculation rules. They are not a reading of live chain code. `live_bytecode_verified` is false. The candidate specification is lista-dao/synclub-contracts commit `2a60d77d9d9c7059736385a4425ca38492425c8e`. It is not proof of the code that executed.
+Experimental read-only attribution with bounded discovery. A verified request match requires an explicitly approved historical deployment and coherent transaction, receipt, request and checkpoint evidence. Incomplete evidence remains partial or unverified. Explanations do not certify fund safety, establish operator control, guarantee complete attribution, or change the underlying movement alert. No live historical-path qualification is claimed.
+
+There is no live probe. `config/explainers/lista-stakemanager.json` keeps the allowlisted calls and an empty `implementations` list. `implementation_at_execution` stays unverified until a reviewed deployment interval is added. `live_bytecode_verified` is false. The candidate specification is lista-dao/synclub-contracts commit `2a60d77d9d9c7059736385a4425ca38492425c8e`. Synthetic calculation pins live in the test fixture and are not loaded by the packaged manifest.
 
 ## Verdicts
 
 | Verdict | Meaning |
 | --- | --- |
-| `MATCHES_OWN_REQUEST` | One request belongs to the monitored account, the implementation that executed is the pinned code, the receipt shows payment to that account, and the amount matches the pinned rule. |
+| `MATCHES_OWN_REQUEST` | One request belongs to the monitored account, the implementation that executed is an explicitly approved deployment, the receipt, request, and checkpoints agree, and the amount matches that deployment's rule. |
 | `PARTIAL` | Some of that link is present, and the request, the execution, or the amount is missing, ambiguous, or inconsistent. |
 | `NO_MATCH` | The explanation is rejected. The inflow itself is not rejected. |
 | `UNVERIFIED` | A required read, the implementation, or the evidence is not available. |
@@ -35,21 +37,21 @@ Optional conversion quotes may stay `not_queried`. That does not erase a match. 
 
 The request identity is `eip155:{chain}:{manager}:{account}:{request tx}:{log index}`. The array index and the uuid are not the identity. A claim index is only the position in the queue at that moment.
 
-Replay starts from `getUserWithdrawalRequests` at the old checkpoint block hash, then applies request and claim logs inside `(old, new]`. It does not start from the empty array left after the claim. The BNB quote is read at the parent of the claim, before in-block claims are applied, so a swap-and-pop keeps the amount. A request created in the same block as its claim has no stored quote at that parent hash, so the result is not `MATCHES_OWN_REQUEST`.
+Replay starts from `getUserWithdrawalRequests` at the old checkpoint block hash, then applies request and claim logs inside `(old, new]`. It does not start from the empty array left after the claim. A request that is already pending at the old checkpoint is sought in one bounded window at or before that checkpoint, and a found request log is kept for a later observation. A wider balance interval keeps the logs it has already read and resumes; an unfinished window stays retryable. The BNB quote is read at the parent of the claim, before in-block claims are applied, so a swap-and-pop keeps the amount. A request created in the same block as its claim has no stored quote at that parent hash, so the result is not `MATCHES_OWN_REQUEST`.
 
 Two requests for the same slisBNB amount stay distinct because the identity is the transaction and log, not the amount and not index 0.
 
 ## Implementation at execution
 
-The proxy's ERC-1967 implementation slot is read at the parent block hash and at the claim block hash. `Upgraded` logs in the claim block are applied in transaction order. An upgrade in the same transaction as the claim is unverified. A storage read that fails is unverified. A code hash that is not in the manifest interval is not a match. A historical read that fails is not replaced with `latest`.
+The proxy's ERC-1967 implementation slot is read at the parent block hash and at the claim block hash. `Upgraded` logs in the claim block are kept only when the emitter, block, and removal flag agree with that block, and they are applied in transaction and log order. An upgrade in the same transaction as the claim is unverified. The implementation after every upgrade in the block has to equal the slot at the claim block hash. A storage read that fails is unverified. A code hash that is not in an approved manifest interval is not a match. The packaged interval list is empty, so this check does not verify a deployment. A historical read that fails is not replaced with `latest`.
 
 `claimWithdrawFor` is decoded and never submitted. The manifest cannot add a call, a view, or an event outside the plugin allowlist. A stale ABI hash loads nothing.
 
-For the pinned intervals, a `ClaimWithdrawal` log in a successful receipt is the payment evidence, because the candidate specification emits that log after `sendValue`. A successful outer transaction without that log is not payment. This implication is not inherited by any other code hash.
+For an approved interval that sets `receipt_implies_payment`, a `ClaimWithdrawal` log in a successful receipt is the payment evidence when its emitter, beneficiary, data, index, and transaction identity agree with the discovered claim. A missing receipt status is unavailable evidence. Only an established failed execution is `failed_payment`. A successful outer transaction without that log is not payment. This implication is not inherited by any other code hash, and the packaged manifest does not enable it.
 
 ## Limits
 
-Automatic explanation runs after the alert handoff, inside the same `run-once` cycle. There is no new scheduler and no new sender. One event has 30 seconds and 32 provider calls, and it also stops when the round budget is already spent. The same evidence is not written twice. A reorg supersedes the current revision and keeps the old row. A rate limit or an archive failure is not retried on every later round unless the local evidence changes or the operator passes `--refresh`.
+Automatic explanation prints the run report before this cycle's explanation reads. Work left from an earlier cycle runs at the start of the next `run-once`. There is no new scheduler and no new sender. One event has 30 seconds and 32 provider calls. The remaining event time and the remaining round budget are checked again after each response and when the verdict is stored, and that remaining time is the transport timeout. A late result is not a verified match and does not remove the alert. The same evidence is not written twice. A reorg supersedes the current revision and keeps the old row. A rate limit or an archive failure is not retried on every later round unless the local evidence changes or the operator passes `--refresh`. An abandoned running job can be reclaimed. A stale attempt cannot write over a newer generation.
 
 `guardian explain --event-id` reads the stored revision and does not call a provider. `--refresh` requires `--mcm-config`, uses the monitor's read-only transport, and does not send.
 
