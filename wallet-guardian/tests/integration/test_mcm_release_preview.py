@@ -371,9 +371,9 @@ def test_mcm_share_s8_04_version_consistency(tmp_path: Path) -> None:
     buffer = io.StringIO()
     with redirect_stdout(buffer):
         assert tool.main(["--root", str(root)]) == 1
-    assert "changelog=0.4.0rc4" in buffer.getvalue()
+    assert "changelog=0.4.0rc5" in buffer.getvalue()
     errors = tool.consistency_errors(root)
-    assert any("changelog=0.4.0rc4" in item for item in errors)
+    assert any("changelog=0.4.0rc5" in item for item in errors)
     assert any("mismatch:" in item for item in errors)
 
     # The release tag may exist in a checkout that fetched tags (a release tag is
