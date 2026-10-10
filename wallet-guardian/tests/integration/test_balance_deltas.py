@@ -757,6 +757,8 @@ def test_bal_06_atomic_concurrent_and_no_sender(tmp_path: Path, monkeypatch: pyt
     race = tmp_path / "race"
     race_config = _desk(race, monkeypatch)
     race_backend = ScriptBackend()
+    _run(race_config, race_backend, capsys, no_send=True, sender=Sink())
+    race_backend.at(30, NINE)
     race_backend.barrier = threading.Barrier(2)
     errors: list[BaseException] = []
 
