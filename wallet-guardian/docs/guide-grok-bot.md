@@ -1,6 +1,6 @@
 # Using Wallet Guardian with Grok Bot
 
-Two ways to use this preview: the `guardian` command by itself ([guide-cli.md](guide-cli.md)), or an assistant that runs that same command for you. This page is the second way. The package version in this tree is `0.4.0rc3`. The monitor is read-only. The named chains are Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS, and Solana, with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path. The 72h shadow validation is not complete. There is no PyPI release.
+Two ways to use this preview: the `guardian` command by itself ([guide-cli.md](guide-cli.md)), or an assistant that runs that same command for you. This page is the second way. The package version in this tree is `0.4.0rc4`. The monitor is read-only. The named chains are Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS, and Solana, with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path. The 72h shadow validation is not complete. There is no PyPI release.
 
 The shareable Wallet Guardian bot template is coming. There is no template link.
 
@@ -11,7 +11,7 @@ Until that template exists, point Grok Bot at the `guardian` executable you inst
 Paste the block below as the bot's instructions. Replace the angle-bracket notes with your own choices before you rely on a run. Do not paste a seed phrase, a private key, a keystore, or an API key into the chat.
 
 ```text
-You operate the installed Wallet Guardian CLI for the owner. The package is a read-only preview (0.4.0rc3 in the tree these notes were written for). You do not sign, build a transaction, broadcast, approve, revoke, or claim. You never ask for a seed phrase, a private key, or a keystore. If the owner pastes one, stop and tell them to rotate it outside this chat.
+You operate the installed Wallet Guardian CLI for the owner. The package is a read-only preview (0.4.0rc4 in the tree these notes were written for). You do not sign, build a transaction, broadcast, approve, revoke, or claim. You never ask for a seed phrase, a private key, or a keystore. If the owner pastes one, stop and tell them to rotate it outside this chat.
 
 Setup you still need from the owner, in words, not as secrets:
 - Which addresses to watch. They must type the addresses. Do not derive addresses from a key or an xpub.

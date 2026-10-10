@@ -5,10 +5,14 @@ All notable changes to the Wallet Guardian monitor are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-PEP 440 version `0.4.0rc3` maps to the git tag name `v0.4.0-rc.3`.
+PEP 440 version `0.4.0rc4` maps to the git tag name `v0.4.0-rc.4`.
 Whether that tag is published, see GitLab releases. This changelog does not publish. The distribution name is `wallet-guardian-monitor`.
 
 ## [Unreleased]
+
+## [0.4.0rc4] - 2026-10-11
+
+Preview channel. The manifest is a pre-publication evidence snapshot; the GitLab release is recorded separately. No package-index upload is performed. The monitor is read-only: it does not sign, build a transaction, or broadcast. Wheel: `wallet_guardian_monitor-0.4.0rc4-py3-none-any.whl`.
 
 ### Added
 
@@ -47,9 +51,20 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 - `guardian doctor` no longer contacts providers unless `--live` is passed. `--live` uses a 5 second whole-call deadline per probe.
 - A blank secret-profile value can use a key inherited from the process environment. Unattended services should start from a deliberately scoped environment.
 
-### Not claimed
+### Known limitations / not claimed
 
-- No live balance probe, no live NodeReal internal attribution, and no production or 72-hour shadow claim. The published preview `0.4.0rc3` (`wallet-guardian-monitor`) is unchanged.
+- Adds native-movement detection, first-run diagnostics and experimental inflow attribution. These are preview features with fixture evidence; none has been live-qualified.
+- Native-balance alerts report net changes between eligible checkpoints, not complete gross flows. Detection remains polling-bound: rc.4 installs no new scheduler and does not itself reduce polling latency. The first successful observation is a baseline. Failed or inconsistent reads can defer a comparison, opposing movements can cancel between observations, and a missing usable threshold can prevent an alert. 1.0 BNB is an operator-profile setting, not a shipped universal default, and unconditional no-key BSC alerts are not claimed.
+- BSC NodeReal internal history is a configured, keyed path with offline fixture evidence, not newly live-qualified coverage. Other networks' internal-history gaps remain explicit. Static counterparty labels do not establish safety, and a withdrawal payout is not automatically profit.
+- Inflow explanations: automatic, bounded Lista attribution attempts are included. The shipped manifest has no approved deployment intervals, so `MATCHES_OWN_REQUEST` is not currently available operationally. Results may remain partial or unverified. An explanation is a separate revision from the original movement alert; it does not certify safety and does not automatically resend a notification. The live historical path is not qualified.
+- Operator-reported context: the legacy BSC patrol reported an approximately 8.42 BNB internal withdrawal payment about three hours later. The rc.4 fixtures reproduce its shape; they are not a live replay of that transaction.
+- Doctor stays offline unless `--live`; DoH enabled is not a qualified connectivity or egress path; the legacy-probe limitation remains.
+- Inherited from rc.3: evidence is the full local gate at the release SHA, not a GitLab CI pass; the 72-hour formal shadow is not complete; no live Telegram canary (delivery defaults to off); no production-egress qualification; free-tier and provider limits; TRON is not live-qualified; yield has no live path; positions are opt-in; no PyPI release; `constraints.txt` pins versions but does not hash-verify dependencies.
+- The aggregate release evidence stays `NOT_RUN` while the optional public-sample-probe is not executed; that is waived for this labelled preview only.
+
+### Release blockers for stable
+
+- The formal 24-window shadow; live gaps in `docs/coverage-matrix.md`; Telegram canary; a CI pass; approved Lista deployment intervals before any operational `MATCHES_OWN_REQUEST`; a human decision to publish.
 
 ## [0.4.0rc3] - 2026-10-10
 

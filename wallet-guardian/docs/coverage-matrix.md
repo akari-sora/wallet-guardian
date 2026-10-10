@@ -2,7 +2,7 @@
 
 Date of this preview: 2026-10-09. License: AGPL-3.0-only (see `LICENSE`).
 
-The installable distribution is `wallet-guardian-monitor` (wheel `wallet_guardian_monitor-0.4.0rc3-py3-none-any.whl`). Whether git tag `v0.4.0-rc.3` is published, see GitLab releases. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`). `--no-send` forbids sends. The canary is NOT_RUN. How the monitor differs from the optional Action Client is stated once in `docs/threat-model.md`.
+The installable distribution is `wallet-guardian-monitor` (wheel `wallet_guardian_monitor-0.4.0rc4-py3-none-any.whl`). Whether git tag `v0.4.0-rc.4` is published, see GitLab releases. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`). `--no-send` forbids sends. The canary is NOT_RUN. How the monitor differs from the optional Action Client is stated once in `docs/threat-model.md`.
 
 This matrix is the preview claim for chain × capability. It is derived from `config/source-capabilities/*.json`, `config/chains`, `examples/monitor.json`, `src/guardian/sources/`, `src/guardian/protocols/`, `docs/api-keys.md`, `docs/mcm-01/network-tiers.plan.json`, and `docs/coverage.md`. The live probes below are recorded facts. This document does not re-run them. No monitored address, API key, or keyed URL appears here.
 
