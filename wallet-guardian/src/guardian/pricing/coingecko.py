@@ -159,6 +159,70 @@ class CoinGeckoClient:
             unverified=unverified,
         )
 
+    def simple_prices(
+        self,
+        coin_ids: list[str],
+        *,
+        max_age_seconds: int,
+        now: int,
+    ) -> dict[str, dict[str, Any]]:
+        """One simple/price call. A missing or stale coin is not priced at zero."""
+        ids = [coin_id for coin_id in coin_ids if isinstance(coin_id, str) and coin_id]
+        if not ids:
+            return {}
+        operation = Operation(
+            protocol="rest",
+            adapter="coingecko",
+            http_method="GET",
+            path="/api/v3/simple/price",
+            query=self._query({"ids": ",".join(ids)}),
+        )
+        parsed: dict[str, dict[str, Any]] = {coin_id: {"quality": "unavailable", "reason": "not_read"} for coin_id in ids}
+        try:
+            result = read_with_retry(
+                lambda: self.transport.request(self.source_id, operation),
+                retry_attempts=self.transport.retry_attempts(self.source_id),
+                sleep=self.sleep,
+                random=self.random,
+                clock=self.clock,
+            )
+        except BudgetExhausted as exc:
+            return {coin_id: {"quality": "unavailable", "reason": exc.reason or "budget"} for coin_id in ids}
+        except (SecurityError, TransportError) as exc:
+            if getattr(exc, "reason", None) == "fixture_miss":
+                raise
+            return {coin_id: {"quality": "unavailable", "reason": getattr(exc, "reason", None) or "read_error"} for coin_id in ids}
+        if getattr(result, "category", "") == "rate_limited" or getattr(result, "status", 0) == 429:
+            return {coin_id: {"quality": "unavailable", "reason": "rate_limited"} for coin_id in ids}
+        body = getattr(result, "body", None)
+        if not isinstance(body, dict):
+            return {coin_id: {"quality": "unavailable", "reason": "malformed"} for coin_id in ids}
+        for coin_id in ids:
+            entry = body.get(coin_id)
+            if not isinstance(entry, dict) or entry.get("usd") is None:
+                parsed[coin_id] = {"quality": "unavailable", "reason": "absent"}
+                continue
+            try:
+                price = provider_decimal(entry.get("usd"))
+                updated = provider_timestamp(entry.get("last_updated_at")) if "last_updated_at" in entry else None
+            except ValueError:
+                parsed[coin_id] = {"quality": "unavailable", "reason": "malformed"}
+                continue
+            if price < 0:
+                parsed[coin_id] = {"quality": "unavailable", "reason": "negative_price"}
+                continue
+            quality, age, reason = price_age(now, updated, max_age_seconds=max_age_seconds)
+            if quality != "available":
+                parsed[coin_id] = {"quality": quality, "reason": reason or quality, "age_seconds": age}
+                continue
+            parsed[coin_id] = {
+                "age_seconds": age,
+                "price": price,
+                "quality": "available",
+                "reason": "",
+            }
+        return parsed
+
     def _parse(
         self,
         *,

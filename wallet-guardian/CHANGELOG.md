@@ -27,6 +27,14 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 
 - `guardian doctor` no longer contacts providers unless `--live` is passed. `--live` uses a 5 second whole-call deadline per probe.
 - A blank secret-profile value can use a key inherited from the process environment. Unattended services should start from a deliberately scoped environment.
+- A net native-balance change can be a `balance_delta` alert without a nonce change and without a history source. The first valid observation is a quiet baseline. A failed read is not stored as zero. See `docs/balance-deltas.md`.
+- `alerts.native_unit_thresholds` is an optional per-network native-unit floor. The existing 0.5 native-ETH floor stays on ethereum-mainnet, arbitrum-one, base-mainnet, and optimism-mainnet.
+- BSC NodeReal category `internal` uses its own `history.native_internal` cursor. Offline fixtures only. No live internal probe is claimed.
+- `docs/balance-probe-design.md` describes a future read-only probe command. The command is not implemented. No scheduler was added.
+
+### Not claimed
+
+- No live balance probe, no live NodeReal internal attribution, and no production or 72-hour shadow claim. The published preview `0.4.0rc3` (`wallet-guardian-monitor`) is unchanged.
 
 ## [0.4.0rc3] - 2026-10-10
 

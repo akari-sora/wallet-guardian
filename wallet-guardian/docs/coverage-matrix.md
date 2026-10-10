@@ -27,7 +27,8 @@ The table columns are the no-key path, the keyed path, and one row status. Path 
 
 These are the facts this matrix is allowed to treat as live probes. They were not re-run for this file.
 
-- NodeReal `nr_getAssetTransfers` on BSC with the operator free key: external and erc20 succeeded with pageKey (2026-10-09). Without a key the external-history cell is credential_missing. There is no keyless BSC external-history source.
+- NodeReal `nr_getAssetTransfers` on BSC with the operator free key: external and erc20 succeeded with pageKey (2026-10-09). Without a key the external-history cell is credential_missing. There is no keyless BSC external-history source. Category `internal` has offline fixtures only. That live probe did not cover internal transfers.
+- Native balance deltas have offline CLI fixtures (`tests/integration/test_balance_deltas.py`). There is no live balance probe, so the BSC balance cells stay not_verified.
 - Etherscan V2 free plan: history works for Ethereum, Arbitrum, and Polygon. Base, Optimism, BSC, and Avalanche on that free plan return plan_not_supported, cached as a capability failure.
 - Blockscout PRO free key: Optimism HTTP 200 (about 5 requests/second, about 20 credits a call). Base HTTP 402 plan_not_supported. Keyless optimism.blockscout.com HTTP 200 from the Linux host. Keyless base.blockscout.com HTTP 403 Cloudflare challenge from the Linux host, HTTP 200 from the operator Windows PC. Those Base results are host-specific.
 - Public RPC `eth_getLogs` without an address: publicnode Ethereum, Avalanche, and Polygon return -32701 for any range; publicnode Arbitrum returns 403; arb1.arbitrum.io, api.avax.network, polygon.gateway.tenderly.co, and NodeReal Ethereum and Optimism accept 2000 blocks; Base Tenderly caps at 1000, 1rpc at 50, and mainnet.base.org returns 429.
@@ -96,6 +97,8 @@ Not added: Bitcoin Core `rss.xml` (593 KB) is refused by the parser's item cap. 
 | ethereum-mainnet | permissions.standard | Approval and ApprovalForAll logs on the same RPC route, from an explicit origin | partial | no keyed approval source on this route | not_verified | partial |
 | ethereum-mainnet | history.native_external | keyless Blockscout at BLOCKSCOUT_ETH_URL when that endpoint is set | not_verified | Etherscan V2 txlist with ETHERSCAN_API_KEY | ok | partial |
 | bsc-mainnet | balances.native | operator RPC named by RPC_BSC_MAINNET_URL | not_verified | no keyed balance source on this route | not_verified | not_verified |
+| bsc-mainnet | balances.native_delta | operator RPC definite-block read, offline fixtures | not_verified | no keyed balance source on this route | not_verified | not_verified |
+| bsc-mainnet | history.native_internal | no keyless BSC internal-history source | credential_missing | NodeReal nr_getAssetTransfers category internal, offline fixtures only | not_verified | partial |
 | bsc-mainnet | history.token | public RPC eth_getLogs when the endpoint accepts a topic filter | not_verified | no keyed token-log source on this route | not_verified | not_verified |
 | bsc-mainnet | permissions.standard | public RPC approval logs | not_verified | no keyed approval source on this route | not_verified | not_verified |
 | bsc-mainnet | history.native_external | no keyless BSC external-history source | credential_missing | NodeReal nr_getAssetTransfers category external with NODEREAL_API_KEY | ok | partial |
@@ -314,7 +317,35 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "capability_files": [
         "config/source-capabilities/evm_rpc.json"
       ],
-      "note": "docs/coverage.md records an older official RPC read. This preview did not re-run it."
+      "note": "docs/coverage.md records an older official RPC read. This preview did not re-run it. Offline native-delta fixtures exist; this cell stays not_verified because there is no live balance probe."
+    },
+    {
+      "id": "bsc-mainnet/balances.native_delta",
+      "network": "bsc-mainnet",
+      "capability": "balances.native_delta",
+      "no_key_path": "operator RPC definite-block read, offline fixtures",
+      "no_key_status": "not_verified",
+      "keyed_path": "no keyed balance source on this route",
+      "keyed_status": "not_verified",
+      "status": "not_verified",
+      "capability_files": [
+        "config/source-capabilities/evm_rpc.json"
+      ],
+      "note": "Offline CLI fixtures cover a net native-balance candidate. No live balance probe was run."
+    },
+    {
+      "id": "bsc-mainnet/history.native_internal",
+      "network": "bsc-mainnet",
+      "capability": "history.native_internal",
+      "no_key_path": "no keyless BSC internal-history source",
+      "no_key_status": "credential_missing",
+      "keyed_path": "NodeReal nr_getAssetTransfers category internal, offline fixtures only",
+      "keyed_status": "not_verified",
+      "status": "partial",
+      "capability_files": [
+        "config/source-capabilities/nodereal_transfers.json"
+      ],
+      "note": "No-key BSC has no internal-history source. The keyed path has offline fixtures only. The 2026-10-09 live NodeReal probe was external and erc20, not internal."
     },
     {
       "id": "bsc-mainnet/history.token",

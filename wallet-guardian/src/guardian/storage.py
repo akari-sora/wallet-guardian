@@ -338,6 +338,196 @@ class Database:
         ).fetchall()
         return [json.loads(row["payload"]) for row in rows]
 
+    def native_balance_baseline(
+        self, tenant_id: str, wallet_id: str, network: str, asset: str,
+    ) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT version, raw_balance, block_number, block_hash, block_timestamp, observed_at,
+                   source_id, confirmation_policy, binding, continuity, last_failed_at, nonce
+            FROM native_balance_baselines
+            WHERE tenant_id=? AND wallet_id=? AND network=? AND asset=?
+            """,
+            (tenant_id, wallet_id, network, asset),
+        ).fetchone()
+        if row is None:
+            return None
+        return {key: row[key] for key in row.keys()}
+
+    def commit_native_observation(
+        self,
+        tenant_id: str,
+        *,
+        wallet_id: str,
+        network: str,
+        asset: str,
+        expected_version: int,
+        checkpoint: dict[str, Any] | None,
+        continuity: str,
+        retention_blocks: int,
+        reset_checkpoints: bool,
+        alert: dict[str, Any] | None,
+        record_failure: str | None,
+    ) -> str:
+        """Write one observation, its decision, and the outbox row together.
+
+        ``conflict`` means another writer moved the version. ``rejected`` means
+        this call had nothing safe to store. A failed read never inserts zero.
+        """
+        del retention_blocks
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.conn.execute(
+                """
+                SELECT version FROM native_balance_baselines
+                WHERE tenant_id=? AND wallet_id=? AND network=? AND asset=?
+                """,
+                (tenant_id, wallet_id, network, asset),
+            ).fetchone()
+            current = 0 if row is None else int(row["version"])
+            if current != expected_version:
+                self.conn.rollback()
+                return "conflict"
+            if record_failure is not None:
+                if row is None:
+                    self.conn.rollback()
+                    return "rejected"
+                updated = self.conn.execute(
+                    """
+                    UPDATE native_balance_baselines SET last_failed_at=?
+                    WHERE tenant_id=? AND wallet_id=? AND network=? AND asset=? AND version=?
+                    """,
+                    (record_failure, tenant_id, wallet_id, network, asset, expected_version),
+                )
+                if updated.rowcount != 1:
+                    self.conn.rollback()
+                    return "conflict"
+                self.conn.commit()
+                return "committed"
+            if not isinstance(checkpoint, dict):
+                self.conn.rollback()
+                return "rejected"
+            if reset_checkpoints:
+                self.conn.execute(
+                    """
+                    DELETE FROM native_balance_checkpoints
+                    WHERE tenant_id=? AND wallet_id=? AND network=? AND asset=?
+                    """,
+                    (tenant_id, wallet_id, network, asset),
+                )
+            self.conn.execute(
+                """
+                INSERT INTO native_balance_checkpoints(
+                  tenant_id, wallet_id, network, asset, block_number, block_hash, raw_balance,
+                  block_timestamp, observed_at, source_id, binding, confirmation_policy, nonce
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tenant_id, wallet_id, network, asset, block_number, block_hash) DO UPDATE SET
+                  raw_balance=excluded.raw_balance,
+                  block_timestamp=excluded.block_timestamp,
+                  observed_at=excluded.observed_at,
+                  source_id=excluded.source_id,
+                  binding=excluded.binding,
+                  confirmation_policy=excluded.confirmation_policy,
+                  nonce=excluded.nonce
+                """,
+                (
+                    tenant_id, wallet_id, network, asset, int(checkpoint["block_number"]),
+                    checkpoint["block_hash"], checkpoint["raw_balance"], checkpoint.get("block_timestamp"),
+                    checkpoint["observed_at"], checkpoint["source_id"], checkpoint["binding"],
+                    checkpoint["confirmation_policy"], checkpoint.get("nonce"),
+                ),
+            )
+            version = expected_version + 1
+            values = (
+                tenant_id, wallet_id, network, asset, version, checkpoint["raw_balance"],
+                int(checkpoint["block_number"]), checkpoint["block_hash"], checkpoint.get("block_timestamp"),
+                checkpoint["observed_at"], checkpoint["source_id"], checkpoint["confirmation_policy"],
+                checkpoint["binding"], continuity, checkpoint.get("nonce"),
+            )
+            if row is None:
+                self.conn.execute(
+                    """
+                    INSERT INTO native_balance_baselines(
+                      tenant_id, wallet_id, network, asset, version, raw_balance, block_number, block_hash,
+                      block_timestamp, observed_at, source_id, confirmation_policy, binding, continuity,
+                      last_failed_at, nonce
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                    """,
+                    values,
+                )
+            else:
+                changed = self.conn.execute(
+                    """
+                    UPDATE native_balance_baselines SET
+                      version=?, raw_balance=?, block_number=?, block_hash=?, block_timestamp=?,
+                      observed_at=?, source_id=?, confirmation_policy=?, binding=?, continuity=?,
+                      last_failed_at=NULL, nonce=?
+                    WHERE tenant_id=? AND wallet_id=? AND network=? AND asset=? AND version=?
+                    """,
+                    (
+                        version, checkpoint["raw_balance"], int(checkpoint["block_number"]),
+                        checkpoint["block_hash"], checkpoint.get("block_timestamp"), checkpoint["observed_at"],
+                        checkpoint["source_id"], checkpoint["confirmation_policy"], checkpoint["binding"],
+                        continuity, checkpoint.get("nonce"), tenant_id, wallet_id, network, asset,
+                        expected_version,
+                    ),
+                )
+                if changed.rowcount != 1:
+                    self.conn.rollback()
+                    return "conflict"
+            if isinstance(alert, dict) and alert.get("alert") is True and isinstance(alert.get("dedup_key"), str):
+                self._add_alert(tenant_id, alert["dedup_key"], alert)
+            self.conn.commit()
+            return "committed"
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def enrich_balance_alert(self, tenant_id: str, dedup_key: str, additions: dict[str, Any]) -> bool:
+        """Add attribution to an existing alert and its outbox row. Does not insert or clear it."""
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.conn.execute(
+                "SELECT id, payload FROM alerts WHERE tenant_id=? AND dedup_key=?",
+                (tenant_id, dedup_key),
+            ).fetchone()
+            if row is None:
+                self.conn.rollback()
+                return False
+            payload = json.loads(row["payload"])
+            if not isinstance(payload, dict) or payload.get("alert") is not True:
+                self.conn.rollback()
+                return False
+            for key, value in additions.items():
+                if key == "alert":
+                    continue
+                payload[key] = value
+            payload["alert"] = True
+            payload["cause"] = "unknown"
+            encoded = _json(payload)
+            self.conn.execute("UPDATE alerts SET payload=? WHERE id=?", (encoded, row["id"]))
+            for outbox in self.conn.execute(
+                "SELECT id, payload FROM outbox WHERE tenant_id=?", (tenant_id,),
+            ):
+                body = json.loads(outbox["payload"])
+                if isinstance(body, dict) and body.get("dedup_key") == dedup_key:
+                    self.conn.execute("UPDATE outbox SET payload=? WHERE id=?", (encoded, outbox["id"]))
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def link_balance_explanation(self, tenant_id: str, observation_key: str, transfer_key: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO balance_explanations(tenant_id, observation_key, transfer_key)
+                VALUES (?, ?, ?)
+                """,
+                (tenant_id, observation_key, transfer_key),
+            )
+
     def health_for(self, tenant_id: str) -> dict[str, Any]:
         row = self.conn.execute(
             "SELECT payload FROM monitor_health WHERE tenant_id=?", (tenant_id,),

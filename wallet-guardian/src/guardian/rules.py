@@ -55,6 +55,12 @@ class Candidate:
     tx_id: str | None = None
     symbol: str | None = None
     net_amount: int | None = None
+    transfer_origin: str | None = None
+    attribution: str | None = None
+    execution_evidence: str | None = None
+    counterparty: str | None = None
+    block_number: int | None = None
+    asset: str | None = None
 
 
 @dataclass(frozen=True)

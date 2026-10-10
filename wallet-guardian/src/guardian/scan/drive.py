@@ -395,8 +395,10 @@ def history_external(scan: ScanContext, private_inputs: Any, wallet_id: str, add
             if outcome.refusal == "credential_missing":
                 refusal_env = credential_name
             continue
+        _note_bsc_internal(scan, wallet_id, private_inputs)
         return outcome.rows
     _refuse_history(scan, wallet_id, refusal, refusal_adapter, refusal_env)
+    _note_bsc_internal(scan, wallet_id, private_inputs)
     return []
 
 
@@ -543,12 +545,13 @@ def _run_indexer(scan, source_id, source, adapter, wallet_id, address, stored, p
         client = NodeRealClient(limited, source_id, network=scan.network, clock=scan.clock, sleep=_sleep(scan, source_id), random=lambda: 0.0)
         native = _walk_pages(scan, chunks, origin, wallet_id, "history.native_external", source_id, True, lambda start, end: _nodereal_sides(client, "external", address, start, end, stored))
         if native.refusal:
-            _probe_internal(scan, client, wallet_id, address, stored)
+            _walk_bsc_internal(scan, client, source, source_id, wallet_id, address)
             return native
         if _indexer_stopped(native):
+            _walk_bsc_internal(scan, client, source, source_id, wallet_id, address)
             return native
         token = _walk_pages(scan, chunks, origin, wallet_id, "history.fungible", source_id, False, lambda start, end: _nodereal_sides(client, "20", address, start, end, stored), cursor=False)
-        _probe_internal(scan, client, wallet_id, address, stored)
+        _walk_bsc_internal(scan, client, source, source_id, wallet_id, address)
         native.rows.extend(token.rows)
         if token.refusal and token.refusal not in {None}:
             native.partial = True
@@ -789,24 +792,85 @@ def _nodereal_sides(client, category, address, start, end, stored):
     return HistoryRead(last.capability, tuple(items), True, True, (), str(end), category_name, False, "", (), "")
 
 
-def _probe_internal(scan, client, wallet_id, address, stored) -> None:
-    if scan.head is None:
+def _walk_bsc_internal(scan, client, source, source_id, wallet_id, address) -> None:
+    """NodeReal internal history on BSC only, with its own cursor."""
+    if scan.network != "bsc-mainnet" or scan.head is None:
         return
+    from guardian.balances.internal import normalize_internal_batch, status_for_refusal
+    from guardian.sources.etherscan import HistoryRead
+
+    stored = _stored_block(scan, wallet_id, "history.native_internal")
+    # The cursor is new. Do not emit a baseline_summary for the first internal page.
+    scan.seen.add((wallet_id, scan.network, "history.native_internal"))
+    chunks, origin = _indexer_chunks(scan, source, stored)
+    chain_id = scan.chain_id if isinstance(scan.chain_id, int) else None
+
+    def fetch(start: int, end: int):
+        read = _nodereal_sides(client, "internal", address, start, end, None)
+        if read is None or getattr(read, "blocked", False) or read.category == "error" or not read.pagination_complete:
+            return read
+        items = normalize_internal_batch(read.items, chain_id=chain_id, owner=address)
+        name = "empty" if not items else "ok"
+        return HistoryRead("history.native_internal", tuple(items), True, True, (), str(end), name, False, "", (), "")
+
+    outcome = _walk_pages(
+        scan, chunks, origin, wallet_id, "history.native_internal", source_id, True, fetch, cursor=True,
+    )
+    key = (wallet_id, scan.network, "history.native_internal")
+    if key in scan.observations:
+        return
+    _set_internal_status(scan, wallet_id, status_for_refusal(outcome.refusal or outcome.stopped or "read_error"))
+
+
+def _note_bsc_internal(scan, wallet_id: str, private_inputs: Any) -> None:
+    if scan.network != "bsc-mainnet":
+        return
+    key = (wallet_id, scan.network, "history.native_internal")
+    if key in scan.observations:
+        return
+    chosen = None
+    for source_id in _route_ids(scan.public_config, scan.network, "history.native_external"):
+        source = scan.public_config.document["sources"].get(source_id, {})
+        if source.get("adapter") == "nodereal_transfers" and source.get("enabled") is True:
+            chosen = (source_id, source)
+            break
+    if chosen is None or not _endpoint_ready(scan, chosen[0]):
+        _set_internal_status(scan, wallet_id, "not_queried")
+        return
+    source_id, source = chosen
+    status = private_inputs.source_status.get(source_id)
+    credential_name = source.get("credential_env") if isinstance(source.get("credential_env"), str) else None
+    missing = credential_name is not None and (status is None or not getattr(status, "credential_present", False))
+    if missing:
+        _set_internal_status(scan, wallet_id, "credential_missing", credential_hint(credential_name))
+        return
+    _set_internal_status(scan, wallet_id, "read_error")
+
+
+def _set_internal_status(scan, wallet_id: str, status: str, hint: str = "") -> None:
+    if scan.network != "bsc-mainnet":
+        return
+    key = (wallet_id, scan.network, "history.native_internal")
+    if key in scan.observations:
+        return
+    scan.observations[key] = _blocked(status, hint)
+    scan.hold(scan.held_cursors, wallet_id, scan.network, "history.native_internal")
+
+
+def _stored_block(scan, wallet_id: str, capability: str) -> int | None:
     try:
-        read = client.transfers(
-            category="internal", address=address, start_block=max(0, scan.head), end_block=scan.head, side="to",
-            previous_cursor=None if stored is None else str(stored),
-        )
-    except BootstrapStop:
-        return
+        rows = scan.database.capability_cursors_for(scan.tenant, wallet_id=wallet_id, network=scan.network)
     except Exception:
-        scan.observations[(wallet_id, scan.network, "history.native_internal")] = _blocked("read_error")
-        return
-    if read.blocked or read.category == "error":
-        scan.observations[(wallet_id, scan.network, "history.native_internal")] = _blocked(read.reason or "blocked")
-        return
-    if read.category == "empty":
-        return
+        return None
+    for row in rows:
+        if row.get("capability") != capability:
+            continue
+        text = row.get("block_number") or row.get("cursor")
+        if isinstance(text, int) and not isinstance(text, bool):
+            return text
+        if isinstance(text, str) and text.isdigit():
+            return int(text)
+    return None
 
 
 def _safe_history(client, chain_id, action, address, start, end, stored):

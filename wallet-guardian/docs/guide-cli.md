@@ -98,7 +98,7 @@ Other reason codes you will meet, and that are also gaps: `plan_not_supported`, 
 
 ## Alert types
 
-Init writes `native_eth_threshold` `0.5` and `asset_usd_threshold` `1000`. The alert policy reads those two fields. A native ETH amount is compared in wei, and only on `ethereum-mainnet`, `arbitrum-one`, `base-mainnet`, and `optimism-mainnet`. Any other asset uses a USD quote. A missing quote is `valuation_unknown` and does not meet the USD threshold. The monitor schema also requires the rest of the `alerts` object to stay at fixed values, including `permission_changes` true, `generic_news` false, and `unknown_price_policy` `show_unknown_not_zero`. Those constants are not switches you can flip in a valid file.
+Init writes `native_eth_threshold` `0.5` and `asset_usd_threshold` `1000`. The alert policy reads those two fields. A native ETH amount is compared in wei, and only on `ethereum-mainnet`, `arbitrum-one`, `base-mainnet`, and `optimism-mainnet`. Any other asset uses a USD quote. A missing quote is `valuation_unknown` and does not meet the USD threshold. An optional `native_unit_thresholds` object can set an extra native-unit floor for one canonical network id, for example `bsc-mainnet`. A net native balance change can be written as `balance_delta`; see [balance-deltas.md](balance-deltas.md). The monitor schema also requires the rest of the `alerts` object to stay at fixed values, including `permission_changes` true, `generic_news` false, and `unknown_price_policy` `show_unknown_not_zero`. Those constants are not switches you can flip in a valid file.
 
 Outbox kinds the policy marks as alerts:
 
@@ -106,6 +106,7 @@ Outbox kinds the policy marks as alerts:
 | --- | --- |
 | `baseline_summary` | First time a wallet, network, and capability are seen. Counts of events and explicit risks. Not a loss alert |
 | `native_eth` | Native amount on the four ETH networks is at least `native_eth_threshold` |
+| `balance_delta` | Net native balance changed by at least a configured native-unit floor or a fresh USD floor. See [balance-deltas.md](balance-deltas.md) |
 | `asset_usd` | A valued USD quote is at least `asset_usd_threshold` |
 | `internal_transfer` | A paired transfer between your own watched addresses, when the net meets a threshold |
 | `position_change` | A position candidate |
