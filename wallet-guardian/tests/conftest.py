@@ -13,6 +13,10 @@ from pathlib import Path
 
 import pytest
 
+# Offline installs read the uv cache; keep it pointing at the real one even though HOME moves per test.
+if "UV_CACHE_DIR" not in os.environ:
+    os.environ["UV_CACHE_DIR"] = str(Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "uv")
+
 _SUFFIXES = ("_API_KEY", "_ACCESS_KEY", "_BOT_TOKEN", "_AUTH_TOKEN")
 _EXPLICIT = (
     "MONITOR_SECRET_PROFILE",

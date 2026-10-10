@@ -367,6 +367,8 @@ def test_start_fix_cli_reuses_canonical_baseline_for_alias(tmp_path: Path) -> No
         }), encoding="utf-8")
         secret = outside / "secrets.json"
         secret.write_text("{}", encoding="utf-8")
+        accounts.chmod(0o600)
+        secret.chmod(0o600)
         state = outside / "state"
         state.mkdir()
         database_path = state / "monitor.sqlite"
