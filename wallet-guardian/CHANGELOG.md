@@ -14,7 +14,9 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 
 Preview channel. The manifest is a pre-publication evidence snapshot: its `published: false` records that generation stage, and the GitLab release is recorded separately. No package-index upload is performed. The monitor is read-only: it does not sign, build a transaction, or broadcast. Wheel: `wallet_guardian_monitor-0.4.0rc3-py3-none-any.whl`.
 
-### Added (all opt-in, experimental, or inert; none is on in the shipped example monitor)
+### Added and hardened
+
+TRON and the new position readers require explicit opt-in and are off in the shipped example monitor. The yield component remains inert. Applicable display and feed hardening operates in the normal runtime paths.
 
 - Injection and privacy tests: untrusted feed text is quarantined per item, display text is neutralised, and a policy table (`privacy_boundary`) lists what may leave the machine. See `docs/injection-privacy-tests.md` for the residuals: a double HTML escape is cosmetic, the incident matcher can miss digit-plus-letter tokens such as "Aave v3 incident", and there is no claim of general prompt-injection immunity.
 - Opt-in positions: sDAI and Steakhouse USDC ERC-4626 pins (vault exposure only) and Compound III USDC (stored-index present value, not accrued to now; block height is not block-hash proof; a positive oracle price is not freshness). sUSDe and Morpho Blue markets are deferred. See `docs/positions-more.md`.

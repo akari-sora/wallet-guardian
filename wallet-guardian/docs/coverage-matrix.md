@@ -131,7 +131,8 @@ Not added: Bitcoin Core `rss.xml` (593 KB) is refused by the parser's item cap. 
 | solana-mainnet | history.native_external | parsed events need HELIUS_API_KEY; examples/monitor.json leaves the source disabled | credential_missing | Helius parsed events when the key and URL are set and the source is enabled | not_verified | partial |
 | bsc-mainnet | positions.kinza | Kinza plugin over the BSC RPC, offline CLI fixtures | not_verified | no separate Kinza API key | not_verified | not_verified |
 | ethereum-mainnet | positions.kinza | Kinza plugin over the Ethereum RPC, offline fixtures | not_verified | no separate Kinza API key | not_verified | not_verified |
-| configured-evm | positions.erc4626 | opt-in pins for sDAI and Steakhouse USDC (vault exposure only) over evm_rpc, or caller-supplied vaults; off unless configured (`docs/positions-more.md`) | not_verified | no keyed vault source | not_verified | not_verified |
+| configured-evm | positions.erc4626 | caller-supplied vaults over evm_rpc; the public vault registry is empty | not_verified | no keyed vault source | not_verified | not_verified |
+| ethereum-mainnet | positions.erc4626-pins | opt-in Ethereum pins for sDAI and Steakhouse USDC (vault exposure only; a vault quote is not a guaranteed immediately redeemable amount) over evm_rpc; off unless configured (`docs/positions-more.md`) | not_verified | no keyed vault source | not_verified | not_verified |
 | bsc-mainnet | positions.lista | Lista slisBNB plugin over BSC RPC | partial | no keyed Lista source | not_verified | partial |
 | hyperliquid-info | positions | read-only info endpoint used by the legacy doctor path | partial | no keyed Hyperliquid source in the MCM routes | not_verified | partial |
 | configured-evm | positions.aave-v3 | Aave V3 plugin over evm_rpc | not_verified | no keyed Aave source | not_verified | not_verified |
@@ -814,16 +815,29 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "id": "configured-evm/positions.erc4626",
       "network": "configured-evm",
       "capability": "positions.erc4626",
-      "no_key_path": "opt-in pins for sDAI and Steakhouse USDC (vault exposure only) over evm_rpc, or caller-supplied vaults; off unless configured (`docs/positions-more.md`)",
+      "no_key_path": "caller-supplied vaults over evm_rpc; the public vault registry is empty",
       "no_key_status": "not_verified",
       "keyed_path": "no keyed vault source",
       "keyed_status": "not_verified",
       "status": "not_verified",
       "capability_files": [
-        "config/protocols/erc4626.json",
-        "config/protocols/erc4626-pins.json"
+        "config/protocols/erc4626.json"
       ],
       "note": "With no configured vaults and no prior position the plugin returns unknown / vaults_not_configured and the cell is not required. That is not an empty position."
+    },
+    {
+      "id": "ethereum-mainnet/positions.erc4626-pins",
+      "network": "ethereum-mainnet",
+      "capability": "positions.erc4626-pins",
+      "no_key_path": "opt-in Ethereum pins for sDAI and Steakhouse USDC (vault exposure only; a vault quote is not a guaranteed immediately redeemable amount) over evm_rpc; off unless configured (`docs/positions-more.md`)",
+      "no_key_status": "not_verified",
+      "keyed_path": "no keyed vault source",
+      "keyed_status": "not_verified",
+      "status": "not_verified",
+      "capability_files": [
+        "config/protocols/erc4626-pins.json"
+      ],
+      "note": "Opt-in only; registered Ethereum deployments, not all ERC-4626 vaults. Offline fixtures; no live verification is claimed."
     },
     {
       "id": "bsc-mainnet/positions.lista",
