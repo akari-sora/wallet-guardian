@@ -25,13 +25,28 @@ from guardian.explanations.discovery import FoundLog, Slot, replay
 from guardian.explanations.lista import ListaExplainer
 from guardian.explanations.models import canonical, sha256_text
 from guardian.explanations.registry import load_manifest, load_packaged
-from guardian.explanations.store import claim_job, enqueue, jobs_for, latest_revision, revision_count
+from guardian.explanations.engine import note_increase, recover_missing_jobs
+from guardian.explanations.store import (
+    claim_job,
+    complete_job,
+    enqueue,
+    failure_reasons,
+    force_pending,
+    job_for,
+    jobs_for,
+    latest_revision,
+    load_requests,
+    release_process_claims,
+    revision_count,
+    supersede_checkpoint,
+)
 from guardian.sources.fixtures import RawResponse
 from guardian.storage import Database
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples" / "monitor.json"
 SCHEMA = ROOT / "schemas" / "explanation.schema.json"
+APPROVED = Path(__file__).resolve().parents[1] / "fixtures" / "explainers" / "lista-stakemanager-approved.json"
 TENANT = "local"
 OTHER_TENANT = "other"
 WALLET = "11111111-1111-4111-8111-111111111111"
@@ -143,7 +158,12 @@ class ListaBackend:
         self.claim_mode = ""
         self.role = True
         self.latest_code = "0x"
-        manifest = load_packaged()[0]
+        self.report_printed = False
+        self.deadline_on_status = False
+        self.advance_on_storage = True
+        self.alert_rows: list[tuple[str, ...]] | None = None
+        manifest = load_manifest(json.loads(APPROVED.read_text(encoding="utf-8")))
+        assert manifest is not None
         self.proxy = manifest.proxy()
         self.claim_topic = str(manifest.event("ClaimWithdrawal(address,uint256,uint256)")["topic"]).lower()
         self.request_topic = str(manifest.event("RequestWithdraw(address,uint256)")["topic"]).lower()
@@ -226,6 +246,11 @@ class ListaBackend:
             return _ok([])
         start = int(str(filt["fromBlock"]), 16)
         end = int(str(filt["toBlock"]), 16)
+        if self.scenario == "removed_upgrade" and topic == self.upgrade_topic:
+            return _ok([
+                row for row in self.logs
+                if str(row["topics"][0]).lower() == topic
+            ])
         rows = []
         for row in self.logs:
             if int(row["blockNumber"], 16) < start or int(row["blockNumber"], 16) > end:
@@ -238,7 +263,7 @@ class ListaBackend:
         return _ok(rows)
 
     def _storage(self, params: list) -> RawResponse:
-        if self.clock_box is not None:
+        if self.clock_box is not None and self.advance_on_storage:
             self.clock_box[0] += 31
         if self.storage_error or len(params) < 3:
             return _err("missing trie node")
@@ -260,6 +285,9 @@ class ListaBackend:
             return _err("historical state is not available")
         data = str(params[0].get("data") or "")
         selector = data[:10].lower()
+        if selector == self.status_selector and self.deadline_on_status and self.clock_box is not None:
+            self._snapshot_alerts()
+            self.clock_box[0] = CLOCK + 31
         if selector == self.role_selector:
             flag = encode(["bool"], [self.role])
             return _ok("0x" + flag.hex())
@@ -278,6 +306,17 @@ class ListaBackend:
         assert alerts
         assert outbox
         assert self.sender.calls == 0
+        assert self.report_printed is True
+
+    def mark_report_printed(self) -> None:
+        self.report_printed = True
+
+    def _snapshot_alerts(self) -> None:
+        connection = sqlite3.connect(self.state / "state" / "monitor.sqlite", timeout=5)
+        try:
+            self.alert_rows = connection.execute("SELECT payload FROM alerts ORDER BY id").fetchall()
+        finally:
+            connection.close()
 
     def _build(self, manifest) -> None:
         stored = next(row for row in manifest.intervals() if row["calculation"] == "stored_bnb")
@@ -313,6 +352,10 @@ class ListaBackend:
             code = stored_code
         elif scenario == "unresolved":
             end_impl = legacy_impl
+        elif scenario == "slot_conflict":
+            impl = legacy_impl
+            end_impl = legacy_impl
+            code = stored_code
         elif scenario == "same_tx_upgrade":
             end_impl = stored_impl
         if scenario == "storage_fail":
@@ -344,6 +387,10 @@ class ListaBackend:
             self._add_claim(0, payment, status, beneficiary, tx_index=1)
         elif scenario in {"empty", "truncated", "no_claim", "pruned"}:
             queue = [] if scenario != "no_claim" else [(42, slis, 1)]
+        elif scenario == "older_request":
+            self._add_request(REQ, 95, 4, slis)
+            self._add_claim(0, payment, status, beneficiary, tx_index=1)
+            queue = [(42, slis, 1)]
         else:
             if scenario != "same_block":
                 self._add_request(REQ, request_block, 4, slis)
@@ -355,7 +402,11 @@ class ListaBackend:
             self._add_upgrade(stored_impl, 0)
         elif scenario == "same_tx_upgrade":
             self._add_upgrade(stored_impl, 1)
-        self.views[(self.queue_selector, _hash(old))] = _encode_queue([])
+        elif scenario == "slot_conflict":
+            self._add_upgrade(stored_impl, 0)
+        elif scenario == "removed_upgrade":
+            self._add_upgrade(stored_impl, 0, removed=True, address=OTHER, block=self.new - 3)
+        self.views[(self.queue_selector, _hash(old))] = _encode_queue(queue if scenario == "older_request" else [])
         self.views[(self.queue_selector, parent)] = _encode_queue(queue if scenario != "many" else queue)
         self.views[(self.queue_selector, claim_hash)] = _encode_queue(queue if scenario == "no_claim" else [])
         if scenario == "many":
@@ -399,20 +450,40 @@ class ListaBackend:
             self.logs.append(row)
         payload = encode(["address", "uint256"], [beneficiary, index])
         self.txs[CLAIM] = {
+            "blockHash": row["blockHash"],
+            "blockNumber": row["blockNumber"],
             "from": SUBMITTER,
             "hash": CLAIM,
             "input": self.for_selector + payload.hex(),
             "to": self.proxy,
         }
-        self.receipts[CLAIM] = {"logs": [row], "status": status, "transactionHash": CLAIM}
+        receipt_log = dict(row)
+        self.receipt_log = receipt_log
+        self.receipts[CLAIM] = {
+            "blockHash": row["blockHash"],
+            "blockNumber": row["blockNumber"],
+            "logs": [receipt_log],
+            "status": status,
+            "transactionHash": CLAIM,
+        }
 
-    def _add_upgrade(self, implementation: str, tx_index: int) -> None:
+    def _add_upgrade(
+        self,
+        implementation: str,
+        tx_index: int,
+        *,
+        removed: bool = False,
+        address: str | None = None,
+        block: int | None = None,
+    ) -> None:
+        number = self.new if block is None else block
         self.logs.append({
-            "address": self.proxy,
-            "blockHash": _hash(self.new),
-            "blockNumber": hex(self.new),
+            "address": self.proxy if address is None else address,
+            "blockHash": _hash(number),
+            "blockNumber": hex(number),
             "data": "0x",
             "logIndex": hex(1),
+            "removed": removed,
             "topics": [self.upgrade_topic, pad_address(implementation)],
             "transactionHash": "0x" + "44" * 32,
             "transactionIndex": hex(tx_index),
@@ -508,11 +579,35 @@ def _stored(tmp_path: Path) -> tuple[dict, int, str]:
     return body, count, event_id
 
 
-def _cycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], scenario: str, **backend_flags) -> tuple[ListaBackend, dict]:
+def _approved_manifest():
+    manifest = load_manifest(json.loads(APPROVED.read_text(encoding="utf-8")))
+    assert manifest is not None
+    return manifest
+
+
+def _inject_approved(monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest = _approved_manifest()
+    monkeypatch.setattr("guardian.explanations.engine.load_packaged", lambda: [manifest])
+
+
+def _cycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    scenario: str,
+    *,
+    approved: bool = True,
+    mutate=None,
+    **backend_flags,
+) -> tuple[ListaBackend, dict]:
+    if approved:
+        _inject_approved(monkeypatch)
     config = _desk(tmp_path, monkeypatch)
     backend = ListaBackend(scenario, tmp_path)
     for name, value in backend_flags.items():
         setattr(backend, name, value)
+    if mutate is not None:
+        mutate(backend)
     backend.head = backend.old
     backend.balance = ONE
     first = _run(config, backend, capsys)
@@ -597,6 +692,7 @@ def test_expl_02_parties_amounts_and_residual(tmp_path: Path, monkeypatch: pytes
 
 def test_expl_03_idempotent_refresh_reorg_and_single_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """EXPL-03. A repeat is idle, refresh keeps one row, a reorg supersedes, and one claim wins."""
+    _inject_approved(monkeypatch)
     config = _desk(tmp_path, monkeypatch)
     backend = ListaBackend("match", tmp_path)
     backend.head = backend.old
@@ -716,7 +812,14 @@ def test_expl_05_false_no_match_and_real_contradictions(tmp_path: Path, monkeypa
         assert body["verdict"] != "NO_MATCH"
         assert gap in body["gaps"]
         if scenario == "truncated":
-            assert _claim_calls(backend) == []
+            assert _claim_calls(backend)
+            assert _job(root)["state"] == "retry"
+            seen = len(_claim_calls(backend))
+            _run(_desk(root, monkeypatch), backend, capsys)
+            assert len(_claim_calls(backend)) > seen
+            continued, _count, _event = _stored(root)
+            assert continued["verdict"] != "NO_MATCH"
+            assert "request_identity_incomplete" not in continued["gaps"]
     wrong = tmp_path / "wrong"
     wrong.mkdir()
     _backend, rejected = _cycle(wrong, monkeypatch, capsys, "wrong_beneficiary")
@@ -769,7 +872,7 @@ def test_expl_06_execution_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr("guardian.explanations.engine.load_packaged", lambda: [])
     blinded = tmp_path / "stale"
     blinded.mkdir()
-    _chain, unverified = _cycle(blinded, monkeypatch, capsys, "match")
+    _chain, unverified = _cycle(blinded, monkeypatch, capsys, "match", approved=False)
     assert unverified["verdict"] == "UNVERIFIED"
     assert "stale_abi" in unverified["gaps"]
 
@@ -845,6 +948,344 @@ def test_expl_08_explanation_does_not_touch_the_alert(tmp_path: Path, monkeypatc
     assert plugin.matches({"kind": "balance_delta", "direction": "increase", "network": "bsc-mainnet", "asset": ASSET}) is True
     assert plugin.matches({"kind": "balance_delta", "direction": "decrease", "network": "bsc-mainnet", "asset": ASSET}) is False
     assert plugin.matches({"kind": "balance_delta", "direction": "increase", "network": "ethereum-mainnet", "asset": "evm-native:1"}) is False
+
+
+def _job(tmp_path: Path) -> dict:
+    database = _db(tmp_path)
+    try:
+        found = jobs_for(database, TENANT)
+        assert len(found) == 1
+        return found[0]
+    finally:
+        database.close()
+
+
+def _alerts(tmp_path: Path) -> list[tuple]:
+    connection = sqlite3.connect(tmp_path / "state" / "monitor.sqlite", timeout=5)
+    try:
+        return connection.execute("SELECT payload FROM alerts ORDER BY id").fetchall()
+    finally:
+        connection.close()
+
+
+def test_expl_fix_claim_evidence_is_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A receipt that disagrees with the discovered claim is not a verified payment."""
+
+    def amount_lie(backend: ListaBackend) -> None:
+        lied = dict(backend.receipt_log)
+        lied["data"] = "0x" + _word(0) + _word(1)
+        backend.receipts[CLAIM]["logs"] = [lied]
+
+    def foreign_emitter(backend: ListaBackend) -> None:
+        lied = dict(backend.receipt_log)
+        lied["address"] = OTHER
+        backend.receipts[CLAIM]["logs"] = [lied]
+
+    def removed_log(backend: ListaBackend) -> None:
+        lied = dict(backend.receipt_log)
+        lied["removed"] = True
+        backend.receipts[CLAIM]["logs"] = [lied]
+
+    def missing_status(backend: ListaBackend) -> None:
+        backend.receipts[CLAIM].pop("status")
+
+    def wrong_index(backend: ListaBackend) -> None:
+        payload = encode(["address", "uint256"], [OWNER, 7])
+        backend.txs[CLAIM]["input"] = backend.for_selector + payload.hex()
+
+    def duplicate(backend: ListaBackend) -> None:
+        backend.logs.append(dict(backend.logs[-1]))
+
+    def hash_conflict(backend: ListaBackend) -> None:
+        backend.receipts[CLAIM]["transactionHash"] = "0x" + "99" * 32
+
+    def missing_block(backend: ListaBackend) -> None:
+        backend.receipts[CLAIM].pop("blockHash")
+
+    cases = (
+        ("amount", amount_lie, "claim_evidence_mismatch"),
+        ("emitter", foreign_emitter, "claim_evidence_mismatch"),
+        ("removed", removed_log, "claim_evidence_mismatch"),
+        ("index", wrong_index, "request_index_mismatch"),
+        ("hash", hash_conflict, "receipt_identity_mismatch"),
+        ("checkpoint", missing_block, "receipt_checkpoint_unverified"),
+    )
+    for name, mutate, gap in cases:
+        root = tmp_path / name
+        root.mkdir()
+        _backend, body = _cycle(root, monkeypatch, capsys, "match", mutate=mutate)
+        assert body["verdict"] != "MATCHES_OWN_REQUEST"
+        assert body["verdict"] != "NO_MATCH"
+        assert gap in body["gaps"]
+        assert body["amounts"]["actual_claim_payment"] != str(PAY)
+    missing = tmp_path / "status"
+    missing.mkdir()
+    _backend, unpaid = _cycle(missing, monkeypatch, capsys, "match", mutate=missing_status)
+    assert unpaid["verdict"] != "NO_MATCH"
+    assert unpaid["verdict"] != "MATCHES_OWN_REQUEST"
+    assert "receipt_status_unavailable" in unpaid["gaps"]
+    assert "failed_payment" not in unpaid["contradiction_reasons"]
+    copied = tmp_path / "duplicate"
+    copied.mkdir()
+    _backend, once = _cycle(copied, monkeypatch, capsys, "match", mutate=duplicate)
+    assert once["verdict"] == "MATCHES_OWN_REQUEST"
+    assert once["residual"]["explained_raw_amount"] == str(PAY)
+    assert once["residual"]["raw_amount"] == "1"
+
+
+def test_expl_fix_packaged_intervals_stay_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Synthetic deployment pins are a test fixture. The packaged manifest does not verify them."""
+    packaged = load_packaged()
+    assert len(packaged) == 1
+    assert packaged[0].intervals() == []
+    assert packaged[0].document["source"]["live_bytecode_verified"] is False
+    root = tmp_path / "packaged"
+    root.mkdir()
+    _backend, body = _cycle(root, monkeypatch, capsys, "match", approved=False)
+    assert body["verdict"] != "MATCHES_OWN_REQUEST"
+    assert body["facts"]["implementation_at_execution"] != "verified"
+    conflict = tmp_path / "slot"
+    conflict.mkdir()
+    _backend, slot = _cycle(conflict, monkeypatch, capsys, "slot_conflict")
+    assert slot["verdict"] != "MATCHES_OWN_REQUEST"
+    assert slot["facts"]["implementation_at_execution"] != "verified"
+    removed = tmp_path / "removed-upgrade"
+    removed.mkdir()
+    _backend, upgrade = _cycle(removed, monkeypatch, capsys, "removed_upgrade")
+    assert upgrade["verdict"] != "MATCHES_OWN_REQUEST"
+    assert upgrade["facts"]["implementation_at_execution"] != "verified"
+
+
+def test_expl_fix_older_request_is_resumable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A request older than the balance interval keeps its transaction identity."""
+    backend, body = _cycle(tmp_path, monkeypatch, capsys, "older_request")
+    assert body["request_identity"] is not None
+    assert body["request_identity"].endswith(f":{REQ}:4")
+    assert "request_identity_incomplete" not in body["gaps"]
+    assert body["verdict"] == "MATCHES_OWN_REQUEST"
+    assert _job(tmp_path)["state"] == "done"
+    database = _db(tmp_path)
+    try:
+        account = jobs_for(database, TENANT)[0]["account"]
+        stored = load_requests(database, TENANT, "bsc-mainnet", account, backend.proxy)
+    finally:
+        database.close()
+    assert any(row["tx_id"] == REQ and int(row["log_index"]) == 4 for row in stored)
+
+
+def test_expl_fix_internal_native_trigger(tmp_path: Path) -> None:
+    """An evidenced internal native credit is queued beside balance-delta increases."""
+    plugin = ListaExplainer()
+    alert = {
+        "asset": ASSET,
+        "dedup_key": "internal-credit",
+        "direction": "in",
+        "kind": "native_unit",
+        "network": "bsc-mainnet",
+        "transfer_origin": "evm_internal",
+        "wallet_id": WALLET,
+    }
+    assert plugin.matches(alert) is True
+    assert plugin.matches({"kind": "native_eth", "direction": "out", "transfer_origin": "evm_internal", "network": "bsc-mainnet", "asset": ASSET}) is False
+    database = Database(tmp_path / "internal.sqlite")
+    try:
+        note_increase(database, TENANT, {"account": OWNER}, alert)
+        found = jobs_for(database, TENANT)
+        assert len(found) == 1
+        assert found[0]["event_id"] == "internal-credit"
+        assert found[0]["account"] == OWNER
+    finally:
+        database.close()
+
+
+def test_expl_fix_restart_after_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """An abandoned running job can be reclaimed by a later explain refresh."""
+    config = _desk(tmp_path, monkeypatch)
+    event_id = "restart-claim"
+    database = _db(tmp_path)
+    try:
+        enqueue(
+            database, TENANT, event_id,
+            account=OWNER, network="bsc-mainnet", wallet_id=WALLET,
+            payload={
+                "asset": ASSET,
+                "dedup_key": event_id,
+                "direction": "increase",
+                "kind": "balance_delta",
+                "network": "bsc-mainnet",
+                "wallet_id": WALLET,
+            },
+        )
+        assert claim_job(database, TENANT, event_id) is True
+        release_process_claims()
+        assert job_for(database, TENANT, event_id)["state"] == "running"
+    finally:
+        database.close()
+    code = main(
+        ["explain", "--mcm-config", str(config), "--event-id", event_id, "--refresh"],
+        backend=ListaBackend("match", tmp_path),
+        clock=lambda: CLOCK,
+    )
+    shown = json.loads(capsys.readouterr().out)
+    assert code == 0, shown
+    database = _db(tmp_path)
+    try:
+        assert job_for(database, TENANT, event_id)["state"] != "running"
+    finally:
+        database.close()
+
+
+def test_expl_fix_stale_completion_after_reorg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A worker holding the previous generation cannot restore a superseded match."""
+    _backend, body = _cycle(tmp_path, monkeypatch, capsys, "match")
+    assert body["verdict"] == "MATCHES_OWN_REQUEST"
+    database = _db(tmp_path)
+    try:
+        event_id = jobs_for(database, TENANT)[0]["event_id"]
+        force_pending(database, TENANT, event_id)
+        assert claim_job(database, TENANT, event_id) is True
+        owned = job_for(database, TENANT, event_id)
+        assert owned is not None
+        target = str(body["checkpoint_hashes"]["new"])
+        assert supersede_checkpoint(database, TENANT, "bsc-mainnet", target) == 1
+        result = complete_job(
+            database, TENANT, event_id, body, "stale-worker",
+            attempt=int(owned["attempt"]),
+            event_revision=int(owned["event_revision"]),
+            state="done",
+            retry_reason=None,
+            hold_token=None,
+        )
+        assert result == "stale"
+        current = latest_revision(database, TENANT, event_id)
+    finally:
+        database.close()
+    assert current is not None
+    assert current["verdict"] == "UNVERIFIED"
+    assert current["event_revision"] == 2
+    assert "reorg" in current["gaps"]
+
+
+def test_expl_fix_persistence_failure_is_reclaimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A revision write error leaves a visible retry, and the next refresh stores the verdict."""
+    config = _desk(tmp_path, monkeypatch)
+    _inject_approved(monkeypatch)
+    backend = ListaBackend("match", tmp_path)
+    backend.head = backend.old
+    backend.balance = ONE
+    _run(config, backend, capsys)
+    backend.head = backend.new
+    backend.balance = ONE + backend.payment + backend.extra
+    _run(config, backend, capsys)
+    body, _count, event_id = _stored(tmp_path)
+    assert body["verdict"] == "MATCHES_OWN_REQUEST"
+    import guardian.explanations.store as store
+
+    original = store._insert_unlocked
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("disk")
+
+    monkeypatch.setattr(store, "_insert_unlocked", boom)
+    failed = main(
+        ["explain", "--mcm-config", str(config), "--event-id", event_id, "--refresh"],
+        backend=backend,
+        clock=lambda: CLOCK,
+    )
+    capsys.readouterr()
+    assert failed == 0
+    database = _db(tmp_path)
+    try:
+        row = job_for(database, TENANT, event_id)
+        assert row is not None
+        assert row["state"] == "retry"
+        assert row["retry_reason"] == "persistence_failure"
+        assert "persistence_failure" in failure_reasons(database, TENANT, event_id)
+    finally:
+        database.close()
+    monkeypatch.setattr(store, "_insert_unlocked", original)
+    recovered = main(
+        ["explain", "--mcm-config", str(config), "--event-id", event_id, "--refresh"],
+        backend=backend,
+        clock=lambda: CLOCK,
+    )
+    shown = json.loads(capsys.readouterr().out)
+    assert recovered == 0, shown
+    assert shown["explanation"]["verdict"] == "MATCHES_OWN_REQUEST"
+    assert _job(tmp_path)["state"] == "done"
+
+
+def test_expl_fix_missing_job_is_recovered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A committed movement without a job is enqueued again, including after a failed insert."""
+    import guardian.explanations.engine as engine
+
+    database = Database(tmp_path / "gap.sqlite")
+    alert = {
+        "asset": ASSET,
+        "dedup_key": "enqueue-gap",
+        "direction": "increase",
+        "kind": "balance_delta",
+        "network": "bsc-mainnet",
+        "wallet_id": WALLET,
+    }
+    real = engine.enqueue
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("disk")
+
+    monkeypatch.setattr(engine, "enqueue", boom)
+    try:
+        note_increase(database, TENANT, {"account": OWNER}, alert)
+        assert jobs_for(database, TENANT) == []
+        assert "enqueue_failure" in failure_reasons(database, TENANT, "enqueue-gap")
+    finally:
+        monkeypatch.setattr(engine, "enqueue", real)
+    recover_missing_jobs(database, TENANT)
+    found = job_for(database, TENANT, "enqueue-gap")
+    assert found is not None
+    assert found["account"] == OWNER
+    database.upsert_tenant(TENANT, TENANT)
+    database.upsert_wallet_identity(TENANT, WALLET, "evm", OWNER, "Wallet A")
+    database.add_alert(TENANT, "orphan-alert", {
+        "asset": ASSET,
+        "dedup_key": "orphan-alert",
+        "direction": "increase",
+        "kind": "balance_delta",
+        "network": "bsc-mainnet",
+        "wallet_id": WALLET,
+    })
+    recover_missing_jobs(database, TENANT)
+    orphan = job_for(database, TENANT, "orphan-alert")
+    assert orphan is not None
+    assert orphan["account"] == OWNER
+    database.close()
+
+
+def test_expl_fix_late_status_does_not_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A status read that returns after the event budget is not a verified match, and the alert stays."""
+    config = _desk(tmp_path, monkeypatch)
+    _inject_approved(monkeypatch)
+    box = [CLOCK]
+    backend = ListaBackend("match", tmp_path)
+    backend.clock_box = box
+    backend.deadline_on_status = True
+    backend.advance_on_storage = False
+
+    def clock() -> float:
+        return box[0]
+
+    backend.head = backend.old
+    backend.balance = ONE
+    _run(config, backend, capsys, clock=clock)
+    backend.head = backend.new
+    backend.balance = ONE + backend.payment + backend.extra
+    box[0] = CLOCK
+    _run(config, backend, capsys, clock=clock)
+    body, _count, _event = _stored(tmp_path)
+    assert body["verdict"] != "MATCHES_OWN_REQUEST"
+    assert "deadline" in body["gaps"]
+    assert backend.alert_rows is not None
+    assert _alerts(tmp_path) == list(backend.alert_rows)
 
 
 def test_expl_queue_roundtrip() -> None:
