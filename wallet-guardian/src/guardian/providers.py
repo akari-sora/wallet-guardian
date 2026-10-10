@@ -1,10 +1,18 @@
-"""Outbound read-only clients. Forbidden RPC methods are rejected before the socket is used."""
+"""Outbound read-only clients. Forbidden RPC methods are rejected before the socket is used.
+
+GET, POST, and JSON-RPC connect to the validated address. The Host header, TLS
+SNI, and certificate check keep the original hostname.
+"""
 
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import threading
+import time
 from typing import Any
+from urllib.parse import urljoin
 import httpx
 from eth_abi import decode, encode
 from eth_utils import keccak
@@ -12,8 +20,126 @@ from eth_utils import keccak
 from guardian.errors import RpcError, SecurityError
 from guardian.security.redact import redact
 from guardian.security.rpc_guard import assert_agent_method
-from guardian.security.ssrf import next_redirect, validate_url
+from guardian.sources.fixtures import PreparedCall
 from guardian.sources.resolver import assert_direct_transport, direct_client_kwargs
+from guardian.sources.transport import _guard_url, pinned_request
+
+_REDIRECTS = frozenset({301, 302, 303, 307, 308})
+_PROBE_DEADLINE = threading.local()
+
+
+class ProbeDeadline:
+    """Remaining monotonic budget for one probe, shared by every request in it."""
+
+    def __init__(self, seconds: float, *, clock=None) -> None:
+        self._clock = clock or time.monotonic
+        self._deadline = self._clock() + float(seconds)
+        self._cancel = threading.Event()
+        self._lock = threading.Lock()
+        self._clients: list[Any] = []
+
+    def remaining(self) -> float:
+        return self._deadline - self._clock()
+
+    def expired(self) -> bool:
+        return self._cancel.is_set() or self.remaining() <= 0
+
+    def timeout_for(self, requested: float) -> float:
+        """The per-request timeout: the smaller of ``requested`` and the time left."""
+        if self.expired():
+            raise TimeoutError("probe_deadline")
+        left = self.remaining()
+        if left <= 0:
+            raise TimeoutError("probe_deadline")
+        return min(float(requested), left)
+
+    def watch(self, client: Any) -> None:
+        """Close ``client`` when this deadline expires, including if it already has."""
+        with self._lock:
+            self._clients.append(client)
+            cancelled = self._cancel.is_set()
+        if cancelled:
+            _close_quietly(client)
+            raise TimeoutError("probe_deadline")
+
+    def cancel(self) -> None:
+        """Mark the deadline spent and close every client still in flight."""
+        self._cancel.set()
+        with self._lock:
+            clients = list(self._clients)
+        for client in clients:
+            _close_quietly(client)
+
+
+def install_probe_deadline(deadline: ProbeDeadline | None) -> None:
+    """Install ``deadline`` on this thread. ``None`` clears it."""
+    _PROBE_DEADLINE.deadline = deadline
+
+
+def _current_deadline() -> ProbeDeadline | None:
+    return getattr(_PROBE_DEADLINE, "deadline", None)
+
+
+def _budget_timeout(timeout: float) -> float:
+    deadline = _current_deadline()
+    if deadline is None:
+        return timeout
+    return deadline.timeout_for(timeout)
+
+
+def _watch_client(client: Any) -> None:
+    deadline = _current_deadline()
+    if deadline is not None:
+        deadline.watch(client)
+
+
+def _close_quietly(client: Any) -> None:
+    close = getattr(client, "close", None)
+    if not callable(close):
+        return
+    try:
+        close()
+    except Exception:
+        return
+
+
+def _pinned_exchange(
+    method: str,
+    url: str,
+    body: bytes,
+    *,
+    resolve,
+    timeout: float,
+    drop_accept: bool = False,
+) -> tuple[int, dict[str, str], str]:
+    """One request to the validated IP, with the original hostname on Host and SNI.
+
+    The deadline is checked before DNS and again before the socket. The client
+    timeout is the time still left, and the deadline can close that client.
+    """
+    timeout = _budget_timeout(timeout)
+    assert_direct_transport(os.environ)
+    connect_ip = _guard_url(url, allow_private=False, resolve=resolve)
+    timeout = _budget_timeout(timeout)
+    call = PreparedCall("legacy-probe", method, url, body, "rest", connect_ip=connect_ip)
+    target, headers, extensions = pinned_request(call)
+    if drop_accept:
+        headers.pop("accept", None)
+    client = httpx.Client(**direct_client_kwargs(timeout=timeout))
+    try:
+        _watch_client(client)
+        response = client.request(
+            method,
+            target,
+            content=body or None,
+            headers=headers,
+            extensions=extensions,
+        )
+        copied = {str(key): str(value) for key, value in response.headers.items()}
+        return response.status_code, copied, response.text
+    finally:
+        _close_quietly(client)
+
 
 IMPLEMENTATION_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
 LISTA_PROXY = "0x1adB950d8bB3dA4bE104211D5AB038628e477fE6"
@@ -46,29 +172,45 @@ class RpcClient:
 
     def call(self, method: str, params: list[Any], *, allow_estimate: bool = False) -> Any:
         assert_agent_method(method, allow_estimate=allow_estimate)
+        _budget_timeout(self.timeout)
         self.calls.append(method)
         payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
         try:
-            if self._client is not None:
-                response = self._client.post(self.url, json=payload)
-            else:
-                validate_url(self.url, resolve=self.resolve)
-                assert_direct_transport(os.environ)
-                with httpx.Client(**direct_client_kwargs(timeout=self.timeout)) as client:
-                    response = client.post(self.url, json=payload)
+            status, body = self._invoke(payload)
+        except TimeoutError:
+            raise
         except httpx.HTTPError as exc:
             raise RpcError(redact(str(exc))) from exc
-        if response.status_code != 200:
-            raise RpcError(f"rpc http {response.status_code}")
-        try:
-            body = response.json()
-        except ValueError as exc:
-            raise RpcError("rpc response was not json") from exc
+        if status != 200:
+            raise RpcError(f"rpc http {status}")
         if isinstance(body, dict) and body.get("error"):
             raise RpcError(redact(str(body["error"]))[:500])
         if not isinstance(body, dict) or "result" not in body:
             raise RpcError("rpc response missing result")
         return body["result"]
+
+    def _invoke(self, payload: dict[str, Any]) -> tuple[int, Any]:
+        if self._client is not None:
+            _watch_client(self._client)
+            response = self._client.post(self.url, json=payload)
+            try:
+                body = response.json()
+            except ValueError as exc:
+                raise RpcError("rpc response was not json") from exc
+            return response.status_code, body
+        raw = json.dumps(payload).encode("utf-8")
+        status, _headers, text = _pinned_exchange(
+            "POST",
+            self.url,
+            raw,
+            resolve=self.resolve,
+            timeout=self.timeout,
+        )
+        try:
+            body = json.loads(text) if text else None
+        except ValueError as exc:
+            raise RpcError("rpc response was not json") from exc
+        return status, body
 
 
 def _hex_bytes(value: str) -> bytes:
@@ -182,20 +324,32 @@ def read_lista_state(rpc: RpcClient, wallet: str) -> dict[str, Any]:
     }
 
 
+def _location(headers: dict[str, str]) -> str:
+    for key, value in headers.items():
+        if key.lower() == "location":
+            return value
+    return ""
+
+
 def safe_get_text(url: str, *, resolve=None, timeout: float = 30) -> tuple[int, str]:
-    current = validate_url(url, resolve=resolve)
+    current = url
     hops = 0
-    assert_direct_transport(os.environ)
-    with httpx.Client(**direct_client_kwargs(timeout=timeout)) as client:
-        while True:
-            response = client.get(current)
-            if response.status_code in {301, 302, 303, 307, 308}:
-                hops += 1
-                if hops > 3:
-                    raise SecurityError("too many redirects")
-                current = next_redirect(current, response.headers.get("location", ""), resolve=resolve)
-                continue
-            return response.status_code, response.text
+    while True:
+        status, headers, text = _pinned_exchange(
+            "GET",
+            current,
+            b"",
+            resolve=resolve,
+            timeout=timeout,
+            drop_accept=True,
+        )
+        if status in _REDIRECTS:
+            hops += 1
+            if hops > 3:
+                raise SecurityError("too many redirects")
+            current = urljoin(current, _location(headers))
+            continue
+        return status, text
 
 
 def safe_post_json(
@@ -205,12 +359,10 @@ def safe_post_json(
     timeout: float = 20,
     resolve=None,
 ) -> tuple[int, Any]:
-    validate_url(url, resolve=resolve)
-    assert_direct_transport(os.environ)
-    with httpx.Client(**direct_client_kwargs(timeout=timeout)) as client:
-        response = client.post(url, json=payload)
+    raw = json.dumps(payload).encode("utf-8")
+    status, _headers, text = _pinned_exchange("POST", url, raw, resolve=resolve, timeout=timeout)
     try:
-        body = response.json()
+        body = json.loads(text) if text else {"non_json": True}
     except ValueError:
         body = {"non_json": True}
-    return response.status_code, body
+    return status, body

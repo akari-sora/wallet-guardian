@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 import socket
+import ssl
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -430,3 +432,234 @@ def test_start_fix_providers_verify_is_a_labelled_legacy_probe(
     assert payload["note"] == "legacy probe; does not prove the selected profile's connectivity"
     assert isinstance(payload["providers"], list)
     assert any(row["source_id"] == "etherscan_v2_chainlist" for row in payload["providers"])
+
+
+def _record_live_helpers(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    ops: list[object] = []
+
+    def fake_get(url: str, *, resolve=None, timeout: float = 30):
+        ops.append(("GET", resolve, url))
+        return 200, json.dumps({"result": [{"chainname": "Ethereum"}]})
+
+    def fake_post(url: str, payload: dict, *, timeout: float = 20, resolve=None):
+        ops.append(("POST", resolve, payload))
+        return 200, {"ok": True}
+
+    class RecordingRpc:
+        def __init__(self, url: str, *, client=None, timeout: float = 20, resolve=None) -> None:
+            ops.append(("rpc", resolve, url))
+
+        def call(self, method: str, params: list, *, allow_estimate: bool = False):
+            ops.append((method, None))
+            if method == "eth_chainId":
+                return "0x38"
+            if method == "eth_getBlockByNumber":
+                return {"number": "0x1"}
+            raise AssertionError(method)
+
+    monkeypatch.setattr("guardian.service.safe_get_text", fake_get)
+    monkeypatch.setattr("guardian.service.safe_post_json", fake_post)
+    monkeypatch.setattr("guardian.service.RpcClient", RecordingRpc)
+    return ops
+
+
+def test_start_fix_bad_doh_does_not_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Requested DoH that cannot be loaded reports the resolver error and opens nothing."""
+    monkeypatch.setenv("GUARDIAN_STATE_DIR", str(tmp_path / "state"))
+    secret = "synthetic-query-secret-STARTFIX2"
+    key = "synthetic-probe-key-STARTFIX2"
+    cases = [
+        {
+            "GUARDIAN_RESOLVER_MODE": "doh",
+            "ETHERSCAN_API_KEY": key,
+        },
+        {
+            "GUARDIAN_RESOLVER_MODE": "doh",
+            "GUARDIAN_DOH_ENDPOINTS": "https://cloudflare-dns.com/dns-query",
+            "GUARDIAN_DOH_BOOTSTRAP": "cloudflare-dns.com=10.1.1.1",
+            "ETHERSCAN_API_KEY": key,
+        },
+        {
+            "GUARDIAN_RESOLVER_MODE": "doh",
+            "GUARDIAN_DOH_ENDPOINTS": f"https://user:{secret}@cloudflare-dns.com/dns-query",
+            "GUARDIAN_DOH_BOOTSTRAP": "cloudflare-dns.com=1.1.1.1",
+            "ETHERSCAN_API_KEY": key,
+        },
+    ]
+    for pool in cases:
+        ops = _record_live_helpers(monkeypatch)
+        report = doctor(live=True, environ=pool)
+        blob = json.dumps(report)
+        assert ops == []
+        assert report["resolver"]["requested_mode"] == "doh"
+        assert report["resolver"]["effective_mode"] is None
+        assert report["resolver"]["error"]
+        assert report["providers"] == []
+        assert report["connectivity"]["probed"] is False
+        assert secret not in blob
+        assert key not in blob
+        assert "user:" not in blob
+
+
+class _CaptureStream:
+    def __init__(self, body: bytes) -> None:
+        self.buf = bytearray()
+        self._in = (
+            b"HTTP/1.1 200 OK\r\nContent-Length: "
+            + str(len(body)).encode("ascii")
+            + b"\r\nConnection: close\r\n\r\n"
+            + body
+        )
+        self._pos = 0
+        self.sni: str | None = None
+        self.ssl_context: ssl.SSLContext | None = None
+
+    def write(self, data: bytes, timeout: float | None = None) -> None:
+        self.buf.extend(data)
+
+    def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        chunk = self._in[self._pos : self._pos + max_bytes]
+        self._pos += len(chunk)
+        return chunk
+
+    def close(self) -> None:
+        return None
+
+    def start_tls(
+        self,
+        ssl_context: ssl.SSLContext,
+        server_hostname: str | None = None,
+        timeout: float | None = None,
+    ) -> "_CaptureStream":
+        self.sni = server_hostname
+        self.ssl_context = ssl_context
+        return self
+
+    def get_extra_info(self, info: str) -> None:
+        return None
+
+
+def test_start_fix_probe_helpers_connect_to_the_pinned_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GET, POST, and JSON-RPC reach HTTPX/HTTPCore and connect to the validated IP."""
+    from httpcore._backends.sync import SyncBackend
+
+    from guardian.providers import RpcClient, safe_get_text, safe_post_json
+
+    pin = "1.1.1.1"
+    bodies = [
+        b"ok-get",
+        b'{"ok":true}',
+        b'{"jsonrpc":"2.0","id":1,"result":"0x1"}',
+    ]
+    connects: list[dict[str, object]] = []
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        stream = _CaptureStream(bodies.pop(0))
+        connects.append({"host": host, "port": port, "timeout": timeout, "stream": stream})
+        return stream
+
+    monkeypatch.setattr(SyncBackend, "connect_tcp", connect_tcp)
+    resolve = lambda _host: [pin]
+
+    status, text = safe_get_text("https://chain.example.invalid/v2/chainlist", resolve=resolve, timeout=2)
+    assert (status, text) == (200, "ok-get")
+    posted, body = safe_post_json(
+        "https://info.example.invalid/info",
+        {"type": "meta"},
+        resolve=resolve,
+        timeout=2,
+    )
+    assert posted == 200 and body == {"ok": True}
+    result = RpcClient("https://bsc.example.invalid/rpc", resolve=resolve, timeout=2).call(
+        "eth_chainId",
+        [],
+    )
+    assert result == "0x1"
+    assert bodies == []
+    assert [item["host"] for item in connects] == [pin, pin, pin]
+    assert [item["port"] for item in connects] == [443, 443, 443]
+    hosts = ["chain.example.invalid", "info.example.invalid", "bsc.example.invalid"]
+    for item, hostname in zip(connects, hosts, strict=True):
+        stream = item["stream"]
+        assert isinstance(stream, _CaptureStream)
+        assert stream.sni == hostname
+        assert stream.ssl_context is not None
+        assert stream.ssl_context.check_hostname is True
+        assert stream.ssl_context.verify_mode == ssl.CERT_REQUIRED
+        written = bytes(stream.buf).lower()
+        assert f"host: {hostname}".encode("ascii") in written
+        assert pin.encode("ascii") == item["host"].encode("ascii")
+        assert hostname.encode("ascii") not in item["host"].encode("ascii")
+
+
+def test_start_fix_deadline_does_not_start_the_next_rpc(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A slow identity read that finishes after the deadline does not start the next RPC."""
+    from guardian.service import provider_probes
+
+    deadline_seconds = 0.25
+    operations: list[str] = []
+    timeouts: list[float] = []
+    held_closes: list[float] = []
+    released = threading.Event()
+
+    class _Resp:
+        def __init__(self, status: int, text: str) -> None:
+            self.status_code = status
+            self.text = text
+            self.headers: dict[str, str] = {}
+
+    class _Client:
+        def __init__(self, **kwargs: object) -> None:
+            timeout = kwargs.get("timeout")
+            assert isinstance(timeout, (int, float))
+            timeouts.append(float(timeout))
+            self._held = False
+
+        def request(self, method: str, url: str, content: bytes | None = None, **kwargs: object):
+            payload: object = None
+            if content:
+                payload = json.loads(content)
+            rpc_method = payload.get("method") if isinstance(payload, dict) else None
+            if isinstance(rpc_method, str):
+                operations.append(rpc_method)
+            else:
+                operations.append(method)
+            if rpc_method == "eth_chainId":
+                self._held = True
+                released.wait(30)
+                body = json.dumps({"jsonrpc": "2.0", "id": 1, "result": "0x38"})
+                return _Resp(200, body)
+            if rpc_method == "eth_getBlockByNumber":
+                body = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"number": "0x1"}})
+                return _Resp(200, body)
+            if method == "GET":
+                return _Resp(200, "sdn")
+            return _Resp(200, json.dumps({"ok": True}))
+
+        def close(self) -> None:
+            if self._held and not released.is_set():
+                held_closes.append(time.monotonic())
+
+    monkeypatch.setattr("guardian.providers.httpx.Client", _Client)
+    started = time.monotonic()
+    try:
+        report = provider_probes(
+            live_timeout=5.0,
+            resolve=lambda _host: ["1.1.1.1"],
+            deadline_seconds=deadline_seconds,
+        )
+        elapsed = time.monotonic() - started
+        bsc = next(row for row in report if row["source_id"] == "bsc_official_rpc")
+        assert bsc["level"] == "LIVE_FAIL"
+        assert "probe_deadline" in bsc["detail"]
+        assert elapsed < 1.5
+        assert "eth_chainId" in operations
+        assert "eth_getBlockByNumber" not in operations
+        assert held_closes
+        assert timeouts
+        assert all(item <= deadline_seconds for item in timeouts)
+        released.set()
+        time.sleep(0.4)
+        assert operations.count("eth_getBlockByNumber") == 0
+    finally:
+        released.set()

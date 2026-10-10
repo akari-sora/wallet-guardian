@@ -51,7 +51,7 @@ A nonempty value in the private secret profile wins. A blank or missing profile 
 
 ## Doctor, resolver mode, and egress
 
-`guardian doctor` stays offline. It does not open provider connections. `--live` is an explicit probe. Each probe stops at a 5 second whole-call deadline (not only an idle timeout on one socket read). The same credential selection is used for the report and for those requests. A 401 does not switch source. With `--mcm-config`, `--live` still calls the legacy provider endpoints and is labelled as such: it does not prove the selected profile's connectivity. `providers verify` is that same legacy probe, labelled the same way.
+`guardian doctor` stays offline. It does not open provider connections. `--live` is an explicit probe. Each probe stops at a 5 second whole-call deadline (not only an idle timeout on one socket read). That bound is remaining monotonic time: a request does not start after it expires, and the client for an in-flight request is closed. Unusable resolver settings, including `doh` with endpoints or bootstrap pins that do not load, set `resolver.error`, leave `effective_mode` null, and do not open a provider connection. When the settings load, the probe connects to the validated address and keeps the original hostname for the Host header, SNI, and the certificate check. The same credential selection is used for the report and for those requests. A 401 does not switch source. With `--mcm-config`, `--live` still calls the legacy provider endpoints and is labelled as such: it does not prove the selected profile's connectivity. `providers verify` is that same legacy probe, labelled the same way.
 
 The report keeps four facts apart:
 
@@ -59,8 +59,9 @@ The report keeps four facts apart:
 | --- | --- |
 | `resolver.requested_mode` | `system`, `doh`, or `invalid`. An unusable `GUARDIAN_RESOLVER_MODE` (or the env name in the monitor's `resolver` block) is `invalid` and the setting text is not printed |
 | `resolver.effective_mode` | The mode the loader actually selected. Null when the settings are not usable |
+| `resolver.error` | Null when the settings loaded. Otherwise a short reason, and the raw setting is not printed |
 | `resolver.endpoints` | DoH hostnames only. Not URLs, not keys |
-| `connectivity.probed` | True only after `--live` |
+| `connectivity.probed` | True only when `--live` ran the probe. Unusable resolver settings leave it false |
 | `egress_qualification.qualified` | False here. DoH enabled is not a qualified path |
 
 `GUARDIAN_DOH_ENDPOINTS` is a comma-separated list of HTTPS resolver URLs. `GUARDIAN_DOH_BOOTSTRAP` pins those hosts. See [host-network.md](host-network.md). Formal qualification is `guardian egress-doctor`, not this doctor report.

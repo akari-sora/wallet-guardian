@@ -38,7 +38,7 @@ options:
                         omitted doctor stays offline
 ```
 
-Offline unless `--live` is passed. `--live` runs a provider probe and stops each probe at a 5 second whole-call deadline. It does not qualify egress. DoH enabled is not a qualified path. With `--mcm-config`, credential lines name the variable, `selected_from` (`profile`, `env`, or `absent`), `present`, and `shadowed`. They do not print values. `--live` with `--mcm-config` is a legacy provider probe: it does not prove the selected profile's connectivity.
+Offline unless `--live` is passed. `--live` runs a provider probe and stops each probe at a 5 second whole-call deadline. That bound is remaining time: a later request in that probe does not start, and the open client is closed. Unusable resolver settings are reported and not probed. When they load, connections go to the validated address and the original hostname stays on the Host header, SNI, and the certificate check. It does not qualify egress. DoH enabled is not a qualified path. With `--mcm-config`, credential lines name the variable, `selected_from` (`profile`, `env`, or `absent`), `present`, and `shadowed`. They do not print values. `--live` with `--mcm-config` is a legacy provider probe: it does not prove the selected profile's connectivity.
 
 ## `guardian run-once`
 

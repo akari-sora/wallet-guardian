@@ -32,7 +32,16 @@ from guardian.domain import (
 )
 from guardian.canonical import digest_body
 from guardian.errors import ConfigError, RpcError, SecurityError
-from guardian.providers import LISTA_PROXY, SLISBNB, RpcClient, read_lista_state, safe_get_text, safe_post_json
+from guardian.providers import (
+    LISTA_PROXY,
+    SLISBNB,
+    ProbeDeadline,
+    RpcClient,
+    install_probe_deadline,
+    read_lista_state,
+    safe_get_text,
+    safe_post_json,
+)
 from guardian.security.address import parse_evm_address
 from guardian.security.redact import redact
 from guardian.security.rpc_guard import FORBIDDEN_RPC_METHODS
@@ -305,27 +314,37 @@ def environment_report(
     }
 
 
-def _call_with_deadline(func, seconds: float):
-    """Run ``func`` on a daemon thread and stop waiting at ``seconds``.
+_CLEANUP_SECONDS = 0.05
 
-    This is a wall-clock cap for the caller. httpx's own timeout is only the
-    per-I/O inactivity limit inside that cap. The worker is a daemon so process
-    exit is not held open after the deadline.
+
+def _call_with_deadline(func, seconds: float):
+    """Run ``func`` until ``seconds`` of monotonic time have passed.
+
+    The worker shares one deadline. Each request uses the time still left as
+    its timeout and does not start after the deadline. On expiry the open
+    clients are closed, then the worker is joined for a short bounded cleanup.
+    The worker is a daemon so process exit is not held open.
     """
     import threading
 
+    deadline = ProbeDeadline(seconds)
     outcome: dict[str, Any] = {}
 
     def run() -> None:
+        install_probe_deadline(deadline)
         try:
             outcome["value"] = func()
         except Exception as exc:  # noqa: BLE001 - handed back to the probe reporter
             outcome["error"] = exc
+        finally:
+            install_probe_deadline(None)
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
-    thread.join(seconds)
+    thread.join(max(deadline.remaining(), 0.0))
     if thread.is_alive():
+        deadline.cancel()
+        thread.join(_CLEANUP_SECONDS)
         raise TimeoutError("probe_deadline")
     if "error" in outcome:
         raise outcome["error"]
@@ -513,10 +532,12 @@ def doctor(
     Requested resolver mode, effective resolver mode, connectivity, and egress
     qualification stay separate. DoH enabled is not a qualified path. One
     credential context is resolved and then used for the report and, when live,
-    for the probe requests. A 401 does not select the other source. Each live
-    probe has a 5 second whole-call deadline. With ``--mcm-config`` the live
-    calls stay on the legacy provider endpoints; that does not prove the
-    selected profile's connectivity.
+    for the probe requests. A 401 does not select the other source. Unusable
+    resolver settings are reported and not probed. Each live probe has a 5
+    second remaining-time deadline: a request does not start after it expires,
+    and the open client is closed. With ``--mcm-config`` the live calls stay
+    on the legacy provider endpoints; that does not prove the selected
+    profile's connectivity.
     """
     from guardian.configuration import load_public_config
     from guardian.credentials import profile_from_environ, resolve_named
@@ -543,13 +564,17 @@ def doctor(
     by_name = {item.variable: item for item in resolved}
     report_resolutions = [by_name[name] for name in report_names]
     probes = []
+    probed = False
     if live:
-        probes = provider_probes(
-            live_timeout=5.0,
-            resolutions=resolved,
-            resolve=_probe_resolver(document, pool),
-            deadline_seconds=5.0,
-        )
+        resolve = _probe_resolver(document, pool)
+        if resolve is not None:
+            probed = True
+            probes = provider_probes(
+                live_timeout=5.0,
+                resolutions=resolved,
+                resolve=resolve,
+                deadline_seconds=5.0,
+            )
     fields = diagnostic_fields(
         document,
         pool,
@@ -557,10 +582,10 @@ def doctor(
         resolutions=report_resolutions,
     )
     fields["connectivity"] = {
-        "probed": bool(live),
+        "probed": probed,
         "bounded": True,
-        "timeout_seconds": 5 if live else None,
-        "timeout_kind": "whole_call" if live else None,
+        "timeout_seconds": 5 if probed else None,
+        "timeout_kind": "whole_call" if probed else None,
     }
     report = {
         "status": "completed_with_limitations",
