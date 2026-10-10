@@ -311,6 +311,8 @@ def _method_refusal(body: Any) -> str | None:
     text = message.lower()
     if code == -32601 or "method not found" in text or "method-not-found" in text:
         return "method_not_found"
+    if "rate limit" in text or "too many requests" in text:
+        return "rate_limited"
     if code in {-32001, 401} or "unauthorized" in text or "not allowed" in text:
         return "unauthorized"
     return None

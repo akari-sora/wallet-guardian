@@ -85,6 +85,11 @@
 - `tasks`
 - `alert_dedup`
 - `monitor_health`
+- `native_balance_baselines`
+- `native_balance_checkpoints`
+- `native_balance_conflicts`
+- `native_balance_decisions`
+- `balance_explanations`
 - `mcm_schema_migrations`
 - `wallet_identities`
 - `wallet_label_aliases`
@@ -96,6 +101,8 @@ W1 另外建立上面五張表。`PRAGMA user_version` 仍是 1，所以舊程�
 W3 建立 `chain_events`、`capability_state` 與 `capability_cursors`。`PRAGMA user_version` 仍是 1。`run-once` 不寫這三張表。事件、能力狀態、游標與 outbox 在同一個交易裡提交。失敗的讀取不會把舊數量改成 0。
 
 W9 建立 `delivery_leases` 與 `delivery_attempts`。`PRAGMA user_version` 仍是 1。舊的 `run-once` 不寫這兩張表。
+
+原生餘額觀測建立 `native_balance_baselines`、`native_balance_checkpoints`、`native_balance_conflicts`、`native_balance_decisions` 與 `balance_explanations`。`PRAGMA user_version` 仍是 1。失敗的讀取不寫 0。同一高度不同區塊雜湊留在 `native_balance_conflicts`，不改基準。`native_balance_decisions` 連同觀測留下門檻判斷，包含沒有進 outbox 的判斷。`balance_explanations` 只記下已對上的轉移，不把淨額告警改成已查明的原因。
 
 目前 `run-once` 路徑實際會寫入的表：
 

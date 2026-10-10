@@ -602,6 +602,8 @@ def test_mcm_w1_03_state_migration_preserves_rows_and_reopen_is_idempotent(tmp_p
             "0001_mcm_identity",
             "0002_mcm_events_coverage",
             "0003_mcm_delivery",
+            "0004_native_balance",
+            "0005_native_balance_continuity",
         ]
         applied = {row["migration_id"]: row["applied_at"] for row in recorded}
     finally:
@@ -617,8 +619,10 @@ def test_mcm_w1_03_state_migration_preserves_rows_and_reopen_is_idempotent(tmp_p
             "0001_mcm_identity",
             "0002_mcm_events_coverage",
             "0003_mcm_delivery",
+            "0004_native_balance",
+            "0005_native_balance_continuity",
         ]
-        assert db.conn.execute("SELECT COUNT(*) FROM mcm_schema_migrations").fetchone()[0] == 3
+        assert db.conn.execute("SELECT COUNT(*) FROM mcm_schema_migrations").fetchone()[0] == 5
     finally:
         db.close()
     conn = sqlite3.connect(path)

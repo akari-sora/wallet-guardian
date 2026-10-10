@@ -231,7 +231,6 @@ def run_capability_pipeline(
     stored_cursors = _stored_cursors(database, tenant)
     position_prior = _load_position_state(database, tenant)
     approval_state = _load_approval_state(database, tenant)
-    previous_native = _previous_native(database, tenant)
     events: list[ChainEvent] = []
     counterparties: list[tuple[str, str]] = []
     seen_transfers: set[tuple[str, ...]] = set()
@@ -256,6 +255,26 @@ def run_capability_pipeline(
     for account, network in enabled:
         peers.setdefault(network, []).append((account.wallet_id, account.normalized.canonical))
     log_done: set[str] = set()
+    from guardian.balances.native import prime_native_balances
+
+    balance_prime = prime_native_balances(
+        public_config=public_config,
+        private_inputs=private_inputs,
+        transport=transport,
+        database=database,
+        enabled=enabled,
+        registry=registry,
+        clock=clock,
+        started=started,
+        tenant=tenant,
+        observations=observations,
+        native_reads=native_reads,
+        seen=seen,
+        baseline=baseline,
+        candidates=candidates,
+        started_at=started_at,
+        deadline=deadline,
+    )
     for account, network in enabled:
         entry = registry[network]
         family = entry.get("family")
@@ -264,8 +283,8 @@ def run_capability_pipeline(
                 public_config, private_inputs, transport, account, network, entry,
                 observations, native_reads, seen, baseline, candidates, tenant,
                 stored_cursors=stored_cursors,
-                previous_native=previous_native,
                 events=events,
+                balance_prime=balance_prime,
                 seen_transfers=seen_transfers,
                 explicit_cursors=explicit_cursors,
                 held_cursors=held_cursors,
@@ -314,6 +333,11 @@ def run_capability_pipeline(
         )
         observations[(account.wallet_id, network, "exposure_news")] = news_coverage
         _fill_gaps(public_config, private_inputs, catalog, account.wallet_id, network, observations, transport)
+    from guardian.balances.reconcile import reconcile_native, refresh_balance_decisions, stamp_native_quotes
+
+    stamp_native_quotes(candidates, balance_prime.quotes, balance_prime.decimals)
+    reconcile_native(database, tenant, candidates)
+    balance_prime.decisions = refresh_balance_decisions(database, tenant, balance_prime.decisions)
     sanction_alerts = _apply_sanctions(
         public_config, transport, catalog, enabled, counterparties, observations, started, tenant,
     )
@@ -325,6 +349,7 @@ def run_capability_pipeline(
     rows = build_coverage(enabled_pairs(enabled), observations, catalog, registry, started)
     required = _required_map(enabled, rows, observations, position_summaries, public_config, private_inputs, registry)
     decisions = policy.apply(candidates, baseline_scopes=baseline)
+    balance_decisions = list(balance_prime.decisions)
     alerts = []
     for item in decisions:
         if not item.alert:
@@ -427,8 +452,8 @@ def run_capability_pipeline(
         finished=finished,
         status=status,
         coverage=rows,
-        decisions=[item.as_dict() for item in decisions if item.alert or item.valuation_unknown],
-        outbox_written=len(emitted),
+        decisions=[item.as_dict() for item in decisions if item.alert or item.valuation_unknown] + balance_decisions,
+        outbox_written=len(emitted) + balance_prime.outbox_written,
         sent=0 if no_send else delivery.sent,
         valuation_unknown=unknown,
         positions=position_summaries,
@@ -797,12 +822,14 @@ def _notice_network(wallet_id: str, observations: Sequence[Any], approvals: Sequ
 
 def _read_evm(
     public_config, private_inputs, transport, account, network, entry, observations, native_reads,
-    seen, baseline, candidates, tenant, *, stored_cursors, previous_native, events, seen_transfers,
+    seen, baseline, candidates, tenant, *, stored_cursors, events, seen_transfers,
     explicit_cursors, held_cursors, started, active_approvals, database, clock, started_at, peers,
     log_done, plan_cache, checkpoints, log_evidence, permission_notes, bootstrap_origin, deadline,
-    counterparties,
+    counterparties, balance_prime=None,
 ) -> None:
     wallet_id = account.wallet_id
+    if balance_prime is not None and (wallet_id, network) in balance_prime.skip:
+        return
     source_id = _family_source(public_config, private_inputs, network, "evm_rpc")
     if source_id is None:
         _block_caps(wallet_id, network, observations, ("balances.native", "history.fungible", *_PERMISSION_CAPABILITIES), "endpoint_missing")
@@ -813,12 +840,14 @@ def _read_evm(
         _block_identity(wallet_id, network, observations, session.identity)
         return
     address = account.normalized.canonical
-    balance = session.native_balance(address)
-    if balance.observation is not None:
-        observations[(wallet_id, network, "balances.native")] = balance.observation
-    if balance.raw_wei:
-        native_reads.append({"network": network, "raw_amount": balance.raw_wei, "wallet_id": wallet_id})
-        _baseline(wallet_id, network, "balances.native", seen, baseline, candidates, tenant)
+    primed = balance_prime is not None and (wallet_id, network) in balance_prime.covered
+    if not primed:
+        balance = session.native_balance(address)
+        if balance.observation is not None:
+            observations[(wallet_id, network, "balances.native")] = balance.observation
+        if balance.raw_wei:
+            native_reads.append({"network": network, "raw_amount": balance.raw_wei, "wallet_id": wallet_id})
+            _baseline(wallet_id, network, "balances.native", seen, baseline, candidates, tenant)
     head = _head(transport, source_id)
     origin = _effective_bootstrap_origin(public_config, network, head, bootstrap_origin)
     chain_id = entry.get("evm_chain_id") if isinstance(entry.get("evm_chain_id"), int) else network
@@ -837,12 +866,8 @@ def _read_evm(
     _read_approvals(
         scan, address, wallet_id, approval_cursor, active_approvals, permission_notes,
     )
-    external_rows = _history_external(
+    _history_external(
         scan, public_config, private_inputs, wallet_id, address, stored_cursors, plan_cache,
-    )
-    _native_delta(
-        wallet_id, network, balance.raw_wei, previous_native.get((wallet_id, network)), head, external_rows,
-        candidates, tenant, native_asset,
     )
 
 
@@ -1927,7 +1952,7 @@ def _etherscan_transfers(items, address: str, wallet_id: str, network: str, nati
         if native:
             asset = native_asset
             position = str(item.get("traceId") or item.get("transactionIndex") or item.get("nonce") or "0")
-            capability = "history.native_external"
+            capability = "history.native_internal" if item.get("transfer_origin") == "evm_internal" else "history.native_external"
         else:
             token = item.get("contractAddress") or item.get("tokenAddress")
             raw_contract = item.get("rawContract")
@@ -1952,6 +1977,9 @@ def _etherscan_transfers(items, address: str, wallet_id: str, network: str, nati
             "position": position,
             "raw_amount": amount,
             "source": source_id,
+            "transfer_origin": item.get("transfer_origin") or ("evm_external" if native else None),
+            "attribution": item.get("attribution"),
+            "execution_evidence": item.get("execution_evidence"),
             "tx": tx.lower(),
             "wallet_id": wallet_id,
         })
@@ -1982,6 +2010,7 @@ def _emit_transfers(rows, candidates, events, seen_transfers, tenant, chain_id, 
             continue
         seen_transfers.add(key)
         identity = f"{row['network']}:{tx}:{row['position']}:{row['kind']}:{asset}"
+        block = row.get("block")
         candidates.append(Candidate(
             tenant_id=tenant,
             wallet_id=row["wallet_id"],
@@ -1993,8 +2022,13 @@ def _emit_transfers(rows, candidates, events, seen_transfers, tenant, chain_id, 
             is_native=bool(row["is_native"]),
             direction=row["direction"],
             tx_id=tx,
+            transfer_origin=row.get("transfer_origin") if isinstance(row.get("transfer_origin"), str) else None,
+            attribution=row.get("attribution") if isinstance(row.get("attribution"), str) else None,
+            execution_evidence=row.get("execution_evidence") if isinstance(row.get("execution_evidence"), str) else None,
+            counterparty=row.get("counterparty") if isinstance(row.get("counterparty"), str) and row.get("counterparty") else None,
+            block_number=block if isinstance(block, int) else None,
+            asset=asset,
         ))
-        block = row.get("block")
         _remember_event(
             events,
             tenant_id=tenant,
