@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
+import subprocess
+import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -243,3 +247,186 @@ def test_start02_doh_without_endpoints_is_not_a_qualified_path(tmp_path: Path, m
     assert keyed["resolver"]["effective_mode"] is None
     assert keyed["egress_qualification"]["qualified"] is False
     assert "cloudflare-dns.com" in keyed["resolver"]["endpoints"]
+
+
+class _Calls:
+    def __init__(self) -> None:
+        self.gets: list[dict[str, object]] = []
+        self.posts: list[dict[str, object]] = []
+        self.rpcs: list[dict[str, object]] = []
+
+
+def _install_probe_fakes(monkeypatch: pytest.MonkeyPatch, calls: _Calls, *, status: int = 200) -> None:
+    def fake_get(url: str, *, resolve=None, timeout: float = 30):
+        calls.gets.append({"url": url, "resolve": resolve, "timeout": timeout})
+        if "chainlist" in url:
+            body = {"result": [{"chainname": "Ethereum"}]}
+            return status, json.dumps(body) if status == 200 else "{}"
+        return 200, "sdn"
+
+    def fake_post(url: str, payload: dict, *, timeout: float = 20, resolve=None):
+        calls.posts.append({"url": url, "resolve": resolve, "timeout": timeout})
+        return 200, {"ok": True}
+
+    class FakeRpc:
+        def __init__(self, url: str, *, client=None, timeout: float = 20, resolve=None) -> None:
+            calls.rpcs.append({"url": url, "resolve": resolve, "timeout": timeout})
+
+        def call(self, method: str, params: list, *, allow_estimate: bool = False):
+            if method == "eth_chainId":
+                return "0x38"
+            if method == "eth_getBlockByNumber":
+                return {"number": "0x1"}
+            raise AssertionError(method)
+
+    monkeypatch.setattr("guardian.service.safe_get_text", fake_get)
+    monkeypatch.setattr("guardian.service.safe_post_json", fake_post)
+    monkeypatch.setattr("guardian.service.RpcClient", FakeRpc)
+
+
+def _chainlist_urls(calls: _Calls) -> list[str]:
+    return [str(item["url"]) for item in calls.gets if "chainlist" in str(item["url"])]
+
+
+def test_start_fix_live_probe_sends_the_profile_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Profile P wins over environment E, and that same value is what the probe sends."""
+    monkeypatch.setenv("GUARDIAN_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("ETHERSCAN_API_KEY", ENV_KEY)
+    secret = tmp_path / "secrets.json"
+    _write_profile(secret, PROFILE_KEY)
+    config = _monitor(tmp_path / "monitor.json")
+    pool = _environ(secret, ENV_KEY)
+    calls = _Calls()
+    _install_probe_fakes(monkeypatch, calls)
+    report = doctor(live=True, mcm_config=config, environ=pool)
+    blob = json.dumps(report)
+    assert PROFILE_KEY not in blob
+    assert ENV_KEY not in blob
+    etherscan = next(row for row in report["credentials"] if row["variable"] == "ETHERSCAN_API_KEY")
+    assert etherscan["selected_from"] == "profile"
+    assert etherscan["shadowed"] is True
+    urls = _chainlist_urls(calls)
+    assert urls == [urls[0]]
+    assert PROFILE_KEY in urls[0]
+    assert ENV_KEY not in urls[0]
+    probe = next(row for row in report["providers"] if row["source_id"] == "etherscan_v2_chainlist")
+    assert probe["queried"] is True
+    assert probe["level"] == "LIVE_PASS"
+    assert report["live_probe"]["kind"] == "legacy_provider_probe"
+    assert report["live_probe"]["proves_selected_profile_connectivity"] is False
+    assert "does not prove the selected profile's connectivity" in report["live_probe"]["note"]
+    assert report["connectivity"]["timeout_seconds"] == 5
+    assert report["connectivity"]["timeout_kind"] == "whole_call"
+    resolve = calls.gets[0]["resolve"]
+    assert resolve is calls.posts[0]["resolve"]
+    assert resolve is calls.rpcs[0]["resolve"]
+    settings = getattr(resolve, "__self__").settings
+    assert settings.mode == "doh"
+    assert [item.host for item in settings.endpoints] == ["cloudflare-dns.com", "dns.google"]
+
+
+def test_start_fix_profile_only_probe_queries_and_401_does_not_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GUARDIAN_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("ETHERSCAN_API_KEY", ENV_KEY)
+    secret = tmp_path / "secrets.json"
+    _write_profile(secret, PROFILE_KEY)
+    config = _monitor(tmp_path / "monitor.json")
+    pool = _environ(secret, "")
+    pool.pop("ETHERSCAN_API_KEY", None)
+    calls = _Calls()
+    _install_probe_fakes(monkeypatch, calls)
+    report = doctor(live=True, mcm_config=config, environ=pool)
+    etherscan = next(row for row in report["credentials"] if row["variable"] == "ETHERSCAN_API_KEY")
+    assert etherscan["selected_from"] == "profile"
+    assert etherscan["present"] is True
+    assert etherscan["shadowed"] is False
+    urls = _chainlist_urls(calls)
+    assert len(urls) == 1
+    assert PROFILE_KEY in urls[0]
+    assert ENV_KEY not in urls[0]
+    probe = next(row for row in report["providers"] if row["source_id"] == "etherscan_v2_chainlist")
+    assert probe["queried"] is True
+
+    rejected = _Calls()
+    _install_probe_fakes(monkeypatch, rejected, status=401)
+    failed = doctor(live=True, mcm_config=config, environ=pool)
+    failed_urls = _chainlist_urls(rejected)
+    assert failed_urls == [failed_urls[0]]
+    assert PROFILE_KEY in failed_urls[0]
+    assert ENV_KEY not in failed_urls[0]
+    failed_probe = next(row for row in failed["providers"] if row["source_id"] == "etherscan_v2_chainlist")
+    assert failed_probe["queried"] is True
+    assert failed_probe["http"] == 401
+    assert failed_probe["level"] == "LIVE_FAIL"
+    again = next(row for row in failed["credentials"] if row["variable"] == "ETHERSCAN_API_KEY")
+    assert again["selected_from"] == "profile"
+
+
+def test_start_fix_probe_deadline_is_wall_clock() -> None:
+    from guardian.service import _call_with_deadline
+
+    gate = threading.Event()
+
+    def slow() -> dict[str, str]:
+        gate.wait(30)
+        return {"level": "LIVE_PASS"}
+
+    try:
+        with pytest.raises(TimeoutError, match="probe_deadline"):
+            _call_with_deadline(slow, 0.2)
+    finally:
+        gate.set()
+
+
+def test_start_fix_invalid_resolver_mode_is_not_echoed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GUARDIAN_STATE_DIR", str(tmp_path / "state"))
+    secret = "synthetic-path-key-STARTFIX"
+    url = f"https://rpc.example.invalid/v2/{secret}?apikey={secret}"
+    report = doctor(environ={"GUARDIAN_RESOLVER_MODE": url})
+    blob = json.dumps(report)
+    assert report["resolver"]["requested_mode"] == "invalid"
+    assert report["resolver"]["effective_mode"] is None
+    assert secret not in blob
+    assert url not in blob
+    assert "example.invalid" not in blob
+    assert "apikey=" not in blob.lower()
+    env = os.environ.copy()
+    env["GUARDIAN_RESOLVER_MODE"] = url
+    env["GUARDIAN_STATE_DIR"] = str(tmp_path / "cli-state")
+    completed = subprocess.run(
+        [sys.executable, "-m", "guardian.cli", "doctor"],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    cli_blob = completed.stdout + completed.stderr
+    assert completed.returncode == 0, cli_blob
+    payload = json.loads(completed.stdout)
+    assert payload["resolver"]["requested_mode"] == "invalid"
+    assert secret not in cli_blob
+    assert url not in cli_blob
+    assert "example.invalid" not in cli_blob
+
+
+def test_start_fix_providers_verify_is_a_labelled_legacy_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from guardian.cli import main
+
+    monkeypatch.setenv("GUARDIAN_STATE_DIR", str(tmp_path / "state"))
+    calls = _Calls()
+    _install_probe_fakes(monkeypatch, calls)
+    code = main(["providers", "verify"])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["probe_kind"] == "legacy_provider_probe"
+    assert payload["proves_selected_profile_connectivity"] is False
+    assert payload["note"] == "legacy probe; does not prove the selected profile's connectivity"
+    assert isinstance(payload["providers"], list)
+    assert any(row["source_id"] == "etherscan_v2_chainlist" for row in payload["providers"])

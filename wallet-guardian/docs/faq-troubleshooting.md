@@ -41,23 +41,23 @@ Registry ids are the state key. These spellings are the same chain. Typing eithe
 | polygon-mainnet | polygon-pos |
 | polygon-pos | polygon-pos |
 
-`arbitrum-mainnet` and `polygon-mainnet` are the `*-mainnet` names people type because most other chains use that pattern. `arbitrum-one` and `polygon-pos` are the ids in `config/chains`. Accounts, routes, and `enabled_networks` all normalize to the canonical id. Any other name fails. The error lists the valid ids and suggestions. A close name is not selected for you.
+`arbitrum-mainnet` and `polygon-mainnet` are the `*-mainnet` names people type because most other chains use that pattern. `arbitrum-one` and `polygon-pos` are the ids in `config/chains`. Accounts, routes, and `enabled_networks` all normalize to the canonical id. Two routes that become the same network and capability with the same sources in the same order collapse to one route. Different source lists, or the same sources in a different order, are a config error: nothing is merged and the stored baseline is not rewritten. Any other name fails. The error lists the valid ids and suggestions, and it quotes the typed name only when that name is an identifier. A URL or an address is shown as `<invalid name>`. A close name is not selected for you.
 
 ## Where a key is read
 
-A nonempty value in the private secret profile wins. A blank or missing profile value falls through to the process environment. Doctor, coverage, and the adapters use that same rule. After a 401 the monitor does not try the other source.
+A nonempty value in the private secret profile wins. A blank or missing profile value falls through to the process environment, including a key the process inherited from a parent shell or a service manager. Doctor, coverage, and the adapters use that same rule. After a 401 the monitor does not try the other source. An unattended service should start from a deliberately scoped environment, not from a login shell that already holds keys.
 
 `guardian doctor` and `guardian coverage --mcm-config` print `variable`, `selected_from` (`profile`, `env`, or `absent`), `present`, and `shadowed`. `shadowed` means the source that was not selected also had a nonempty value. The value itself is not printed.
 
 ## Doctor, resolver mode, and egress
 
-`guardian doctor` stays offline. It does not open provider connections. `--live` is an explicit probe with a 5 second cap per call. `providers verify` is the other explicit probe.
+`guardian doctor` stays offline. It does not open provider connections. `--live` is an explicit probe. Each probe stops at a 5 second whole-call deadline (not only an idle timeout on one socket read). The same credential selection is used for the report and for those requests. A 401 does not switch source. With `--mcm-config`, `--live` still calls the legacy provider endpoints and is labelled as such: it does not prove the selected profile's connectivity. `providers verify` is that same legacy probe, labelled the same way.
 
 The report keeps four facts apart:
 
 | Field | Meaning |
 | --- | --- |
-| `resolver.requested_mode` | `system` or `doh`, from `GUARDIAN_RESOLVER_MODE` (or the env name in the monitor's `resolver` block) |
+| `resolver.requested_mode` | `system`, `doh`, or `invalid`. An unusable `GUARDIAN_RESOLVER_MODE` (or the env name in the monitor's `resolver` block) is `invalid` and the setting text is not printed |
 | `resolver.effective_mode` | The mode the loader actually selected. Null when the settings are not usable |
 | `resolver.endpoints` | DoH hostnames only. Not URLs, not keys |
 | `connectivity.probed` | True only after `--live` |

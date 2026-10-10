@@ -112,7 +112,7 @@ uv run python tools/egress_doctor.py --qualification preview --egress-config PAT
 
 The egress doctor does not open the accounts file or the secret profile.
 
-`guardian doctor` (no `--live`) is a separate offline report. It prints `resolver.requested_mode` and `resolver.effective_mode`, and DoH endpoint hostnames only. `connectivity.probed` stays false unless you pass `--live`. `egress_qualification.qualified` stays false. DoH enabled is not a qualified path. `GUARDIAN_RESOLVER_MODE` is `system` or `doh`. `GUARDIAN_DOH_ENDPOINTS` and `GUARDIAN_DOH_BOOTSTRAP` are the endpoint list and the pins, as above.
+`guardian doctor` (no `--live`) is a separate offline report. It prints `resolver.requested_mode` and `resolver.effective_mode`, and DoH endpoint hostnames only. `requested_mode` is `system`, `doh`, or `invalid`. An unusable setting is `invalid` and the text is not printed. `connectivity.probed` stays false unless you pass `--live`. `egress_qualification.qualified` stays false. DoH enabled is not a qualified path. `GUARDIAN_RESOLVER_MODE` is `system` or `doh`. `GUARDIAN_DOH_ENDPOINTS` and `GUARDIAN_DOH_BOOTSTRAP` are the endpoint list and the pins, as above. `--live` passes that resolver into its probe calls and stops each probe at a 5 second whole-call deadline.
 
 ## What formal qualification requires
 

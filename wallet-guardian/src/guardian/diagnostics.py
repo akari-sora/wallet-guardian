@@ -50,11 +50,19 @@ def diagnostic_fields(
     environ: Mapping[str, str],
     *,
     fallback_names: Sequence[str] = (),
+    resolutions: Sequence[CredentialResolution] | None = None,
 ) -> dict[str, Any]:
-    """Provenance, resolver mode, and the explicit non-qualification of DoH."""
+    """Provenance, resolver mode, and the explicit non-qualification of DoH.
+
+    ``resolutions`` is the one context the caller already selected. When it is
+    passed, this function does not resolve those variables again.
+    """
     names = credential_names(document, fallback_names)
     profile = profile_from_environ(environ, profile_env_name(document))
-    resolved = [resolve_named(name, profile, environ) for name in names]
+    if resolutions is None:
+        resolved = [resolve_named(name, profile, environ) for name in names]
+    else:
+        resolved = list(resolutions)
     fields = {
         "credentials": [item.provenance() for item in resolved],
         "resolver": resolver_view(document, environ),
@@ -120,13 +128,13 @@ def _secret_texts(
 
 
 def _requested_mode(raw: object) -> str:
+    """``system``, ``doh``, or ``invalid``. The raw setting is never returned."""
     if not isinstance(raw, str) or not raw.strip():
         return "system"
-    text = raw.strip()
-    lowered = text.lower()
+    lowered = raw.strip().lower()
     if lowered in {"system", "doh"}:
         return lowered
-    return text
+    return "invalid"
 
 
 def _resolver_env_names(document: Mapping[str, Any] | None) -> tuple[str, str, str]:

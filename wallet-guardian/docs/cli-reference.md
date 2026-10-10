@@ -34,10 +34,11 @@ options:
   --tenant TENANT       local tenant scope (required when ambiguous)
   --json                print JSON (this is always on)
   --mcm-config MCM_CONFIG
-  --live                bounded live probe; omitted doctor stays offline
+  --live                live probe with a 5 second whole-call deadline per probe;
+                        omitted doctor stays offline
 ```
 
-Offline unless `--live` is passed. `--live` is a bounded provider probe. It does not qualify egress. DoH enabled is not a qualified path. With `--mcm-config`, credential lines name the variable, `selected_from` (`profile`, `env`, or `absent`), `present`, and `shadowed`. They do not print values.
+Offline unless `--live` is passed. `--live` runs a provider probe and stops each probe at a 5 second whole-call deadline. It does not qualify egress. DoH enabled is not a qualified path. With `--mcm-config`, credential lines name the variable, `selected_from` (`profile`, `env`, or `absent`), `present`, and `shadowed`. They do not print values. `--live` with `--mcm-config` is a legacy provider probe: it does not prove the selected profile's connectivity.
 
 ## `guardian run-once`
 
@@ -101,6 +102,8 @@ usage: guardian providers [-h] [--db DB] [--tenant TENANT] [--json] {verify} ...
 
 positional arguments:
   {verify}
+    verify              legacy provider probe; does not prove a selected
+                        profile's connectivity
 
 options:
   -h, --help       show this help message and exit
@@ -120,6 +123,8 @@ options:
   --tenant TENANT  local tenant scope (required when ambiguous)
   --json           print JSON (this is always on)
 ```
+
+`providers verify` is a legacy provider probe. It does not prove that a selected monitor profile can reach its configured sources.
 
 ## `guardian wallets`
 

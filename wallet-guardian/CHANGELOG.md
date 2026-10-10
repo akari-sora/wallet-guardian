@@ -16,9 +16,17 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 - One credential resolver for doctor, coverage, and the read adapters. A nonempty secret-profile value wins over the process environment. Diagnostics show the variable name, `selected_from` (`profile`, `env`, or `absent`), presence, and whether the other source was shadowed. Values are not printed. A 401 does not switch source.
 - `guardian doctor` is offline unless `--live` is set. The report separates requested resolver mode, effective resolver mode, connectivity, and egress qualification. DoH enabled is not a qualified path. `providers verify` still runs the bounded provider probe.
 
+### Fixed
+
+- Diagnostics do not echo an unusable resolver mode or a network name that is a URL or an address. `resolver.requested_mode` is only `system`, `doh`, or `invalid`. Network errors quote an identifier-shaped name, otherwise `<invalid name>`.
+- Alias normalization collapses identical routes and rejects conflicting source lists or source order for the same canonical network and capability. The conflict is a config error. State keys are not rewritten and sources are not merged.
+- `guardian doctor --live` resolves credentials once and uses that selection for the report and the probe requests. A profile value is what the probe sends when it wins, including when the environment is empty, and a 401 does not switch source. The effective resolver is passed into the probe calls. Each probe has a 5 second whole-call deadline. With `--mcm-config`, the live check is labelled as a legacy provider probe and does not prove the selected profile's connectivity. `providers verify` is that same labelled legacy probe.
+- The test suite points home and the XDG config, state, and data directories at a per-test directory and clears inherited monitor path, endpoint, and resolver settings so a developer secret profile or `.env.local` is not reloaded.
+
 ### Changed
 
-- `guardian doctor` no longer contacts providers unless `--live` is passed. `--live` uses a 5 second cap per call.
+- `guardian doctor` no longer contacts providers unless `--live` is passed. `--live` uses a 5 second whole-call deadline per probe.
+- A blank secret-profile value can use a key inherited from the process environment. Unattended services should start from a deliberately scoped environment.
 
 ## [0.4.0rc3] - 2026-10-10
 

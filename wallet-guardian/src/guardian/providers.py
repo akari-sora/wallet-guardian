@@ -30,10 +30,18 @@ def encode_call(signature: str, types: list[str], args: list[Any]) -> str:
 
 
 class RpcClient:
-    def __init__(self, url: str, *, client: httpx.Client | None = None, timeout: float = 20) -> None:
+    def __init__(
+        self,
+        url: str,
+        *,
+        client: httpx.Client | None = None,
+        timeout: float = 20,
+        resolve=None,
+    ) -> None:
         self.url = url
         self.timeout = timeout
         self._client = client
+        self.resolve = resolve
         self.calls: list[str] = []
 
     def call(self, method: str, params: list[Any], *, allow_estimate: bool = False) -> Any:
@@ -44,7 +52,7 @@ class RpcClient:
             if self._client is not None:
                 response = self._client.post(self.url, json=payload)
             else:
-                validate_url(self.url)
+                validate_url(self.url, resolve=self.resolve)
                 assert_direct_transport(os.environ)
                 with httpx.Client(**direct_client_kwargs(timeout=self.timeout)) as client:
                     response = client.post(self.url, json=payload)
@@ -190,8 +198,14 @@ def safe_get_text(url: str, *, resolve=None, timeout: float = 30) -> tuple[int, 
             return response.status_code, response.text
 
 
-def safe_post_json(url: str, payload: dict[str, Any], *, timeout: float = 20) -> tuple[int, Any]:
-    validate_url(url)
+def safe_post_json(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    timeout: float = 20,
+    resolve=None,
+) -> tuple[int, Any]:
+    validate_url(url, resolve=resolve)
     assert_direct_transport(os.environ)
     with httpx.Client(**direct_client_kwargs(timeout=timeout)) as client:
         response = client.post(url, json=payload)

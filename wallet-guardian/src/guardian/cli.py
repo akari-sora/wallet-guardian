@@ -55,7 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_cmd = sub.add_parser("doctor", parents=[common])
     doctor_cmd.add_argument("--mcm-config", default=None)
-    doctor_cmd.add_argument("--live", action="store_true", help="bounded live probe; omitted doctor stays offline")
+    doctor_cmd.add_argument(
+        "--live",
+        action="store_true",
+        help="live probe with a 5 second whole-call deadline per probe; omitted doctor stays offline",
+    )
     run = sub.add_parser("run-once", parents=[common])
     selected = run.add_mutually_exclusive_group(required=True)
     selected.add_argument("--config")
@@ -69,7 +73,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("claims", parents=[common])
     providers = sub.add_parser("providers", parents=[common])
     providers_sub = providers.add_subparsers(dest="providers_command", required=True)
-    providers_sub.add_parser("verify", parents=[common])
+    providers_sub.add_parser(
+        "verify",
+        parents=[common],
+        help="legacy provider probe; does not prove a selected profile's connectivity",
+    )
 
     wallets = sub.add_parser("wallets", parents=[common])
     wallets_sub = wallets.add_subparsers(dest="wallets_command", required=True)
@@ -247,8 +255,13 @@ def dispatch(
             "operation": operation_coverage(),
         }, 0
     if args.command == "providers":
-        report = doctor(live=True)
-        return {"providers": report["providers"]}, 0
+        report = doctor(live=True, legacy_probe=True)
+        return {
+            "probe_kind": "legacy_provider_probe",
+            "proves_selected_profile_connectivity": False,
+            "note": "legacy probe; does not prove the selected profile's connectivity",
+            "providers": report["providers"],
+        }, 0
     if args.command == "wallets":
         result = run_once(Path(args.config), Path(args.db) if args.db else None)
         return result, 3 if result["status"] == "degraded" else 0

@@ -6,7 +6,7 @@ The longer model is [security-model.md](security-model.md). Assets, actors, and 
 
 ## Keys and seeds
 
-Public config names environment variables (`endpoint_env`, `credential_env`). It does not contain key values, keyed RPC URLs, or watch addresses. `guardian init` writes `secret-profile.json` with those names and empty strings. It does not copy an environment value into the file. You put values in that file later, or you export them. Doctor reports `configured` or `not_configured` and does not print the value. Logs go through redaction. Do not point an endpoint variable at a URL that already contains a key.
+Public config names environment variables (`endpoint_env`, `credential_env`). It does not contain key values, keyed RPC URLs, or watch addresses. `guardian init` writes `secret-profile.json` with those names and empty strings. It does not copy an environment value into the file. You put values in that file later, or you export them. A blank profile value can use a key inherited from the process environment. An unattended service should start from a deliberately scoped environment, not from a shell that already holds keys. Doctor reports `configured` or `not_configured` and does not print the value. Logs go through redaction. Do not point an endpoint variable at a URL that already contains a key. Diagnostics do not echo an invalid resolver mode or a network name that is a URL or an address.
 
 Do not commit `private/`, `data/`, `evidence/`, a secret profile, or `.env.local`.
 
@@ -39,7 +39,7 @@ Private directories are mode `0700` and new private files are mode `0600` on POS
 
 Anyone who can read the state directory can read cursors, coverage, and unsent alerts. Anyone who can write it can change what you think the chain said. `--force` on init backs up config files and leaves `monitor.sqlite` untouched. Config backups can contain watch addresses. Treat them as private.
 
-`guardian doctor` writes `environment_report.json`, `source_registry.json`, and `provider_benchmark.json` under the state directory. The default report is offline. `--live` is a bounded provider probe. Neither report prints key values, and DoH enabled is not a qualified path.
+`guardian doctor` writes `environment_report.json`, `source_registry.json`, and `provider_benchmark.json` under the state directory. The default report is offline. `--live` is a provider probe with a 5 second whole-call deadline per probe. With `--mcm-config` that probe is the legacy provider check and does not prove the selected profile's connectivity. `providers verify` is the same labelled legacy probe. Neither report prints key values, and DoH enabled is not a qualified path.
 
 ## How to verify
 
