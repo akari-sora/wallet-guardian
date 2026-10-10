@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from guardian.explanations.models import canonical, fingerprint
+from guardian.explanations.models import canonical, fingerprint, normalize_evidence_blocks
 
 
 # Process-local bookkeeping. It is not evidence that a job was abandoned.
@@ -58,6 +58,165 @@ def _drop_lease(database: Any, tenant: str, event_id: str) -> None:
     database.conn.execute(
         "DELETE FROM explanation_job_leases WHERE tenant_id=? AND event_id=?",
         (tenant, event_id),
+    )
+
+
+# Bookkeeping for hashes invalidated during an attempt. This row is not an
+# operator-visible failure and is not an enqueue recovery record.
+_FENCE_EVENT = "__evidence_fence__"
+_FENCE_REASON = "evidence_fence"
+
+
+def _anchor_hash(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.lower()
+    if not text.startswith("0x") or len(text) != 66:
+        return None
+    return text
+
+
+def _load_fence_journal(database: Any, tenant: str) -> dict[str, Any]:
+    row = database.conn.execute(
+        """
+        SELECT payload FROM explanation_failures
+        WHERE tenant_id=? AND event_id=? AND reason=?
+        """,
+        (tenant, _FENCE_EVENT, _FENCE_REASON),
+    ).fetchone()
+    if row is None or not isinstance(row["payload"], str):
+        return {"attempts": {}, "invalidated": {}, "seq": 0}
+    body = _loads(row["payload"])
+    attempts = body.get("attempts") if isinstance(body.get("attempts"), dict) else {}
+    invalidated = body.get("invalidated") if isinstance(body.get("invalidated"), dict) else {}
+    seq = body.get("seq")
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
+        seq = 0
+    return {"attempts": attempts, "invalidated": invalidated, "seq": seq}
+
+
+def _save_fence_journal(database: Any, tenant: str, state: dict[str, Any]) -> None:
+    database.conn.execute(
+        """
+        INSERT INTO explanation_failures(
+          tenant_id, event_id, reason, account, network, wallet_id, payload, updated_at
+        ) VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?)
+        ON CONFLICT(tenant_id, event_id, reason) DO UPDATE SET
+          payload=excluded.payload,
+          updated_at=excluded.updated_at
+        """,
+        (tenant, _FENCE_EVENT, _FENCE_REASON, canonical(state), _now()),
+    )
+
+
+def _remember_fence_attempt(database: Any, tenant: str, event_id: str, attempt: int) -> None:
+    """Remember how many invalidations had already committed when this attempt started.
+
+    Caller holds the write transaction.
+    """
+    state = _load_fence_journal(database, tenant)
+    attempts = state.get("attempts")
+    if not isinstance(attempts, dict):
+        attempts = {}
+    attempts[event_id] = {"attempt": attempt, "seq": int(state["seq"])}
+    state["attempts"] = attempts
+    _save_fence_journal(database, tenant, state)
+
+
+def _record_block_invalidation(database: Any, tenant: str, network: str, block_hash: str) -> None:
+    """Durable tombstone for one block hash. A job that has not stored it yet still has to see it."""
+    target = _anchor_hash(block_hash)
+    if target is None or not isinstance(network, str) or not network:
+        return
+    database.conn.execute("BEGIN IMMEDIATE")
+    try:
+        state = _load_fence_journal(database, tenant)
+        seq = int(state["seq"]) + 1
+        state["seq"] = seq
+        invalidated = state.get("invalidated")
+        if not isinstance(invalidated, dict):
+            invalidated = {}
+        network_map = invalidated.get(network)
+        if not isinstance(network_map, dict):
+            network_map = {}
+        network_map[target] = seq
+        invalidated[network] = network_map
+        state["invalidated"] = invalidated
+        _save_fence_journal(database, tenant, state)
+        database.conn.commit()
+    except Exception:
+        database.conn.rollback()
+        raise
+
+
+def _attempt_fence_seq(state: dict[str, Any], event_id: str, attempt: int) -> int:
+    attempts = state.get("attempts")
+    if not isinstance(attempts, dict):
+        return 0
+    mark = attempts.get(event_id)
+    if not isinstance(mark, dict):
+        return 0
+    seen_attempt = mark.get("attempt")
+    seen_seq = mark.get("seq")
+    if isinstance(seen_attempt, bool) or not isinstance(seen_attempt, int) or seen_attempt != attempt:
+        return 0
+    if isinstance(seen_seq, bool) or not isinstance(seen_seq, int) or seen_seq < 0:
+        return 0
+    return seen_seq
+
+
+def _invalidated_hash(
+    database: Any,
+    tenant: str,
+    network: str,
+    event_id: str,
+    attempt: int,
+    blocks: Any,
+) -> str | None:
+    """A block hash invalidated after this attempt started, if any."""
+    normalized = normalize_evidence_blocks(blocks)
+    if not normalized:
+        return None
+    state = _load_fence_journal(database, tenant)
+    watermark = _attempt_fence_seq(state, event_id, attempt)
+    invalidated = state.get("invalidated")
+    network_map = invalidated.get(network) if isinstance(invalidated, dict) else None
+    if not isinstance(network_map, dict):
+        return None
+    for item in normalized:
+        stamped = network_map.get(item["block_hash"])
+        if isinstance(stamped, bool) or not isinstance(stamped, int):
+            continue
+        if stamped > watermark:
+            return item["block_hash"]
+    return None
+
+
+def _merge_evidence_blocks(existing: Any, extra: Any) -> list[dict[str, Any]]:
+    merged = normalize_evidence_blocks(existing)
+    seen = {item["block_hash"] for item in merged}
+    for item in normalize_evidence_blocks(extra):
+        if item["block_hash"] in seen:
+            continue
+        merged.append(item)
+        seen.add(item["block_hash"])
+    return merged
+
+
+def _write_running_payload(
+    database: Any,
+    tenant: str,
+    event_id: str,
+    payload: dict[str, Any],
+    attempt: int,
+    generation: int,
+) -> None:
+    database.conn.execute(
+        """
+        UPDATE explanation_jobs SET payload=?
+        WHERE tenant_id=? AND event_id=? AND state='running' AND attempt=? AND event_revision=?
+        """,
+        (canonical(payload), tenant, event_id, attempt, generation),
     )
 
 
@@ -182,6 +341,7 @@ def claim_job(database: Any, tenant: str, event_id: str) -> bool:
             database.conn.rollback()
             return False
         _write_lease(database, tenant, event_id, attempt + 1)
+        _remember_fence_attempt(database, tenant, event_id, attempt + 1)
         database.conn.commit()
     except Exception:
         database.conn.rollback()
@@ -247,12 +407,16 @@ def complete_job(
     """Write the revision and the job together. A stale attempt writes nothing.
 
     Returns ``stored``, ``stale``, or ``failed``. A write error leaves the job
-    retryable and records ``persistence_failure``.
+    retryable and records ``persistence_failure``. Evidence invalidated after
+    this attempt started is not stored; the job is reopened instead.
     """
     database.conn.execute("BEGIN IMMEDIATE")
     try:
         row = database.conn.execute(
-            "SELECT state, attempt, event_revision FROM explanation_jobs WHERE tenant_id=? AND event_id=?",
+            """
+            SELECT state, attempt, event_revision, network, payload
+            FROM explanation_jobs WHERE tenant_id=? AND event_id=?
+            """,
             (tenant, event_id),
         ).fetchone()
         if (
@@ -262,6 +426,22 @@ def complete_job(
             or int(row["event_revision"]) != event_revision
         ):
             database.conn.rollback()
+            return "stale"
+        payload = _loads(row["payload"]) if isinstance(row["payload"], str) else {}
+        owned_blocks = _merge_evidence_blocks(payload.get("evidence_blocks"), body.get("evidence_blocks"))
+        invalidated = _invalidated_hash(
+            database, tenant, str(row["network"]), event_id, attempt, owned_blocks,
+        )
+        if invalidated is not None:
+            payload["evidence_blocks"] = owned_blocks
+            _write_running_payload(database, tenant, event_id, payload, attempt, event_revision)
+            if not _discovery_current(database, tenant, event_id, attempt, event_revision):
+                database.conn.rollback()
+                return "stale"
+            if not _fence_unrevised(database, tenant, event_id, invalidated):
+                database.conn.rollback()
+                return "stale"
+            database.conn.commit()
             return "stale"
         _insert_unlocked(database, tenant, event_id, body, evidence)
         _store_evidence_anchors(database, tenant, event_id, body, attempt, event_revision)
@@ -446,9 +626,12 @@ def supersede_checkpoint(database: Any, tenant: str, network: str, block_hash: s
     """A reorg replaces the current verdict. The old row stays for the audit trail.
 
     The job generation advances in the same transaction. A worker that still
-    holds the previous generation cannot write over this row.
+    holds the previous generation cannot write over this row. The hash is
+    recorded even when no job has stored it yet, so a completion that acquired
+    it after this call cannot ignore the invalidation.
     """
     target = block_hash.lower()
+    _record_block_invalidation(database, tenant, network, target)
     changed = 0
     for job in jobs_for(database, tenant):
         if job["network"] != network:
@@ -613,6 +796,63 @@ def _fence_unrevised(database: Any, tenant: str, event_id: str, target: str) -> 
         return False
     _drop_lease(database, tenant, event_id)
     return True
+
+
+def bind_evidence_anchors(
+    database: Any,
+    tenant: str,
+    event_id: str,
+    blocks: list[dict[str, Any]],
+    *,
+    attempt: int,
+    generation: int,
+) -> bool:
+    """Store claim-block anchors while this attempt still owns the generation.
+
+    The write is short and stays outside provider calls. Returns false when the
+    attempt is no longer current, including when one of these blocks was
+    invalidated after the attempt started. That case reopens the job.
+    """
+    normalized = normalize_evidence_blocks(blocks)
+    if not normalized:
+        return True
+    database.conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = database.conn.execute(
+            """
+            SELECT state, attempt, event_revision, network, payload
+            FROM explanation_jobs WHERE tenant_id=? AND event_id=?
+            """,
+            (tenant, event_id),
+        ).fetchone()
+        if (
+            row is None
+            or str(row["state"]) != "running"
+            or int(row["attempt"]) != attempt
+            or int(row["event_revision"]) != generation
+        ):
+            database.conn.rollback()
+            return False
+        payload = _loads(row["payload"]) if isinstance(row["payload"], str) else {}
+        payload["evidence_blocks"] = _merge_evidence_blocks(payload.get("evidence_blocks"), normalized)
+        _write_running_payload(database, tenant, event_id, payload, attempt, generation)
+        if not _discovery_current(database, tenant, event_id, attempt, generation):
+            database.conn.rollback()
+            return False
+        invalidated = _invalidated_hash(
+            database, tenant, str(row["network"]), event_id, attempt, payload["evidence_blocks"],
+        )
+        if invalidated is not None:
+            if not _fence_unrevised(database, tenant, event_id, invalidated):
+                database.conn.rollback()
+                return False
+            database.conn.commit()
+            return False
+        database.conn.commit()
+        return True
+    except Exception:
+        database.conn.rollback()
+        raise
 
 
 def record_enqueue_failure(

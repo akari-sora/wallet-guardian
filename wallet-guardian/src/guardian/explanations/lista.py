@@ -186,7 +186,12 @@ def _explain_transfer(
     old = (block - 1, str(parent_header["hash"]))
     new = (block, str(header["hash"]))
     # The parent is only the queue read. It is not a balance observation.
+    # The claim block is stored before the remaining provider reads so a reorg
+    # of that hash can fence this attempt before the first completion.
     anchors = [{"block_number": new[0], "block_hash": new[1]}]
+    bind = getattr(ctx, "bind_evidence", None)
+    if callable(bind):
+        bind(anchors)
     return _finish_span(
         ctx, alert, manifest, rpc, account, facts, gaps, contradictions, established,
         parties, amounts, refs, event_id, old, new, checkpoints, amount, tx_id, anchors,

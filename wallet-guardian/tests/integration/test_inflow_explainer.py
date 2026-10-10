@@ -1635,6 +1635,192 @@ def test_expl_fix_internal_credit_reorg_uses_claim_block(
         database.close()
 
 
+def _queue_producer_internal(tmp_path: Path, alert: dict) -> None:
+    """Enqueue the producer payload with no evidence anchor and no balance checkpoint."""
+    database = _db(tmp_path)
+    try:
+        database.upsert_tenant(TENANT, TENANT)
+        database.upsert_wallet_identity(TENANT, WALLET, "evm", OWNER, "Wallet A")
+        assert database.add_alert(TENANT, alert["dedup_key"], alert) is True
+        note_increase(database, TENANT, {"account": OWNER}, alert)
+        queued = job_for(database, TENANT, alert["dedup_key"])
+        assert queued is not None
+        assert "evidence_blocks" not in queued["payload"]
+        assert "old_checkpoint" not in queued["payload"]
+        assert "new_checkpoint" not in queued["payload"]
+        assert queued["payload"]["raw_amount"] == str(PAY)
+    finally:
+        database.close()
+
+
+def _assert_internal_attempt_reopened(tmp_path: Path, event_id: str, claim_hash: str, block_number: int) -> None:
+    database = _db(tmp_path)
+    try:
+        job = job_for(database, TENANT, event_id)
+        assert job is not None
+        assert job["state"] == "retry"
+        assert job["retry_reason"] == "reorg"
+        assert int(job["event_revision"]) == 2
+        assert job["payload"]["raw_amount"] == str(PAY)
+        assert _bnb(job["payload"]["raw_amount"]) == Decimal("8.421285170186643")
+        assert "old_checkpoint" not in job["payload"]
+        assert "new_checkpoint" not in job["payload"]
+        assert job["payload"]["evidence_blocks"] == [{"block_hash": claim_hash, "block_number": block_number}]
+        assert revision_count(database, TENANT, event_id) == 0
+        assert latest_revision(database, TENANT, event_id) is None
+        assert supersede_checkpoint(database, TENANT, "bsc-mainnet", claim_hash) == 0
+        again = job_for(database, TENANT, event_id)
+        assert again is not None
+        assert int(again["event_revision"]) == 2
+    finally:
+        database.close()
+
+
+@pytest.mark.parametrize("approved", [False, True])
+def test_expl_fix_internal_anchor_fenced_before_first_completion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    approved: bool,
+) -> None:
+    """Invalidating the claim block after it is stored and before completion reopens the job.
+
+    The producer payload has no evidence anchor. A second SQLite connection must
+    find that anchor and advance the generation. The amount stays the transfer.
+    """
+    import guardian.explanations.engine as explanation_engine
+    import guardian.explanations.store as explanation_store
+
+    if approved:
+        _inject_approved(monkeypatch)
+    config = _desk(tmp_path, monkeypatch)
+    backend = ListaBackend("match", tmp_path)
+    alert = _producer_internal(PAY, f"lista-fence-complete-{int(approved)}", backend.new)
+    assert "evidence_blocks" not in alert
+    _queue_producer_internal(tmp_path, alert)
+    event_id = alert["dedup_key"]
+    claim_hash = _hash(backend.new)
+    path = tmp_path / "state" / "monitor.sqlite"
+    state = {"used": False}
+    real_complete = explanation_store.complete_job
+
+    def wrapped_complete(database_arg, tenant, checked_event, body, evidence, **kwargs):
+        if (
+            not state["used"]
+            and checked_event == event_id
+            and kwargs.get("attempt") == 1
+            and kwargs.get("event_revision") == 1
+        ):
+            state["used"] = True
+            other = Database(path)
+            try:
+                live = job_for(other, TENANT, event_id)
+                assert live is not None
+                assert live["state"] == "running"
+                assert int(live["event_revision"]) == 1
+                assert live["payload"]["evidence_blocks"] == [
+                    {"block_hash": claim_hash, "block_number": backend.new},
+                ]
+                assert live["payload"]["raw_amount"] == str(PAY)
+                assert supersede_checkpoint(other, TENANT, "bsc-mainnet", claim_hash) == 1
+            finally:
+                other.close()
+        result = real_complete(database_arg, tenant, checked_event, body, evidence, **kwargs)
+        if checked_event == event_id and kwargs.get("attempt") == 1:
+            assert result == "stale"
+        return result
+
+    monkeypatch.setattr(explanation_engine, "complete_job", wrapped_complete)
+    code = main(
+        ["explain", "--mcm-config", str(config), "--event-id", event_id, "--refresh"],
+        backend=backend,
+        clock=lambda: CLOCK,
+    )
+    shown = json.loads(capsys.readouterr().out)
+    assert code == 0, shown
+    assert shown["status"] == "ok"
+    assert shown["explanation"] is None
+    assert shown["alert"]["raw_amount"] == str(PAY)
+    assert _bnb(shown["alert"]["raw_amount"]) == Decimal("8.421285170186643")
+    assert state["used"] is True
+    _assert_internal_attempt_reopened(tmp_path, event_id, claim_hash, backend.new)
+
+
+@pytest.mark.parametrize("approved", [False, True])
+def test_expl_fix_internal_invalidation_after_claim_read_is_not_missed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    approved: bool,
+) -> None:
+    """An invalidation after the claim block is read, before the anchor write, still reopens the job.
+
+    That call finds no anchor and leaves the generation unchanged. Completion
+    must not accept the attempt. The amount stays the transfer.
+    """
+    import guardian.explanations.engine as explanation_engine
+    import guardian.explanations.lista as lista_module
+    import guardian.explanations.store as explanation_store
+
+    if approved:
+        _inject_approved(monkeypatch)
+    config = _desk(tmp_path, monkeypatch)
+    backend = ListaBackend("match", tmp_path)
+    alert = _producer_internal(PAY, f"lista-fence-read-{int(approved)}", backend.new)
+    assert "evidence_blocks" not in alert
+    _queue_producer_internal(tmp_path, alert)
+    event_id = alert["dedup_key"]
+    claim_hash = _hash(backend.new)
+    path = tmp_path / "state" / "monitor.sqlite"
+    state = {"read": False}
+    real_header = lista_module._header
+    real_complete = explanation_store.complete_job
+
+    def wrapped_header(rpc, number):
+        found, error = real_header(rpc, number)
+        if state["read"] or number != backend.new or error or not isinstance(found, dict):
+            return found, error
+        if str(found.get("hash") or "") != claim_hash:
+            return found, error
+        state["read"] = True
+        other = Database(path)
+        try:
+            live = job_for(other, TENANT, event_id)
+            assert live is not None
+            assert "evidence_blocks" not in live["payload"]
+            assert int(live["event_revision"]) == 1
+            assert supersede_checkpoint(other, TENANT, "bsc-mainnet", claim_hash) == 0
+            still = job_for(other, TENANT, event_id)
+            assert still is not None
+            assert int(still["event_revision"]) == 1
+            assert still["state"] == "running"
+        finally:
+            other.close()
+        return found, error
+
+    def wrapped_complete(database_arg, tenant, checked_event, body, evidence, **kwargs):
+        result = real_complete(database_arg, tenant, checked_event, body, evidence, **kwargs)
+        if checked_event == event_id and kwargs.get("attempt") == 1:
+            assert result == "stale"
+        return result
+
+    monkeypatch.setattr(lista_module, "_header", wrapped_header)
+    monkeypatch.setattr(explanation_engine, "complete_job", wrapped_complete)
+    code = main(
+        ["explain", "--mcm-config", str(config), "--event-id", event_id, "--refresh"],
+        backend=backend,
+        clock=lambda: CLOCK,
+    )
+    shown = json.loads(capsys.readouterr().out)
+    assert code == 0, shown
+    assert shown["status"] == "ok"
+    assert shown["explanation"] is None
+    assert shown["alert"]["raw_amount"] == str(PAY)
+    assert _bnb(shown["alert"]["raw_amount"]) == Decimal("8.421285170186643")
+    assert state["read"] is True
+    _assert_internal_attempt_reopened(tmp_path, event_id, claim_hash, backend.new)
+
+
 def test_expl_fix_evidence_block_fences_before_revision(tmp_path: Path) -> None:
     """A claim-block anchor fences a job that has no revision and no balance checkpoint."""
     database = Database(tmp_path / "anchor.sqlite")

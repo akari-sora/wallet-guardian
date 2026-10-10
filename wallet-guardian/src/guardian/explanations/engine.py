@@ -12,6 +12,7 @@ from guardian.explanations.rpc import ExplanationRpc
 from guardian.explanations.discovery import log_from_record, log_record
 from guardian.explanations.store import (
     account_for_wallet,
+    bind_evidence_anchors,
     claim_job,
     clear_enqueue_failure,
     complete_job,
@@ -291,6 +292,15 @@ def _bind_discovery(
     ctx.save_interval = save_interval_rows
     ctx.save_requests = save_request_rows
     ctx.save_lookback = save_lookback_cursor
+
+    def bind_evidence(blocks: list[Any]) -> None:
+        if attempt is None or generation is None or not isinstance(blocks, list):
+            return
+        bind_evidence_anchors(
+            database, tenant, event_id, blocks, attempt=attempt, generation=generation,
+        )
+
+    ctx.bind_evidence = bind_evidence
 
 
 def _store(
