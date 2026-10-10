@@ -40,6 +40,7 @@ class PreparedCall:
     protocol: str
     connect_ip: str | None = None
     public_headers: tuple[tuple[str, str], ...] = ()
+    timeout: float | None = None
 
     def __repr__(self) -> str:
         return f"PreparedCall(method={self.method!r}, url={redact(self.url)!r}, protocol={self.protocol!r})"

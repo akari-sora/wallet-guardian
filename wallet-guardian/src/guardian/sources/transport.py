@@ -123,7 +123,11 @@ class HttpxBackend:
         owns = self._client is None
         if owns:
             assert_direct_transport(os.environ)
-        client = self._client or httpx.Client(**direct_client_kwargs(timeout=self.timeout))
+        limit = self.timeout
+        call_timeout = getattr(call, "timeout", None)
+        if isinstance(call_timeout, (int, float)) and not isinstance(call_timeout, bool) and call_timeout > 0:
+            limit = min(float(self.timeout), float(call_timeout))
+        client = self._client or httpx.Client(**direct_client_kwargs(timeout=limit))
         url, headers, extensions = pinned_request(call)
         try:
             with client.stream(
@@ -132,6 +136,7 @@ class HttpxBackend:
                 content=call.body or None,
                 headers=headers,
                 extensions=extensions,
+                timeout=limit,
             ) as response:
                 buf = bytearray()
                 for chunk in response.iter_bytes():
@@ -225,7 +230,10 @@ class ReadOnlyTransport:
         task: Any = None,
         metadata: Any = None,
         response_metadata: Any = None,
+        timeout: float | None = None,
     ) -> TransportResult:
+        if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0):
+            raise TransportError("timeout", retryable=True)
         assert_operation_allowed(operation)
         _reject_untrusted(task, metadata, response_metadata)
         source = self._source(source_id)
@@ -244,7 +252,7 @@ class ReadOnlyTransport:
             pinned = _guard_url(current, allow_private=source.allow_private_network, resolve=self.resolve)
             if _host_key(current) != registered:
                 raise SecurityError("redirect_host", reason="redirect_host")
-            call = replace(_encode(source_id, operation, current), connect_ip=pinned)
+            call = replace(_encode(source_id, operation, current), connect_ip=pinned, timeout=timeout)
             _bind_credential(call, source, operation)
             raw = self._send(source, call, priority=priority, credits=credits)
             if len(raw.body) > self.max_response_bytes:

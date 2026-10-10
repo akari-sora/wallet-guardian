@@ -86,6 +86,7 @@ class AlertDecision:
     direction: str | None = None
     execution_evidence: str | None = None
     raw_amount: str | None = None
+    transfer_origin: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Public fields only. No address and no price treated as zero."""
@@ -107,7 +108,7 @@ class AlertDecision:
             payload["net"] = self.net
         if self.tx_id:
             payload["tx_id"] = self.tx_id
-        for key in ("asset", "attribution", "block_number", "direction", "execution_evidence", "raw_amount"):
+        for key in ("asset", "attribution", "block_number", "direction", "execution_evidence", "raw_amount", "transfer_origin"):
             value = getattr(self, key)
             if value is not None:
                 payload[key] = value
@@ -345,6 +346,7 @@ class AlertPolicy:
             direction=_text_or_none(extra.get("direction")),
             execution_evidence=_text_or_none(extra.get("execution_evidence")),
             raw_amount=_text_or_none(extra.get("raw_amount")),
+            transfer_origin=_text_or_none(extra.get("transfer_origin")),
         )
 
 
@@ -406,6 +408,8 @@ def _native_movement(candidate: Candidate) -> dict[str, str] | None:
     raw = _as_int(candidate.raw_amount)
     if raw is not None:
         found["raw_amount"] = str(raw)
+    if isinstance(candidate.transfer_origin, str) and candidate.transfer_origin:
+        found["transfer_origin"] = candidate.transfer_origin
     return found or None
 
 

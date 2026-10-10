@@ -520,6 +520,124 @@ def test_mcm_share_s4_05_upgrade_rollback_artifact_hygiene(release_dist: Path) -
         shutil.rmtree(work, ignore_errors=True)
 
 
+def test_expl_09_installed_explain_stays_offline(release_dist: Path) -> None:
+    """EXPL-09. The installed monitor loads the explainer and does not open a socket to explain."""
+    work = _outside_checkout()
+    try:
+        venv = work / "venv"
+        created = _run(["uv", "venv", "--python", sys.executable, "--offline", str(venv)], cwd=work)
+        assert created.returncode == 0, created.stderr
+        python = _venv_python(venv)
+        installed = _run(
+            [
+                "uv", "pip", "install", "--offline", "--python", str(python),
+                "--constraints", str(release_dist / "constraints.txt"), str(_wheel(release_dist)),
+            ],
+            cwd=work,
+        )
+        assert installed.returncode == 0, installed.stderr
+        guardian = _venv_guardian(venv)
+        help_run = _run([str(guardian), "explain", "--help"], cwd=work)
+        assert help_run.returncode == 0, help_run.stderr
+        assert "--refresh" in help_run.stdout
+        assert "--mcm-config" in help_run.stdout
+        assert "--event-id" in help_run.stdout
+        script = work / "expl09_check.py"
+        support = Path(__file__).resolve().parents[1] / "support"
+        approved = Path(__file__).resolve().parents[1] / "fixtures" / "explainers" / "lista-stakemanager-approved.json"
+        script.write_text(
+            "import json\n"
+            "import socket\n"
+            "import sys\n"
+            "from pathlib import Path\n"
+            "from types import SimpleNamespace\n"
+            "sys.path.insert(0, r'''" + str(support) + "''')\n"
+            "from lista_rpc_fixture import ListaChain, REQ, code_matches\n"
+            "import guardian.explanations.engine as engine\n"
+            "from guardian.cli import main\n"
+            "from guardian.explanations.engine import refresh_event\n"
+            "from guardian.explanations.registry import load_manifest, load_packaged\n"
+            "from guardian.explanations.store import enqueue, latest_revision\n"
+            "from guardian.storage import Database\n"
+            "def blocked(*_args, **_kwargs):\n"
+            "    raise AssertionError('network is disabled')\n"
+            "socket.socket = blocked\n"
+            "socket.create_connection = blocked\n"
+            "socket.getaddrinfo = blocked\n"
+            "found = load_packaged()\n"
+            "assert len(found) == 1\n"
+            "assert found[0].explainer_id == 'lista-stakemanager'\n"
+            "assert found[0].intervals() == []\n"
+            "assert found[0].document['source']['live_bytecode_verified'] is False\n"
+            "assert found[0].document['source']['commit'] == '2a60d77d9d9c7059736385a4425ca38492425c8e'\n"
+            "missing = main(['explain', '--event-id', 'missing-event'])\n"
+            "assert missing == 0\n"
+            "approved = json.loads(Path(r'''" + str(approved) + "''').read_text(encoding='utf-8'))\n"
+            "assert code_matches(approved)\n"
+            "manifest = load_manifest(approved)\n"
+            "assert manifest is not None\n"
+            "assert manifest.intervals()\n"
+            "engine.load_packaged = lambda: [manifest]\n"
+            "db_path = r'''" + str(work / "expl09.sqlite") + "'''\n"
+            "database = Database(db_path)\n"
+            "database.upsert_tenant('local', 'local')\n"
+            "wallet = '11111111-1111-4111-8111-111111111111'\n"
+            "pay = '8421285170186643000'\n"
+            "def block_hash(number):\n"
+            "    return '0x' + f'{number:064x}'\n"
+            "def alert_for(event_id, amount):\n"
+            "    return {\n"
+            "        'asset': 'evm-native:56', 'dedup_key': event_id, 'direction': 'increase',\n"
+            "        'kind': 'balance_delta', 'network': 'bsc-mainnet', 'wallet_id': wallet,\n"
+            "        'signed_delta_raw': amount,\n"
+            "        'old_checkpoint': {'block_number': '100', 'block_hash': block_hash(100)},\n"
+            "        'new_checkpoint': {'block_number': '110', 'block_hash': block_hash(110)},\n"
+            "    }\n"
+            "nonzero_alert = alert_for('nonzero-event', pay)\n"
+            "partial_alert = alert_for('partial-event', pay)\n"
+            "for event_id, payload in (('nonzero-event', nonzero_alert), ('partial-event', partial_alert)):\n"
+            "    database.add_alert('local', event_id, payload)\n"
+            "    enqueue(database, 'local', event_id, account='0x' + '0' * 39 + '1', network='bsc-mainnet', wallet_id=wallet, payload=payload)\n"
+            "before = database.alerts_for('local')\n"
+            "class Transport:\n"
+            "    def __init__(self, chain):\n"
+            "        self.chain = chain\n"
+            "        self.calls = []\n"
+            "    def request(self, source_id, operation, priority='normal', timeout=None, **kwargs):\n"
+            "        self.calls.append(timeout)\n"
+            "        assert isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout > 0\n"
+            "        result = self.chain.answer(operation.method, list(operation.params))\n"
+            "        if result is None:\n"
+            "            body = {'jsonrpc': '2.0', 'id': 1, 'error': {'code': -32000, 'message': 'unsupported'}}\n"
+            "        else:\n"
+            "            body = {'jsonrpc': '2.0', 'id': 1, 'result': result}\n"
+            "        return SimpleNamespace(status=200, ok=True, category='ok', body=body)\n"
+            "matched = Transport(ListaChain(approved, quote_extra=0))\n"
+            "refresh_event(database, 'local', 'nonzero-event', matched, lambda: 1700000000.0, lambda network: 'bsc-rpc')\n"
+            "stored_nonzero = latest_revision(database, 'local', 'nonzero-event')\n"
+            "assert stored_nonzero['verdict'] == 'MATCHES_OWN_REQUEST', stored_nonzero.get('gaps')\n"
+            "assert stored_nonzero['request_identity'].endswith(REQ + ':4')\n"
+            "assert stored_nonzero['amounts']['actual_claim_payment'] == pay\n"
+            "assert 1 <= len(matched.calls) <= 32\n"
+            "disagree = Transport(ListaChain(approved, quote_extra=9))\n"
+            "refresh_event(database, 'local', 'partial-event', disagree, lambda: 1700000000.0, lambda network: 'bsc-rpc')\n"
+            "stored_partial = latest_revision(database, 'local', 'partial-event')\n"
+            "assert stored_partial['verdict'] != 'MATCHES_OWN_REQUEST'\n"
+            "assert 'amount_inconsistent' in stored_partial['gaps']\n"
+            "assert stored_partial['amounts']['actual_claim_payment'] == pay\n"
+            "assert 1 <= len(disagree.calls) <= 32\n"
+            "assert database.alerts_for('local') == before\n"
+            "database.close()\n"
+            "raise SystemExit(0)\n",
+            encoding="utf-8",
+        )
+        probed = _run([str(python), str(script)], cwd=work)
+        assert probed.returncode == 0, probed.stderr + probed.stdout
+        assert "not_found" in probed.stdout
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def _assert_archives_clean(dist: Path) -> None:
     required = (
         "schemas/coverage.schema.json",

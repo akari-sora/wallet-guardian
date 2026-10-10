@@ -1,0 +1,74 @@
+{
+  "abi": {
+    "calls": [
+      {
+        "selector": "0xb13acedd",
+        "signature": "claimWithdraw(uint256)"
+      },
+      {
+        "selector": "0x9a53d5af",
+        "signature": "claimWithdrawFor(address,uint256)"
+      },
+      {
+        "selector": "0x745400c9",
+        "signature": "requestWithdraw(uint256)"
+      }
+    ],
+    "events": [
+      {
+        "signature": "ClaimWithdrawal(address,uint256,uint256)",
+        "topic": "0x63bfb3a58e0713d68e49dda62c223fab04fb534eeef8ac6356cec78e691c092a"
+      },
+      {
+        "signature": "RequestWithdraw(address,uint256)",
+        "topic": "0x0afd74a2a0a78f6c15e41029f44995ee023fe49276f44a4b2b2cf674829362e6"
+      }
+    ],
+    "views": [
+      {
+        "selector": "0xce6298e1",
+        "signature": "convertSnBnbToBnb(uint256)"
+      },
+      {
+        "selector": "0xca13fb41",
+        "signature": "getBotUndelegateRequest(uint256)"
+      },
+      {
+        "selector": "0x026e3e7b",
+        "signature": "getUserRequestStatus(address,uint256)"
+      },
+      {
+        "selector": "0x6c930228",
+        "signature": "getUserWithdrawalRequests(address)"
+      },
+      {
+        "selector": "0x91d14854",
+        "signature": "hasRole(bytes32,address)"
+      }
+    ]
+  },
+  "abi_hash": "b33e1a89b474d359b5b0b3ce67e4ecbca1af90c4d884626b523c525c5d95db39",
+  "chain_id": 56,
+  "explainer_id": "lista-stakemanager",
+  "implementations": [],
+  "manifest_hash": "30cd444e33ec05a71257e079b0b11a53154aba2dcf447d4e1b24acff2fa135b3",
+  "network": "bsc-mainnet",
+  "proxy": {
+    "address": "0x1adb950d8bb3da4be104211d5ab038628e477fe6",
+    "code_hash": "0x9143985b94803d92679c2ecb0bd04da147f320fa7630bd99c946379e23f85918",
+    "code_hash_note": "keccak256 of the specification proxy bytecode. Not a live eth_getCode reading.",
+    "live_bytecode_verified": false
+  },
+  "schema_version": "guardian.explainer-manifest.v1",
+  "source": {
+    "commit": "2a60d77d9d9c7059736385a4425ca38492425c8e",
+    "files": [
+      "contracts/ListaStakeManager.sol",
+      "contracts/interfaces/IStakeManager.sol"
+    ],
+    "live_bytecode_verified": false,
+    "repository": "https://github.com/lista-dao/synclub-contracts",
+    "role": "candidate_specification"
+  },
+  "version": "1"
+}

@@ -169,14 +169,17 @@ options:
 ## `guardian explain`
 
 ```text
-usage: guardian explain [-h] [--db DB] [--tenant TENANT] [--json] --event-id EVENT_ID
+usage: guardian explain [-h] [--db DB] [--tenant TENANT] [--json] --event-id
+                        EVENT_ID [--mcm-config MCM_CONFIG] [--refresh]
 
 options:
-  -h, --help           show this help message and exit
-  --db DB              sqlite path
-  --tenant TENANT      local tenant scope (required when ambiguous)
-  --json               print JSON (this is always on)
+  -h, --help            show this help message and exit
+  --db DB               sqlite path
+  --tenant TENANT       local tenant scope (required when ambiguous)
+  --json                print JSON (this is always on)
   --event-id EVENT_ID
+  --mcm-config MCM_CONFIG
+  --refresh             re-read historical state through --mcm-config; read-only, no send
 ```
 
 ## `guardian coverage`
