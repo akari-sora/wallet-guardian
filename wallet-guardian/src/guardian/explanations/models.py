@@ -129,6 +129,24 @@ def guard_verdict(verdict: str, gaps: list[str], contradictions: list[str]) -> s
     return verdict
 
 
+def normalize_evidence_blocks(value: Any) -> list[dict[str, Any]]:
+    """Claim/receipt blocks. These are not balance-observation checkpoints."""
+    if not isinstance(value, list):
+        return []
+    found: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        number = item.get("block_number")
+        digest = item.get("block_hash")
+        if isinstance(number, bool) or not isinstance(number, int) or number < 0:
+            continue
+        if not isinstance(digest, str) or not digest.startswith("0x") or len(digest) != 66:
+            continue
+        found.append({"block_hash": digest.lower(), "block_number": number})
+    return found
+
+
 def document(
     *,
     event_id: str,
@@ -154,6 +172,7 @@ def document(
     retry_reason: str | None,
     calculation_version: str | None = None,
     request_uuid: str | None = None,
+    evidence_blocks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     chosen = guard_verdict(verdict, gaps, contradictions)
     body = {
@@ -161,6 +180,7 @@ def document(
         "attempt_state": attempt_state,
         "calculation_version": calculation_version,
         "checkpoint_hashes": checkpoints,
+        "evidence_blocks": normalize_evidence_blocks(evidence_blocks),
         "contradiction_reasons": sorted(set(contradictions)),
         "control_inference": "not_established",
         "established_facts": sorted(set(established)),

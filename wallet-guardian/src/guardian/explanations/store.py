@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from guardian.explanations.models import canonical, fingerprint
 
@@ -264,6 +264,7 @@ def complete_job(
             database.conn.rollback()
             return "stale"
         _insert_unlocked(database, tenant, event_id, body, evidence)
+        _store_evidence_anchors(database, tenant, event_id, body, attempt, event_revision)
         updated = database.conn.execute(
             """
             UPDATE explanation_jobs
@@ -282,6 +283,38 @@ def complete_job(
         database.conn.rollback()
         _mark_persistence_failure(database, tenant, event_id, attempt)
         return "failed"
+
+
+def _store_evidence_anchors(
+    database: Any,
+    tenant: str,
+    event_id: str,
+    body: dict[str, Any],
+    attempt: int,
+    generation: int,
+) -> None:
+    """Keep claim/receipt blocks on the job so a later reorg can fence them.
+
+    Balance checkpoints are left untouched. An empty list is not a checkpoint.
+    """
+    blocks = body.get("evidence_blocks")
+    if not isinstance(blocks, list) or not blocks:
+        return
+    row = database.conn.execute(
+        "SELECT payload FROM explanation_jobs WHERE tenant_id=? AND event_id=?",
+        (tenant, event_id),
+    ).fetchone()
+    if row is None or not isinstance(row["payload"], str):
+        return
+    payload = _loads(row["payload"])
+    payload["evidence_blocks"] = blocks
+    database.conn.execute(
+        """
+        UPDATE explanation_jobs SET payload=?
+        WHERE tenant_id=? AND event_id=? AND state='running' AND attempt=? AND event_revision=?
+        """,
+        (canonical(payload), tenant, event_id, attempt, generation),
+    )
 
 
 def _mark_persistence_failure(database: Any, tenant: str, event_id: str, attempt: int) -> None:
@@ -440,6 +473,27 @@ def _checkpoint_hashes(payload: Any) -> set[str]:
     return found
 
 
+def _reorg_hashes(payload: Any) -> set[str]:
+    """Hashes that fence a job. Evidence blocks are not balance checkpoints."""
+    found = _checkpoint_hashes(payload)
+    if not isinstance(payload, dict):
+        return found
+    hashes = payload.get("checkpoint_hashes")
+    if isinstance(hashes, dict):
+        for value in hashes.values():
+            if isinstance(value, str) and value:
+                found.add(value.lower())
+    blocks = payload.get("evidence_blocks")
+    if isinstance(blocks, list):
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            digest = block.get("block_hash")
+            if isinstance(digest, str) and digest.startswith("0x") and len(digest) == 66:
+                found.add(digest.lower())
+    return found
+
+
 def _supersede_one(database: Any, tenant: str, job: dict[str, Any], target: str) -> bool:
     database.conn.execute("BEGIN IMMEDIATE")
     try:
@@ -459,14 +513,13 @@ def _supersede_one(database: Any, tenant: str, job: dict[str, Any], target: str)
             return True
         current = _loads(current_row["payload"])
         current["revision"] = int(current_row["revision"])
-        hashes = current.get("checkpoint_hashes") if isinstance(current.get("checkpoint_hashes"), dict) else {}
-        owned = {str(value).lower() for value in hashes.values() if isinstance(value, str) and value}
+        owned = _reorg_hashes(current)
         live_payload = database.conn.execute(
             "SELECT payload FROM explanation_jobs WHERE tenant_id=? AND event_id=?",
             (tenant, job["event_id"]),
         ).fetchone()
         if live_payload is not None:
-            owned.update(_checkpoint_hashes(_loads(live_payload["payload"])))
+            owned.update(_reorg_hashes(_loads(live_payload["payload"])))
         if target not in owned:
             database.conn.rollback()
             return False
@@ -494,6 +547,7 @@ def _supersede_one(database: Any, tenant: str, job: dict[str, Any], target: str)
         body["severity_changed"] = False
         evidence = fingerprint({"reorg": target, "supersedes": current["revision"], "event_id": job["event_id"]})
         _insert_unlocked(database, tenant, job["event_id"], body, evidence)
+        hashes = current.get("checkpoint_hashes") if isinstance(current.get("checkpoint_hashes"), dict) else {}
         token = hold_token(
             database, tenant, str(job["wallet_id"]), str(job["network"]),
             {key: str(value) for key, value in hashes.items()},
@@ -531,7 +585,7 @@ def _fence_unrevised(database: Any, tenant: str, event_id: str, target: str) -> 
     if live is None:
         return False
     payload = _loads(live["payload"])
-    if target not in _checkpoint_hashes(payload):
+    if target not in _reorg_hashes(payload):
         return False
     if str(live["retry_reason"] or "") == "reorg":
         return False
@@ -679,6 +733,47 @@ def load_interval(database: Any, tenant: str, event_id: str) -> tuple[int | None
     return cursor, logs
 
 
+_OWNER_EXISTS = """
+EXISTS (
+  SELECT 1 FROM explanation_jobs
+  WHERE tenant_id=? AND event_id=? AND state='running' AND attempt=? AND event_revision=?
+)
+"""
+
+
+def _discovery_fenced(event_id: str | None, attempt: int | None, generation: int | None) -> bool:
+    return event_id is not None and attempt is not None and generation is not None
+
+
+def _discovery_write(
+    database: Any,
+    tenant: str,
+    event_id: str | None,
+    attempt: int | None,
+    generation: int | None,
+    write: Callable[[bool], bool],
+) -> None:
+    """Apply write only while this attempt still owns the generation.
+
+    ``with connection`` does not open a transaction. BEGIN IMMEDIATE does,
+    including when isolation_level is the default deferred mode. A read
+    before that transaction can pass and then go stale, so a fenced write
+    repeats the attempt/generation predicate in the same transaction.
+    """
+    fenced = _discovery_fenced(event_id, attempt, generation)
+    if fenced and not _discovery_current(database, tenant, event_id, attempt, generation):
+        return
+    database.conn.execute("BEGIN IMMEDIATE")
+    try:
+        if write(fenced):
+            database.conn.commit()
+        else:
+            database.conn.rollback()
+    except Exception:
+        database.conn.rollback()
+        raise
+
+
 def save_interval(
     database: Any,
     tenant: str,
@@ -689,19 +784,36 @@ def save_interval(
     attempt: int | None = None,
     generation: int | None = None,
 ) -> None:
-    if not _discovery_current(database, tenant, event_id, attempt, generation):
-        return
-    with database.conn:
-        database.conn.execute(
-            """
+    encoded = canonical(logs)
+
+    def write(fenced: bool) -> bool:
+        if not fenced:
+            database.conn.execute(
+                """
+                INSERT INTO explanation_discovery(tenant_id, event_id, interval_cursor, logs_json)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(tenant_id, event_id) DO UPDATE SET
+                  interval_cursor=excluded.interval_cursor,
+                  logs_json=excluded.logs_json
+                """,
+                (tenant, event_id, cursor, encoded),
+            )
+            return True
+        updated = database.conn.execute(
+            f"""
             INSERT INTO explanation_discovery(tenant_id, event_id, interval_cursor, logs_json)
-            VALUES (?, ?, ?, ?)
+            SELECT ?, ?, ?, ?
+            WHERE {_OWNER_EXISTS}
             ON CONFLICT(tenant_id, event_id) DO UPDATE SET
               interval_cursor=excluded.interval_cursor,
               logs_json=excluded.logs_json
+            WHERE {_OWNER_EXISTS}
             """,
-            (tenant, event_id, cursor, canonical(logs)),
+            (tenant, event_id, cursor, encoded, tenant, event_id, attempt, generation, tenant, event_id, attempt, generation),
         )
+        return updated.rowcount > 0
+
+    _discovery_write(database, tenant, event_id, attempt, generation, write)
 
 
 def load_lookback(database: Any, tenant: str, network: str, account: str, manager: str) -> int | None:
@@ -729,18 +841,32 @@ def save_lookback(
     attempt: int | None = None,
     generation: int | None = None,
 ) -> None:
-    if event_id is not None and not _discovery_current(database, tenant, event_id, attempt, generation):
-        return
-    with database.conn:
-        database.conn.execute(
-            """
+    def write(fenced: bool) -> bool:
+        if not fenced:
+            database.conn.execute(
+                """
+                INSERT INTO explanation_lookback(tenant_id, network, account, manager, cursor_block)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(tenant_id, network, account, manager) DO UPDATE SET
+                  cursor_block=excluded.cursor_block
+                """,
+                (tenant, network, account, manager, cursor),
+            )
+            return True
+        updated = database.conn.execute(
+            f"""
             INSERT INTO explanation_lookback(tenant_id, network, account, manager, cursor_block)
-            VALUES (?, ?, ?, ?, ?)
+            SELECT ?, ?, ?, ?, ?
+            WHERE {_OWNER_EXISTS}
             ON CONFLICT(tenant_id, network, account, manager) DO UPDATE SET
               cursor_block=excluded.cursor_block
+            WHERE {_OWNER_EXISTS}
             """,
-            (tenant, network, account, manager, cursor),
+            (tenant, network, account, manager, cursor, tenant, event_id, attempt, generation, tenant, event_id, attempt, generation),
         )
+        return updated.rowcount > 0
+
+    _discovery_write(database, tenant, event_id, attempt, generation, write)
 
 
 def load_requests(database: Any, tenant: str, network: str, account: str, manager: str) -> list[dict[str, Any]]:
@@ -789,9 +915,9 @@ def save_requests(
     A second copy that disagrees does not replace the first. The row is marked
     as a conflict and is not a verified request.
     """
-    if event_id is not None and not _discovery_current(database, tenant, event_id, attempt, generation):
-        return
-    with database.conn:
+    def write(fenced: bool) -> bool:
+        attempted = False
+        accepted = False
         for item in logs:
             kind = item.get("kind")
             if kind not in {"request", "claim"}:
@@ -807,12 +933,56 @@ def save_requests(
             conflict = 1 if item.get("conflict") else 0
             block_hash = str(item.get("block_hash") or "").lower()
             data_json = canonical([int(word) for word in words])
-            database.conn.execute(
-                """
+            values = (
+                tenant,
+                network,
+                account,
+                manager,
+                tx_id,
+                log_index,
+                int(item.get("block_number") or 0),
+                int(item.get("tx_index") or 0),
+                str(words[0]),
+                str(item.get("topic") or ""),
+                str(item.get("address") or manager),
+                block_hash,
+                removed,
+                conflict,
+                str(kind),
+                data_json,
+            )
+            if not fenced:
+                database.conn.execute(
+                    """
+                    INSERT INTO explanation_request_evidence(
+                      tenant_id, network, account, manager, tx_id, log_index, block_number, tx_index, slis, topic, address,
+                      block_hash, removed, conflict, kind, data_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(tenant_id, network, account, manager, tx_id, log_index) DO UPDATE SET
+                      conflict = CASE
+                        WHEN explanation_request_evidence.block_hash != excluded.block_hash
+                          OR explanation_request_evidence.removed != excluded.removed
+                          OR explanation_request_evidence.kind != excluded.kind
+                          OR explanation_request_evidence.data_json != excluded.data_json
+                          OR explanation_request_evidence.block_number != excluded.block_number
+                          OR explanation_request_evidence.tx_index != excluded.tx_index
+                        THEN 1
+                        ELSE explanation_request_evidence.conflict
+                      END
+                    """,
+                    values,
+                )
+                accepted = True
+                continue
+            attempted = True
+            owner = (tenant, event_id, attempt, generation)
+            updated = database.conn.execute(
+                f"""
                 INSERT INTO explanation_request_evidence(
                   tenant_id, network, account, manager, tx_id, log_index, block_number, tx_index, slis, topic, address,
                   block_hash, removed, conflict, kind, data_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                WHERE {_OWNER_EXISTS}
                 ON CONFLICT(tenant_id, network, account, manager, tx_id, log_index) DO UPDATE SET
                   conflict = CASE
                     WHEN explanation_request_evidence.block_hash != excluded.block_hash
@@ -824,23 +994,14 @@ def save_requests(
                     THEN 1
                     ELSE explanation_request_evidence.conflict
                   END
+                WHERE {_OWNER_EXISTS}
                 """,
-                (
-                    tenant,
-                    network,
-                    account,
-                    manager,
-                    tx_id,
-                    log_index,
-                    int(item.get("block_number") or 0),
-                    int(item.get("tx_index") or 0),
-                    str(words[0]),
-                    str(item.get("topic") or ""),
-                    str(item.get("address") or manager),
-                    block_hash,
-                    removed,
-                    conflict,
-                    str(kind),
-                    data_json,
-                ),
+                (*values, *owner, *owner),
             )
+            if updated.rowcount > 0:
+                accepted = True
+        if fenced and attempted and not accepted:
+            return False
+        return True
+
+    _discovery_write(database, tenant, event_id, attempt, generation, write)

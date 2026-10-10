@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+from decimal import Decimal
 from pathlib import Path
 
 import httpx
@@ -1510,8 +1511,11 @@ def _refresh_internal(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     alert: dict,
+    *,
+    approved: bool = True,
 ) -> tuple[ListaBackend, dict]:
-    _inject_approved(monkeypatch)
+    if approved:
+        _inject_approved(monkeypatch)
     config = _desk(tmp_path, monkeypatch)
     backend = ListaBackend("match", tmp_path)
     database = _db(tmp_path)
@@ -1564,6 +1568,116 @@ def test_expl_fix_internal_amount_disagreement_stays_partial(
     assert body["residual"]["observed_raw_amount"] == str(PAY + 9)
     assert body["checkpoint_hashes"] == {"new": "", "old": ""}
     assert _backend.calls
+
+
+def _bnb(wei: str) -> Decimal:
+    return Decimal(wei) / Decimal(10**18)
+
+
+@pytest.mark.parametrize("approved", [False, True])
+def test_expl_fix_internal_credit_reorg_uses_claim_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    approved: bool,
+) -> None:
+    """Invalidating the claim block supersedes an internal credit and keeps the amount.
+
+    The shipped manifest stays partial. The test-only approval can match.
+    Neither path invents a balance checkpoint.
+    """
+    backend = ListaBackend("match", tmp_path)
+    alert = _producer_internal(PAY, f"lista-internal-{int(approved)}", backend.new)
+    backend, body = _refresh_internal(tmp_path, monkeypatch, capsys, alert, approved=approved)
+    assert backend.calls
+    claim_hash = _hash(backend.new)
+    parent_hash = _hash(backend.new - 1)
+    assert body["checkpoint_hashes"] == {"new": "", "old": ""}
+    assert body["evidence_blocks"] == [{"block_hash": claim_hash, "block_number": backend.new}]
+    assert parent_hash != claim_hash
+    assert body["residual"]["observed_raw_amount"] == str(PAY)
+    assert _bnb(body["residual"]["observed_raw_amount"]) == Decimal("8.421285170186643")
+    if approved:
+        assert body["verdict"] == "MATCHES_OWN_REQUEST", body["gaps"]
+        assert body["amounts"]["actual_claim_payment"] == str(PAY)
+    else:
+        assert body["verdict"] == "PARTIAL", body
+        assert body["facts"].get("request_linkage") == "verified"
+        assert "request_linkage" in body["established_facts"]
+    assert _job(tmp_path)["state"] == "done"
+    database = _db(tmp_path)
+    try:
+        job = jobs_for(database, TENANT)[0]
+        event_id = str(job["event_id"])
+        assert "old_checkpoint" not in job["payload"]
+        assert "new_checkpoint" not in job["payload"]
+        assert job["payload"]["evidence_blocks"] == body["evidence_blocks"]
+        assert supersede_checkpoint(database, TENANT, "bsc-mainnet", claim_hash) == 1
+        fenced = job_for(database, TENANT, event_id)
+        assert fenced is not None
+        assert fenced["state"] == "retry"
+        assert fenced["retry_reason"] == "reorg"
+        assert int(fenced["event_revision"]) == 2
+        assert "old_checkpoint" not in fenced["payload"]
+        assert "new_checkpoint" not in fenced["payload"]
+        current = latest_revision(database, TENANT, event_id)
+        assert current is not None
+        assert current["verdict"] == "UNVERIFIED"
+        assert current["attempt_state"] == "superseded"
+        assert "reorg" in current["gaps"]
+        assert current["event_revision"] == 2
+        assert current["checkpoint_hashes"] == {"new": "", "old": ""}
+        assert current["residual"]["observed_raw_amount"] == str(PAY)
+        assert _bnb(current["residual"]["observed_raw_amount"]) == Decimal("8.421285170186643")
+        assert supersede_checkpoint(database, TENANT, "bsc-mainnet", claim_hash) == 0
+        assert int(job_for(database, TENANT, event_id)["event_revision"]) == 2
+    finally:
+        database.close()
+
+
+def test_expl_fix_evidence_block_fences_before_revision(tmp_path: Path) -> None:
+    """A claim-block anchor fences a job that has no revision and no balance checkpoint."""
+    database = Database(tmp_path / "anchor.sqlite")
+    event_id = "anchor-only"
+    claim = _hash(110)
+    try:
+        enqueue(
+            database, TENANT, event_id,
+            account=OWNER, network="bsc-mainnet", wallet_id=WALLET,
+            payload={
+                "dedup_key": event_id,
+                "direction": "in",
+                "evidence_blocks": [{"block_hash": claim, "block_number": 110}],
+                "kind": "native_unit",
+                "network": "bsc-mainnet",
+                "raw_amount": str(PAY),
+                "transfer_origin": "evm_internal",
+            },
+        )
+        assert claim_job(database, TENANT, event_id) is True
+        owned = job_for(database, TENANT, event_id)
+        assert owned is not None
+        assert supersede_checkpoint(database, TENANT, "bsc-mainnet", claim) == 1
+        fenced = job_for(database, TENANT, event_id)
+        assert fenced is not None
+        assert fenced["state"] == "retry"
+        assert fenced["retry_reason"] == "reorg"
+        assert int(fenced["event_revision"]) == 2
+        assert latest_revision(database, TENANT, event_id) is None
+        assert "old_checkpoint" not in fenced["payload"]
+        assert "new_checkpoint" not in fenced["payload"]
+        assert complete_job(
+            database, TENANT, event_id, {"verdict": "PARTIAL"}, "stale-anchor",
+            attempt=int(owned["attempt"]),
+            event_revision=int(owned["event_revision"]),
+            state="done",
+            retry_reason=None,
+            hold_token=None,
+        ) == "stale"
+        assert supersede_checkpoint(database, TENANT, "bsc-mainnet", claim) == 0
+        assert int(job_for(database, TENANT, event_id)["event_revision"]) == 2
+    finally:
+        database.close()
 
 
 def test_expl_fix_transaction_index_must_agree(
@@ -1676,6 +1790,120 @@ def test_expl_fix_stale_discovery_is_not_overwritten(tmp_path: Path) -> None:
         assert [row["tx_id"] for row in stored] == [REQ]
         assert complete_job(
             database, TENANT, event_id, {"verdict": "MATCHES_OWN_REQUEST"}, "stale-discovery",
+            attempt=int(owned["attempt"]),
+            event_revision=int(owned["event_revision"]),
+            state="done",
+            retry_reason=None,
+            hold_token=None,
+        ) == "stale"
+        assert latest_revision(database, TENANT, event_id) is None
+        assert int(job_for(database, TENANT, event_id)["event_revision"]) == 2
+    finally:
+        database.close()
+
+
+def _discovery_request(manager: str, tx_id: str) -> dict:
+    return {
+        "address": manager,
+        "block_hash": _hash(40),
+        "block_number": 40,
+        "data_words": [SLIS],
+        "kind": "request",
+        "log_index": 4,
+        "topic": "0x" + "cd" * 32,
+        "tx_id": tx_id,
+        "tx_index": 0,
+    }
+
+
+@pytest.mark.parametrize("writer", ["interval", "lookback", "requests"])
+def test_expl_fix_discovery_check_write_interleave(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, writer: str) -> None:
+    """Two connections. The ownership read passes, then the other worker saves cursor 40.
+
+    The first worker's later write is rejected. It must not move 40 back to 1
+    or append a stale-generation request.
+    """
+    import guardian.explanations.store as explanation_store
+
+    path = tmp_path / "interleave.sqlite"
+    event_id = f"interleave-{writer}"
+    manager = "0x" + "ab" * 20
+    kept = _discovery_request(manager, REQ)
+    stale = _discovery_request(manager, REQ_B)
+    database = Database(path)
+    try:
+        _checkpoint_job(database, event_id)
+        assert claim_job(database, TENANT, event_id) is True
+        owned = job_for(database, TENANT, event_id)
+        assert owned is not None
+        assert int(owned["attempt"]) == 1
+        assert int(owned["event_revision"]) == 1
+
+        def peer() -> None:
+            other = Database(path)
+            try:
+                other.conn.execute("PRAGMA busy_timeout=2000")
+                assert supersede_checkpoint(other, TENANT, "bsc-mainnet", _hash(100)) == 1
+                assert claim_job(other, TENANT, event_id) is True
+                live = job_for(other, TENANT, event_id)
+                assert live is not None
+                attempt = int(live["attempt"])
+                generation = int(live["event_revision"])
+                assert attempt == 2
+                assert generation == 2
+                if writer == "interval":
+                    save_interval(other, TENANT, event_id, 40, [kept], attempt=attempt, generation=generation)
+                elif writer == "lookback":
+                    save_lookback(
+                        other, TENANT, "bsc-mainnet", OWNER, manager, 40,
+                        event_id=event_id, attempt=attempt, generation=generation,
+                    )
+                else:
+                    save_requests(
+                        other, TENANT, "bsc-mainnet", OWNER, manager, [kept],
+                        event_id=event_id, attempt=attempt, generation=generation,
+                    )
+            finally:
+                other.close()
+
+        real = explanation_store._discovery_current
+        state = {"used": False}
+
+        def wrapped(database_arg, tenant, checked_event, attempt, generation):
+            result = real(database_arg, tenant, checked_event, attempt, generation)
+            if state["used"] or not result or attempt != 1 or generation != 1 or checked_event != event_id:
+                return result
+            state["used"] = True
+            peer()
+            return result
+
+        monkeypatch.setattr(explanation_store, "_discovery_current", wrapped)
+        if writer == "interval":
+            save_interval(database, TENANT, event_id, 1, [stale], attempt=1, generation=1)
+            cursor, logs = load_interval(database, TENANT, event_id)
+            assert cursor == 40
+            assert [row["tx_id"] for row in logs] == [REQ]
+        elif writer == "lookback":
+            save_lookback(
+                database, TENANT, "bsc-mainnet", OWNER, manager, 1,
+                event_id=event_id, attempt=1, generation=1,
+            )
+            assert load_lookback(database, TENANT, "bsc-mainnet", OWNER, manager) == 40
+        else:
+            save_requests(
+                database, TENANT, "bsc-mainnet", OWNER, manager, [stale],
+                event_id=event_id, attempt=1, generation=1,
+            )
+            stored = load_requests(database, TENANT, "bsc-mainnet", OWNER, manager)
+            assert [row["tx_id"] for row in stored] == [REQ]
+        assert state["used"] is True
+        outsider = Database(path)
+        try:
+            assert claim_job(outsider, TENANT, event_id) is False
+        finally:
+            outsider.close()
+        assert complete_job(
+            database, TENANT, event_id, {"verdict": "MATCHES_OWN_REQUEST"}, "stale-interleave",
             attempt=int(owned["attempt"]),
             event_revision=int(owned["event_revision"]),
             state="done",

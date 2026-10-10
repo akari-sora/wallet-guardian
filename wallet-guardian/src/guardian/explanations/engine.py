@@ -350,6 +350,7 @@ def _evidence(body: dict[str, Any]) -> dict[str, Any]:
         "attempt_state": body.get("attempt_state"),
         "calculation_version": body.get("calculation_version"),
         "checkpoint_hashes": body.get("checkpoint_hashes"),
+        "evidence_blocks": body.get("evidence_blocks"),
         "contradiction_reasons": body.get("contradiction_reasons"),
         "event_id": body.get("event_id"),
         "event_revision": body.get("event_revision"),

@@ -185,9 +185,11 @@ def _explain_transfer(
         return stop("parent_hash_mismatch", None)
     old = (block - 1, str(parent_header["hash"]))
     new = (block, str(header["hash"]))
+    # The parent is only the queue read. It is not a balance observation.
+    anchors = [{"block_number": new[0], "block_hash": new[1]}]
     return _finish_span(
         ctx, alert, manifest, rpc, account, facts, gaps, contradictions, established,
-        parties, amounts, refs, event_id, old, new, checkpoints, amount, tx_id,
+        parties, amounts, refs, event_id, old, new, checkpoints, amount, tx_id, anchors,
     )
 
 
@@ -210,13 +212,17 @@ def _finish_span(
     checkpoints: dict[str, str],
     bound_amount: int | None,
     only_tx: str | None,
+    evidence_blocks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    def seal(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return _sealed(*args, evidence_blocks=evidence_blocks, **kwargs)
+
     logs, log_error = _collect_logs(ctx, rpc, manifest, account, old[0], new[0])
     if log_error and log_error != "truncated_logs":
         extra = _empty_queue_gap(rpc, manifest, account, new[1], gaps)
         gaps.extend(extra)
         gaps.append(log_error)
-        return _sealed(
+        return seal(
             rpc, event_id, manifest, "UNVERIFIED", facts, gaps, [], [],
             parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, log_error,
         )
@@ -230,13 +236,13 @@ def _finish_span(
         gaps.append("claim_evidence_mismatch")
     if not claims:
         if "truncated_logs" in gaps:
-            return _sealed(
+            return seal(
                 rpc, event_id, manifest, "UNVERIFIED", facts, gaps, [], [],
                 parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, "truncated_logs",
             )
         gaps.append("no_claim_in_interval")
         gaps.extend(_empty_queue_gap(rpc, manifest, account, new[1], gaps))
-        return _sealed(
+        return seal(
             rpc, event_id, manifest, "UNVERIFIED", facts, gaps, [], [],
             parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, None,
         )
@@ -261,7 +267,7 @@ def _finish_span(
             request_uuid = str(outcome["uuid"])
         verdicts.append(str(outcome["verdict"]))
         if outcome["verdict"] == "NO_MATCH":
-            return _sealed(
+            return seal(
                 rpc, event_id, manifest, "NO_MATCH", facts, gaps, contradictions, established,
                 parties, amounts, effects, _residual(alert, explained), refs, checkpoints,
                 identities[0] if len(identities) == 1 else None, request_uuid, None, calculation,
@@ -284,7 +290,7 @@ def _finish_span(
     elif "provider_call_budget" in gaps:
         retry = "provider_call_budget"
     identity = identities[0] if len(identities) == 1 else None
-    return _sealed(
+    return seal(
         rpc, event_id, manifest, verdict, facts, gaps, contradictions, established,
         parties, amounts, effects, _residual(alert, explained), refs, checkpoints,
         identity, request_uuid, retry, calculation,
@@ -1138,6 +1144,7 @@ def _sealed(
     request_uuid: str | None,
     retry: str | None,
     calculation: str | None = None,
+    evidence_blocks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     late = rpc.stopped == "deadline" or rpc.remaining_seconds() <= 0
     if late:
@@ -1160,6 +1167,7 @@ def _sealed(
     return _finish(
         event_id, manifest, verdict, facts, gaps, contradictions, established,
         parties, amounts, effects, residual, refs, checkpoints, identity, request_uuid, retry, calculation,
+        evidence_blocks,
     )
 
 
@@ -1181,6 +1189,7 @@ def _finish(
     request_uuid: str | None,
     retry: str | None,
     calculation: str | None = None,
+    evidence_blocks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if "request_linkage" in facts and facts["request_linkage"] == "verified":
         established.append("request_linkage")
@@ -1208,4 +1217,5 @@ def _finish(
         retry_reason=retry,
         calculation_version=calculation,
         request_uuid=request_uuid,
+        evidence_blocks=evidence_blocks,
     )
