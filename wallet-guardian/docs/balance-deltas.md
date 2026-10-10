@@ -41,7 +41,7 @@ A static label such as Lista StakeManager attaches only to a counterparty alread
 
 ## What this closes, and what the older patrol already did
 
-The older private legacy patrol is outside this package. On 2026-10-10 its 11:20 run did report the +8.421285 BNB claim (ListaStakeManager `claimWithdrawFor`, tx `0xc79b5c45440267284140fcf8ff59a7b7c4c59e6839ea83fc972232b7faa99218`, block 126733521, nonce unchanged) through the NodeReal `internal` transfer category. It reported the claim about three hours after it landed. So the BSC patrol path did list internal transfers.
+The older private legacy patrol is outside this package. In a real BSC case, a native claim of about 8.4 BNB paid out by a liquid-staking withdrawal contract (`claimWithdrawFor`, internal transfer, sender nonce unchanged) was reported by the patrol through the NodeReal `internal` transfer category, about three hours after it landed. So the BSC patrol path did list internal transfers. The regression fixtures in this package reproduce that shape without real wallet identifiers.
 
 The gaps this package addresses are narrower:
 
