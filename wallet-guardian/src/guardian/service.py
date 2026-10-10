@@ -13,6 +13,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -179,8 +180,19 @@ def load_local_env(path: Path | None = None) -> list[str]:
     return loaded
 
 
-def _secret_flags() -> dict[str, str]:
-    return {name: "configured" if os.environ.get(name) else "not_configured" for name in SECRET_ENV}
+def _secret_flags(
+    environ: Mapping[str, str] | None = None,
+    profile_env: str = "MONITOR_SECRET_PROFILE",
+) -> dict[str, str]:
+    """Presence only. The value stays in the shared resolver and is not returned."""
+    from guardian.credentials import profile_from_environ, resolve_named
+
+    pool = os.environ if environ is None else environ
+    profile = profile_from_environ(pool, profile_env)
+    return {
+        name: "configured" if resolve_named(name, profile, pool).present else "not_configured"
+        for name in SECRET_ENV
+    }
 
 
 def etherscan_chainlist_probe(get_text=safe_get_text) -> dict[str, Any]:
@@ -249,7 +261,10 @@ def _systemd_state() -> str:
         return "unavailable"
 
 
-def environment_report() -> dict[str, Any]:
+def environment_report(
+    environ: Mapping[str, str] | None = None,
+    profile_env: str = "MONITOR_SECRET_PROFILE",
+) -> dict[str, Any]:
     root = Path(os.fspath(ROOT))
     ensure_private_dir(root)
     usage = shutil.disk_usage(root)
@@ -277,7 +292,7 @@ def environment_report() -> dict[str, Any]:
         "shared_computer_is_isolation": False,
         "https_webhook_receiver": False,
         "webhook_reason": "no verified public callback and the private seed disallows a public webhook",
-        "credential_slots": _secret_flags(),
+        "credential_slots": _secret_flags(environ, profile_env),
         "paid_subscription_changes": "not_performed",
         "guardian_version": __version__,
     }
@@ -305,14 +320,15 @@ def _probe(name: str, func) -> dict[str, Any]:
     return payload
 
 
-def provider_probes() -> list[dict[str, Any]]:
+def provider_probes(*, live_timeout: float | None = None) -> list[dict[str, Any]]:
     flags = _secret_flags()
+    timeout = 20.0 if live_timeout is None else live_timeout
 
     def etherscan() -> dict[str, Any]:
-        return etherscan_chainlist_probe()
+        return etherscan_chainlist_probe(get_text=lambda url: safe_get_text(url, timeout=timeout))
 
     def bsc() -> dict[str, Any]:
-        rpc = RpcClient(BSC_RPC)
+        rpc = RpcClient(BSC_RPC, timeout=timeout)
         chain_id = int(rpc.call("eth_chainId", []), 16)
         block = rpc.call("eth_getBlockByNumber", ["latest", False])
         if chain_id != 56:
@@ -325,12 +341,12 @@ def provider_probes() -> list[dict[str, Any]]:
         }
 
     def hyperliquid() -> dict[str, Any]:
-        status, body = safe_post_json("https://api.hyperliquid.xyz/info", {"type": "meta"})
+        status, body = safe_post_json("https://api.hyperliquid.xyz/info", {"type": "meta"}, timeout=timeout)
         ok = status == 200 and isinstance(body, dict)
         return {"level": "LIVE_PASS" if ok else "LIVE_FAIL", "http": status}
 
     def ofac() -> dict[str, Any]:
-        status, text = safe_get_text(OFAC_URL)
+        status, text = safe_get_text(OFAC_URL, timeout=timeout)
         import re
 
         addresses = re.findall(r"0x[a-fA-F0-9]{40}", text)
@@ -398,13 +414,45 @@ def provider_probes() -> list[dict[str, Any]]:
     ]
 
 
-def doctor() -> dict[str, Any]:
-    load_local_env()
-    env = environment_report()
-    probes = provider_probes()
+def doctor(
+    *,
+    live: bool = False,
+    mcm_config: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Offline host and credential report. ``live=True`` is the only bounded probe.
+
+    Requested resolver mode, effective resolver mode, connectivity, and egress
+    qualification stay separate. DoH enabled is not a qualified path.
+    """
+    from guardian.configuration import load_public_config
+    from guardian.diagnostics import diagnostic_fields, refuse_secret_leaks, resolutions_for
+
+    if environ is None:
+        load_local_env()
+        pool: Mapping[str, str] = os.environ
+    else:
+        pool = environ
+    document = None
+    if mcm_config:
+        document = load_public_config(mcm_config).document
+    profile_env = "MONITOR_SECRET_PROFILE"
+    if isinstance(document, dict):
+        private = document.get("private_inputs")
+        if isinstance(private, dict) and isinstance(private.get("secret_profile_file_env"), str):
+            profile_env = private["secret_profile_file_env"]
+    env = environment_report(pool, profile_env)
+    probes = provider_probes(live_timeout=5.0) if live else []
+    fields = diagnostic_fields(document, pool, fallback_names=SECRET_ENV)
+    fields["connectivity"] = {
+        "probed": bool(live),
+        "bounded": True,
+        "timeout_seconds": 5 if live else None,
+    }
     report = {
         "status": "completed_with_limitations",
         "mode": "READ_ONLY",
+        "offline": not live,
         "monitoring_active": False,
         "monitoring_mode": monitoring_mode(scheduler_verified=False, next_run_read_back=False),
         "environment": env,
@@ -413,17 +461,37 @@ def doctor() -> dict[str, Any]:
         "assisted_actions_enabled": False,
         "mainnet_test_transactions_authorized": False,
         "agent_may_sign": False,
-        "user_mainnet_send_env": os.environ.get(MAINNET_SEND_ENV, "false").lower() == "true",
+        "user_mainnet_send_env": str(pool.get(MAINNET_SEND_ENV, "false")).lower() == "true",
         "writes_enabled": False,
+        **fields,
     }
+    secrets = [
+        item.reveal()
+        for item in resolutions_for(document, pool, fallback_names=SECRET_ENV)
+        if item.present
+    ]
+    refuse_secret_leaks(report, secrets)
     secure_write_text(ROOT / "environment_report.json", json.dumps(report["environment"], indent=2) + "\n")
     secure_write_text(
         ROOT / "source_registry.json",
-        json.dumps({"generated_at_taipei": now_local(), "providers": probes}, indent=2) + "\n",
+        json.dumps(
+            {"generated_at_taipei": now_local(), "offline": not live, "providers": probes},
+            indent=2,
+        )
+        + "\n",
     )
     secure_write_text(
         ROOT / "provider_benchmark.json",
-        json.dumps({"generated_at_taipei": now_local(), "results": probes, "stress_tests": "BLOCKED"}, indent=2) + "\n",
+        json.dumps(
+            {
+                "generated_at_taipei": now_local(),
+                "offline": not live,
+                "results": probes,
+                "stress_tests": "NOT_RUN" if not live else "BLOCKED",
+            },
+            indent=2,
+        )
+        + "\n",
     )
     return report
 

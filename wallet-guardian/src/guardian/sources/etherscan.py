@@ -72,14 +72,25 @@ class HistoryRead:
         object.__setattr__(self, "reason_codes", tuple(self.reason_codes))
 
 
-def resolve_credential(environ: Mapping[str, str], name: str) -> str:
-    """Resolve a secret from an environment-variable name. The name is not a value."""
+def resolve_credential(
+    environ: Mapping[str, str],
+    name: str,
+    profile: Mapping[str, str] | None = None,
+) -> str:
+    """Resolve a secret by variable name. Profile wins, then the process environment.
+
+    The name is not a value. A 401 does not switch to the other source; callers
+    keep the string this function returned.
+    """
     if not isinstance(name, str) or _ENV_NAME.fullmatch(name) is None:
         raise ValueError("credential_env")
-    value = environ.get(name)
-    if not isinstance(value, str) or not value or value.strip() != value:
+    from guardian.credentials import profile_from_environ, resolve_named
+
+    loaded = profile if profile is not None else profile_from_environ(environ)
+    found = resolve_named(name, loaded, environ)
+    if not found.present:
         raise ValueError("credential_missing")
-    return value
+    return found.reveal()
 
 
 def plan_not_supported(body: Any) -> bool:

@@ -26,14 +26,18 @@ options:
 ## `guardian doctor`
 
 ```text
-usage: guardian doctor [-h] [--db DB] [--tenant TENANT] [--json]
+usage: guardian doctor [-h] [--db DB] [--tenant TENANT] [--json] [--mcm-config MCM_CONFIG] [--live]
 
 options:
-  -h, --help       show this help message and exit
-  --db DB          sqlite path
-  --tenant TENANT  local tenant scope (required when ambiguous)
-  --json           print JSON (this is always on)
+  -h, --help            show this help message and exit
+  --db DB               sqlite path
+  --tenant TENANT       local tenant scope (required when ambiguous)
+  --json                print JSON (this is always on)
+  --mcm-config MCM_CONFIG
+  --live                bounded live probe; omitted doctor stays offline
 ```
+
+Offline unless `--live` is passed. `--live` is a bounded provider probe. It does not qualify egress. DoH enabled is not a qualified path. With `--mcm-config`, credential lines name the variable, `selected_from` (`profile`, `env`, or `absent`), `present`, and `shadowed`. They do not print values.
 
 ## `guardian run-once`
 

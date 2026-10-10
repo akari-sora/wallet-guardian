@@ -30,6 +30,41 @@ Hitting the cap or the deadline records `partial` with `bootstrap_request_cap` o
 
 The free Etherscan V2 plan returns history for Ethereum, Arbitrum, and Polygon. Base, Optimism, BNB Chain, and Avalanche on that free plan return `plan_not_supported` ("Free API access is not supported for this chain"). The refusal is cached for that source and network. Later wallets and the next round skip straight to the fallback. A cached refusal is not an empty history. Avalanche deep native history is `expansion_pending` in the coverage matrix. Base on Blockscout PRO's free plan is HTTP 402, also `plan_not_supported`, then the keyless Base instance. Optimism on that Blockscout plan returned HTTP 200 in the recorded probe. That is not the Base refusal.
 
+## Network names
+
+Registry ids are the state key. These spellings are the same chain. Typing either one does not create a second baseline:
+
+| Typed name | Canonical id |
+| --- | --- |
+| arbitrum-mainnet | arbitrum-one |
+| arbitrum-one | arbitrum-one |
+| polygon-mainnet | polygon-pos |
+| polygon-pos | polygon-pos |
+
+`arbitrum-mainnet` and `polygon-mainnet` are the `*-mainnet` names people type because most other chains use that pattern. `arbitrum-one` and `polygon-pos` are the ids in `config/chains`. Accounts, routes, and `enabled_networks` all normalize to the canonical id. Any other name fails. The error lists the valid ids and suggestions. A close name is not selected for you.
+
+## Where a key is read
+
+A nonempty value in the private secret profile wins. A blank or missing profile value falls through to the process environment. Doctor, coverage, and the adapters use that same rule. After a 401 the monitor does not try the other source.
+
+`guardian doctor` and `guardian coverage --mcm-config` print `variable`, `selected_from` (`profile`, `env`, or `absent`), `present`, and `shadowed`. `shadowed` means the source that was not selected also had a nonempty value. The value itself is not printed.
+
+## Doctor, resolver mode, and egress
+
+`guardian doctor` stays offline. It does not open provider connections. `--live` is an explicit probe with a 5 second cap per call. `providers verify` is the other explicit probe.
+
+The report keeps four facts apart:
+
+| Field | Meaning |
+| --- | --- |
+| `resolver.requested_mode` | `system` or `doh`, from `GUARDIAN_RESOLVER_MODE` (or the env name in the monitor's `resolver` block) |
+| `resolver.effective_mode` | The mode the loader actually selected. Null when the settings are not usable |
+| `resolver.endpoints` | DoH hostnames only. Not URLs, not keys |
+| `connectivity.probed` | True only after `--live` |
+| `egress_qualification.qualified` | False here. DoH enabled is not a qualified path |
+
+`GUARDIAN_DOH_ENDPOINTS` is a comma-separated list of HTTPS resolver URLs. `GUARDIAN_DOH_BOOTSTRAP` pins those hosts. See [host-network.md](host-network.md). Formal qualification is `guardian egress-doctor`, not this doctor report.
+
 ## DNS and egress blocked
 
 If the system resolver returns an address in `198.18.0.0/15`, the lookup is refused. That range is not allowlisted. Set `GUARDIAN_RESOLVER_MODE=doh` and supply `GUARDIAN_DOH_ENDPOINTS` and `GUARDIAN_DOH_BOOTSTRAP` as [host-network.md](host-network.md) describes. The public config only names those variables.

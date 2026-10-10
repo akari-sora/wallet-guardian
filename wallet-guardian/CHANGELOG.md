@@ -10,6 +10,16 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 
 ## [Unreleased]
 
+### Added
+
+- Explicit network aliases: `arbitrum-mainnet` and `polygon-mainnet` normalize to the registry ids `arbitrum-one` and `polygon-pos` on accounts, routes, and enabled networks. Typing the registry id keeps that id, so an existing baseline stays the state key. Unknown names fail with the valid ids and suggestions.
+- One credential resolver for doctor, coverage, and the read adapters. A nonempty secret-profile value wins over the process environment. Diagnostics show the variable name, `selected_from` (`profile`, `env`, or `absent`), presence, and whether the other source was shadowed. Values are not printed. A 401 does not switch source.
+- `guardian doctor` is offline unless `--live` is set. The report separates requested resolver mode, effective resolver mode, connectivity, and egress qualification. DoH enabled is not a qualified path. `providers verify` still runs the bounded provider probe.
+
+### Changed
+
+- `guardian doctor` no longer contacts providers unless `--live` is passed. `--live` uses a 5 second cap per call.
+
 ## [0.4.0rc3] - 2026-10-10
 
 Preview channel. The manifest is a pre-publication evidence snapshot: its `published: false` records that generation stage, and the GitLab release is recorded separately. No package-index upload is performed. The monitor is read-only: it does not sign, build a transaction, or broadcast. Wheel: `wallet_guardian_monitor-0.4.0rc3-py3-none-any.whl`.

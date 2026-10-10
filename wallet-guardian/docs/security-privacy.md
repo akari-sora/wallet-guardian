@@ -39,7 +39,7 @@ Private directories are mode `0700` and new private files are mode `0600` on POS
 
 Anyone who can read the state directory can read cursors, coverage, and unsent alerts. Anyone who can write it can change what you think the chain said. `--force` on init backs up config files and leaves `monitor.sqlite` untouched. Config backups can contain watch addresses. Treat them as private.
 
-`guardian doctor` writes `environment_report.json`, `source_registry.json`, and `provider_benchmark.json` under the state directory. It can contact configured read endpoints. It does not print key values.
+`guardian doctor` writes `environment_report.json`, `source_registry.json`, and `provider_benchmark.json` under the state directory. The default report is offline. `--live` is a bounded provider probe. Neither report prints key values, and DoH enabled is not a qualified path.
 
 ## How to verify
 

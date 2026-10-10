@@ -2,6 +2,10 @@
 
 Wallet Guardian reads public chain data. Keys are optional. Put them in the private secret profile (the file named by `MONITOR_SECRET_PROFILE`) or in the process environment. Never commit a key, a keyed URL, or a secret profile to this repo. The public config only names the variables.
 
+A nonempty value in the secret profile is used. If that value is missing or blank, the process environment is used. `guardian doctor`, `guardian coverage`, and the read adapters share that resolver. A 401 does not switch to the other source. Doctor and coverage show provenance only: the variable name, `selected_from` (`profile`, `env`, or `absent`), whether a value is present, and whether the other source was shadowed. They do not print the value, a fragment of it, or a URL that contains a key.
+
+Resolver mode is not a key. `GUARDIAN_RESOLVER_MODE`, `GUARDIAN_DOH_ENDPOINTS`, and `GUARDIAN_DOH_BOOTSTRAP` choose system DNS or DNS-over-HTTPS. DoH enabled is not a qualified path. See [host-network.md](host-network.md).
+
 A missing key is never printed. `credential_missing` rows, `guardian config validate`, and `guardian sources probe` name the variable and point here, for example `ETHERSCAN_API_KEY see docs/api-keys.md#etherscan`.
 
 Limits below are the provider's published free tier at the time this note was written. Check current terms before you rely on a number. This project does not buy a plan or turn on automatic upgrades.

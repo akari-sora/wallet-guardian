@@ -53,7 +53,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.set_defaults(db=None)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("doctor", parents=[common])
+    doctor_cmd = sub.add_parser("doctor", parents=[common])
+    doctor_cmd.add_argument("--mcm-config", default=None)
+    doctor_cmd.add_argument("--live", action="store_true", help="bounded live probe; omitted doctor stays offline")
     run = sub.add_parser("run-once", parents=[common])
     selected = run.add_mutually_exclusive_group(required=True)
     selected.add_argument("--config")
@@ -219,7 +221,7 @@ def dispatch(
     if args.command == "egress-doctor":
         return _egress_doctor(args, egress_hooks)
     if args.command == "doctor":
-        return doctor(), 0
+        return doctor(live=bool(getattr(args, "live", False)), mcm_config=getattr(args, "mcm_config", None)), 0
     if args.command == "run-once":
         if getattr(args, "mcm_config", None):
             return _mcm_run(args, backend, sender, clock, notification_backend, notification_resolve)
@@ -245,7 +247,7 @@ def dispatch(
             "operation": operation_coverage(),
         }, 0
     if args.command == "providers":
-        report = doctor()
+        report = doctor(live=True)
         return {"providers": report["providers"]}, 0
     if args.command == "wallets":
         result = run_once(Path(args.config), Path(args.db) if args.db else None)
@@ -560,12 +562,23 @@ def _mcm_run(
 
 
 def _mcm_coverage(args: argparse.Namespace) -> tuple[dict, int]:
+    from guardian.diagnostics import diagnostic_fields
+
     public, private, database = _open_mcm(args.mcm_config)
     try:
         rows = stored_coverage(database, private.accounts.tenant_id)
     finally:
         database.close()
-    return {"live_verified": False, "rows": rows, "status": "ok"}, 0
+    fields = diagnostic_fields(public.document, os.environ)
+    return {
+        "live_verified": False,
+        "rows": rows,
+        "status": "ok",
+        "credentials": fields["credentials"],
+        "resolver": fields["resolver"],
+        "connectivity": fields["connectivity"],
+        "egress_qualification": fields["egress_qualification"],
+    }, 0
 
 
 def _mcm_export(args: argparse.Namespace) -> tuple[dict, int]:

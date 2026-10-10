@@ -848,12 +848,13 @@ def _blockscout(scan, source_id, source, transport=None) -> BlockscoutClient:
 
 
 def _secret(scan, name: str) -> str:
-    from guardian.configuration import _env_path, _load_secret_profile
+    """Profile, then process environment. The same resolver doctor uses. A 401 does not switch."""
     import os
-    path = _env_path(os.environ, scan.public_config.document["private_inputs"]["secret_profile_file_env"])
-    secrets = _load_secret_profile(path)
-    value = secrets.get(name, "")
-    return value if isinstance(value, str) else ""
+
+    from guardian.credentials import reveal_for_profile_env
+
+    env_name = scan.public_config.document["private_inputs"]["secret_profile_file_env"]
+    return reveal_for_profile_env(name, os.environ, env_name)
 
 
 def _finish(scan, capability, wallets, origin, target, leaves, gaps, hard, stopped, category, source_id, permission=False) -> None:
