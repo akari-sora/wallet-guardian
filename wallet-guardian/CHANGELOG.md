@@ -23,6 +23,7 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 
 ### Fixed
 
+- A running explanation job keeps a SQLite lease. Another process cannot take it before the lease expires, and a reorg fences the job before the first revision.
 - An internal native credit is explained from its transaction and amount. The residual keeps that amount when the alert has no balance checkpoint.
 - A Lista request is not linked by a matching slisBNB amount or by a removed log. The cached row keeps the block hash and the removal flag, and a conflicting copy is not verified. The transaction index has to agree on the discovered claim, the transaction, and the receipt.
 - Experimental read-only attribution with bounded discovery. A verified request match requires an explicitly approved historical deployment and coherent transaction, receipt, request and checkpoint evidence. Incomplete evidence remains partial or unverified. Explanations do not certify fund safety, establish operator control, guarantee complete attribution, or change the underlying movement alert. No live historical-path qualification is claimed.

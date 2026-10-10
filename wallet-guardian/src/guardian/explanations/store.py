@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from guardian.explanations.models import canonical, fingerprint
 
 
-# Attempt tokens owned by this process. A restart leaves the set empty, so a
-# running row can be reclaimed. A live owner is not stolen.
+# Process-local bookkeeping. It is not evidence that a job was abandoned.
+# Abandonment is an expired row in explanation_job_leases.
 _LIVE: dict[tuple[str, str], int] = {}
+LEASE_SECONDS = 120
 
 
 def _now() -> str:
@@ -24,8 +25,62 @@ def _loads(value: str) -> dict[str, Any]:
 
 
 def release_process_claims() -> None:
-    """Drop in-process ownership. The database row is left for the next claim."""
+    """Drop in-process bookkeeping. An unexpired lease still owns the job."""
     _LIVE.clear()
+
+
+def _deadline() -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=LEASE_SECONDS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _lease_unexpired(database: Any, tenant: str, event_id: str, now: str) -> bool:
+    row = database.conn.execute(
+        "SELECT expires_at FROM explanation_job_leases WHERE tenant_id=? AND event_id=?",
+        (tenant, event_id),
+    ).fetchone()
+    return row is not None and str(row["expires_at"]) > now
+
+
+def _write_lease(database: Any, tenant: str, event_id: str, attempt: int) -> None:
+    database.conn.execute(
+        """
+        INSERT INTO explanation_job_leases(tenant_id, event_id, attempt, expires_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(tenant_id, event_id) DO UPDATE SET
+          attempt=excluded.attempt,
+          expires_at=excluded.expires_at
+        """,
+        (tenant, event_id, attempt, _deadline()),
+    )
+
+
+def _drop_lease(database: Any, tenant: str, event_id: str) -> None:
+    database.conn.execute(
+        "DELETE FROM explanation_job_leases WHERE tenant_id=? AND event_id=?",
+        (tenant, event_id),
+    )
+
+
+def _discovery_current(
+    database: Any,
+    tenant: str,
+    event_id: str,
+    attempt: int | None,
+    generation: int | None,
+) -> bool:
+    if attempt is None or generation is None:
+        return True
+    row = database.conn.execute(
+        "SELECT state, attempt, event_revision FROM explanation_jobs WHERE tenant_id=? AND event_id=?",
+        (tenant, event_id),
+    ).fetchone()
+    if row is None:
+        return False
+    return (
+        str(row["state"]) == "running"
+        and int(row["attempt"]) == attempt
+        and int(row["event_revision"]) == generation
+    )
 
 
 def enqueue(
@@ -89,7 +144,12 @@ def job_for(database: Any, tenant: str, event_id: str) -> dict[str, Any] | None:
 
 
 def claim_job(database: Any, tenant: str, event_id: str) -> bool:
-    """One worker owns the job. A live owner keeps it. A restarted process may reclaim it."""
+    """One worker owns the job until its lease expires.
+
+    A running job with an unexpired lease is not taken, including by another
+    process. Process-local memory is not evidence that the job was abandoned.
+    An expired or missing lease on a running job can be reclaimed.
+    """
     key = (tenant, event_id)
     database.conn.execute("BEGIN IMMEDIATE")
     try:
@@ -102,26 +162,18 @@ def claim_job(database: Any, tenant: str, event_id: str) -> bool:
             return False
         state = str(row["state"])
         attempt = int(row["attempt"])
-        if state == "running" and _LIVE.get(key) == attempt:
+        now = _now()
+        if state == "running" and _lease_unexpired(database, tenant, event_id, now):
             database.conn.rollback()
             return False
-        if state == "running":
-            updated = database.conn.execute(
-                """
-                UPDATE explanation_jobs
-                SET state='running', attempt=attempt+1, updated_at=?
-                WHERE tenant_id=? AND event_id=? AND state='running' AND attempt=?
-                """,
-                (_now(), tenant, event_id, attempt),
-            )
-        elif state in {"pending", "retry"}:
+        if state == "running" or state in {"pending", "retry"}:
             updated = database.conn.execute(
                 """
                 UPDATE explanation_jobs
                 SET state='running', attempt=attempt+1, updated_at=?
                 WHERE tenant_id=? AND event_id=? AND state=? AND attempt=?
                 """,
-                (_now(), tenant, event_id, state, attempt),
+                (now, tenant, event_id, state, attempt),
             )
         else:
             database.conn.rollback()
@@ -129,6 +181,7 @@ def claim_job(database: Any, tenant: str, event_id: str) -> bool:
         if updated.rowcount != 1:
             database.conn.rollback()
             return False
+        _write_lease(database, tenant, event_id, attempt + 1)
         database.conn.commit()
     except Exception:
         database.conn.rollback()
@@ -148,16 +201,23 @@ def release_attempt(tenant: str, event_id: str, attempt: int) -> None:
 
 
 def force_pending(database: Any, tenant: str, event_id: str) -> None:
-    """An explicit refresh may re-enter a finished job or an abandoned running job."""
-    row = database.conn.execute(
-        "SELECT state, attempt FROM explanation_jobs WHERE tenant_id=? AND event_id=?",
-        (tenant, event_id),
-    ).fetchone()
-    if row is None:
-        return
-    if str(row["state"]) == "running" and _LIVE.get((tenant, event_id)) == int(row["attempt"]):
-        return
-    with database.conn:
+    """An explicit refresh may re-enter a finished job or a job whose lease expired.
+
+    A running job with an unexpired lease stays running.
+    """
+    database.conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = database.conn.execute(
+            "SELECT state FROM explanation_jobs WHERE tenant_id=? AND event_id=?",
+            (tenant, event_id),
+        ).fetchone()
+        if row is None:
+            database.conn.rollback()
+            return
+        if str(row["state"]) == "running" and _lease_unexpired(database, tenant, event_id, _now()):
+            database.conn.rollback()
+            return
+        _drop_lease(database, tenant, event_id)
         database.conn.execute(
             """
             UPDATE explanation_jobs SET state='pending', retry_reason=NULL, hold_token=NULL, updated_at=?
@@ -165,6 +225,10 @@ def force_pending(database: Any, tenant: str, event_id: str) -> None:
             """,
             (_now(), tenant, event_id),
         )
+        database.conn.commit()
+    except Exception:
+        database.conn.rollback()
+        raise
 
 
 def complete_job(
@@ -211,6 +275,7 @@ def complete_job(
         if updated.rowcount != 1:
             database.conn.rollback()
             return "stale"
+        _drop_lease(database, tenant, event_id)
         database.conn.commit()
         return "stored"
     except Exception:
@@ -239,6 +304,7 @@ def _mark_persistence_failure(database: Any, tenant: str, event_id: str, attempt
                 """,
                 (tenant, event_id, _now()),
             )
+            _drop_lease(database, tenant, event_id)
     except Exception:
         return
 
@@ -360,6 +426,20 @@ def supersede_checkpoint(database: Any, tenant: str, network: str, block_hash: s
     return changed
 
 
+def _checkpoint_hashes(payload: Any) -> set[str]:
+    if not isinstance(payload, dict):
+        return set()
+    found: set[str] = set()
+    for key in ("old_checkpoint", "new_checkpoint"):
+        point = payload.get(key)
+        if not isinstance(point, dict):
+            continue
+        digest = point.get("block_hash")
+        if isinstance(digest, str) and digest.startswith("0x") and len(digest) == 66:
+            found.add(digest.lower())
+    return found
+
+
 def _supersede_one(database: Any, tenant: str, job: dict[str, Any], target: str) -> bool:
     database.conn.execute("BEGIN IMMEDIATE")
     try:
@@ -371,12 +451,22 @@ def _supersede_one(database: Any, tenant: str, job: dict[str, Any], target: str)
             (tenant, job["event_id"]),
         ).fetchone()
         if current_row is None:
-            database.conn.rollback()
-            return False
+            fenced = _fence_unrevised(database, tenant, job["event_id"], target)
+            if not fenced:
+                database.conn.rollback()
+                return False
+            database.conn.commit()
+            return True
         current = _loads(current_row["payload"])
         current["revision"] = int(current_row["revision"])
         hashes = current.get("checkpoint_hashes") if isinstance(current.get("checkpoint_hashes"), dict) else {}
-        owned = {str(value).lower() for value in hashes.values() if isinstance(value, str)}
+        owned = {str(value).lower() for value in hashes.values() if isinstance(value, str) and value}
+        live_payload = database.conn.execute(
+            "SELECT payload FROM explanation_jobs WHERE tenant_id=? AND event_id=?",
+            (tenant, job["event_id"]),
+        ).fetchone()
+        if live_payload is not None:
+            owned.update(_checkpoint_hashes(_loads(live_payload["payload"])))
         if target not in owned:
             database.conn.rollback()
             return False
@@ -417,11 +507,58 @@ def _supersede_one(database: Any, tenant: str, job: dict[str, Any], target: str)
             """,
             (token, generation, _now(), tenant, job["event_id"], int(live["event_revision"])),
         )
+        _drop_lease(database, tenant, job["event_id"])
         database.conn.commit()
         return True
     except Exception:
         database.conn.rollback()
         raise
+
+
+def _fence_unrevised(database: Any, tenant: str, event_id: str, target: str) -> bool:
+    """Advance the generation when a checkpoint reorg arrives before any revision.
+
+    No placeholder revision is inserted. A second reorg of the same hash does
+    not advance the generation again.
+    """
+    live = database.conn.execute(
+        """
+        SELECT event_revision, retry_reason, wallet_id, network, payload
+        FROM explanation_jobs WHERE tenant_id=? AND event_id=?
+        """,
+        (tenant, event_id),
+    ).fetchone()
+    if live is None:
+        return False
+    payload = _loads(live["payload"])
+    if target not in _checkpoint_hashes(payload):
+        return False
+    if str(live["retry_reason"] or "") == "reorg":
+        return False
+    generation = int(live["event_revision"]) + 1
+    checkpoints = {
+        "new": "",
+        "old": "",
+    }
+    raw_new = payload.get("new_checkpoint") if isinstance(payload, dict) else None
+    raw_old = payload.get("old_checkpoint") if isinstance(payload, dict) else None
+    if isinstance(raw_new, dict) and isinstance(raw_new.get("block_hash"), str):
+        checkpoints["new"] = raw_new["block_hash"].lower()
+    if isinstance(raw_old, dict) and isinstance(raw_old.get("block_hash"), str):
+        checkpoints["old"] = raw_old["block_hash"].lower()
+    token = hold_token(database, tenant, str(live["wallet_id"]), str(live["network"]), checkpoints, "")
+    updated = database.conn.execute(
+        """
+        UPDATE explanation_jobs
+        SET state='retry', retry_reason='reorg', hold_token=?, event_revision=?, updated_at=?
+        WHERE tenant_id=? AND event_id=? AND event_revision=?
+        """,
+        (token, generation, _now(), tenant, event_id, int(live["event_revision"])),
+    )
+    if updated.rowcount != 1:
+        return False
+    _drop_lease(database, tenant, event_id)
+    return True
 
 
 def record_enqueue_failure(
@@ -542,7 +679,18 @@ def load_interval(database: Any, tenant: str, event_id: str) -> tuple[int | None
     return cursor, logs
 
 
-def save_interval(database: Any, tenant: str, event_id: str, cursor: int | None, logs: list[dict[str, Any]]) -> None:
+def save_interval(
+    database: Any,
+    tenant: str,
+    event_id: str,
+    cursor: int | None,
+    logs: list[dict[str, Any]],
+    *,
+    attempt: int | None = None,
+    generation: int | None = None,
+) -> None:
+    if not _discovery_current(database, tenant, event_id, attempt, generation):
+        return
     with database.conn:
         database.conn.execute(
             """
@@ -569,7 +717,20 @@ def load_lookback(database: Any, tenant: str, network: str, account: str, manage
     return int(row["cursor_block"])
 
 
-def save_lookback(database: Any, tenant: str, network: str, account: str, manager: str, cursor: int) -> None:
+def save_lookback(
+    database: Any,
+    tenant: str,
+    network: str,
+    account: str,
+    manager: str,
+    cursor: int,
+    *,
+    event_id: str | None = None,
+    attempt: int | None = None,
+    generation: int | None = None,
+) -> None:
+    if event_id is not None and not _discovery_current(database, tenant, event_id, attempt, generation):
+        return
     with database.conn:
         database.conn.execute(
             """
@@ -611,12 +772,25 @@ def load_requests(database: Any, tenant: str, network: str, account: str, manage
     return found
 
 
-def save_requests(database: Any, tenant: str, network: str, account: str, manager: str, logs: list[dict[str, Any]]) -> None:
+def save_requests(
+    database: Any,
+    tenant: str,
+    network: str,
+    account: str,
+    manager: str,
+    logs: list[dict[str, Any]],
+    *,
+    event_id: str | None = None,
+    attempt: int | None = None,
+    generation: int | None = None,
+) -> None:
     """Keep request and claim logs, including a removal flag and block hash.
 
     A second copy that disagrees does not replace the first. The row is marked
     as a conflict and is not a verified request.
     """
+    if event_id is not None and not _discovery_current(database, tenant, event_id, attempt, generation):
+        return
     with database.conn:
         for item in logs:
             kind = item.get("kind")

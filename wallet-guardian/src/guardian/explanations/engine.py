@@ -201,7 +201,10 @@ def _run_claimed(
         return
     rpc = ExplanationRpc(transport, source_id, clock, round_budget)
     ctx = SimpleNamespace(alert=alert, account=job["account"], manifest=manifest, rpc=rpc)
-    _bind_discovery(ctx, database, tenant, event_id, manifest, str(job["account"]), str(job["network"]))
+    _bind_discovery(
+        ctx, database, tenant, event_id, manifest, str(job["account"]), str(job["network"]),
+        attempt, generation,
+    )
     try:
         body = plugin.explain(ctx)
     except Exception:
@@ -242,6 +245,8 @@ def _bind_discovery(
     manifest: ExplainerManifest,
     account: str,
     network: str,
+    attempt: int | None = None,
+    generation: int | None = None,
 ) -> None:
     cursor, rows = load_interval(database, tenant, event_id)
     ctx.interval_cursor = cursor
@@ -266,13 +271,22 @@ def _bind_discovery(
     ]
 
     def save_interval_rows(next_cursor: int | None, logs: list[Any]) -> None:
-        save_interval(database, tenant, event_id, next_cursor, [log_record(item) for item in logs])
+        save_interval(
+            database, tenant, event_id, next_cursor, [log_record(item) for item in logs],
+            attempt=attempt, generation=generation,
+        )
 
     def save_request_rows(logs: list[Any]) -> None:
-        save_requests(database, tenant, network, account, manifest.proxy(), [log_record(item) for item in logs])
+        save_requests(
+            database, tenant, network, account, manifest.proxy(), [log_record(item) for item in logs],
+            event_id=event_id, attempt=attempt, generation=generation,
+        )
 
     def save_lookback_cursor(next_cursor: int) -> None:
-        save_lookback(database, tenant, network, account, manifest.proxy(), next_cursor)
+        save_lookback(
+            database, tenant, network, account, manifest.proxy(), next_cursor,
+            event_id=event_id, attempt=attempt, generation=generation,
+        )
 
     ctx.save_interval = save_interval_rows
     ctx.save_requests = save_request_rows

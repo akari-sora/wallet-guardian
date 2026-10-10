@@ -91,6 +91,7 @@
 - `native_balance_decisions`
 - `balance_explanations`
 - `explanation_jobs`
+- `explanation_job_leases`
 - `explanation_revisions`
 - `explanation_discovery`
 - `explanation_lookback`
@@ -110,7 +111,7 @@ W9 建立 `delivery_leases` 與 `delivery_attempts`。`PRAGMA user_version` 仍�
 
 原生餘額觀測建立 `native_balance_baselines`、`native_balance_checkpoints`、`native_balance_conflicts`、`native_balance_decisions` 與 `balance_explanations`。`PRAGMA user_version` 仍是 1。失敗的讀取不寫 0。同一高度不同區塊雜湊留在 `native_balance_conflicts`，不改基準。`native_balance_decisions` 連同觀測留下門檻判斷，包含沒有進 outbox 的判斷。`balance_explanations` 只記下已對上的轉移，不把淨額告警改成已查明的原因。
 
-流入解釋另外建立 `explanation_jobs`、`explanation_revisions`、`explanation_discovery`、`explanation_lookback`、`explanation_request_evidence` 與 `explanation_failures`。`PRAGMA user_version` 仍是 1。原生餘額增加告警提交之後，`run-once` 把工作寫進 `explanation_jobs`，解釋結果寫進 `explanation_revisions`。未完成的日誌進度、較早的請求證據，以及沒有排進佇列的失敗，留在另外四張表。這些表不改 `alerts` 的嚴重度、歸因或安全標籤。解釋失敗不會刪掉告警。
+流入解釋另外建立 `explanation_jobs`、`explanation_job_leases`、`explanation_revisions`、`explanation_discovery`、`explanation_lookback`、`explanation_request_evidence` 與 `explanation_failures`。未過期的 `explanation_job_leases` 列表示工作仍在執行，另一個行程不能取走。`PRAGMA user_version` 仍是 1。原生餘額增加告警提交之後，`run-once` 把工作寫進 `explanation_jobs`，解釋結果寫進 `explanation_revisions`。未完成的日誌進度、較早的請求證據，以及沒有排進佇列的失敗，留在另外四張表。這些表不改 `alerts` 的嚴重度、歸因或安全標籤。解釋失敗不會刪掉告警。
 
 目前 `run-once` 路徑實際會寫入的表：
 

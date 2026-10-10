@@ -10,6 +10,8 @@ import json
 import os
 import socket
 import sqlite3
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -35,9 +37,14 @@ from guardian.explanations.store import (
     job_for,
     jobs_for,
     latest_revision,
+    load_interval,
+    load_lookback,
     load_requests,
     release_process_claims,
     revision_count,
+    save_interval,
+    save_lookback,
+    save_requests,
     supersede_checkpoint,
 )
 from guardian.sources.fixtures import RawResponse
@@ -1125,7 +1132,7 @@ def test_expl_fix_internal_native_trigger(tmp_path: Path) -> None:
 
 
 def test_expl_fix_restart_after_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    """An abandoned running job can be reclaimed by a later explain refresh."""
+    """An expired lease is abandonment. Clearing process memory is not."""
     config = _desk(tmp_path, monkeypatch)
     event_id = "restart-claim"
     database = _db(tmp_path)
@@ -1144,6 +1151,11 @@ def test_expl_fix_restart_after_claim(tmp_path: Path, monkeypatch: pytest.Monkey
         )
         assert claim_job(database, TENANT, event_id) is True
         release_process_claims()
+        database.conn.execute(
+            "UPDATE explanation_job_leases SET expires_at=? WHERE tenant_id=? AND event_id=?",
+            ("2000-01-01T00:00:00Z", TENANT, event_id),
+        )
+        database.conn.commit()
         assert job_for(database, TENANT, event_id)["state"] == "running"
     finally:
         database.close()
@@ -1523,3 +1535,175 @@ def test_expl_fix_transaction_index_must_agree(
     _backend, body = _cycle(tmp_path, monkeypatch, capsys, "match", mutate=_split_transaction_index)
     assert body["verdict"] != "MATCHES_OWN_REQUEST"
     assert "transaction_index_mismatch" in body["gaps"]
+
+
+def _checkpoint_job(database: Database, event_id: str) -> None:
+    enqueue(
+        database, TENANT, event_id,
+        account=OWNER, network="bsc-mainnet", wallet_id=WALLET,
+        payload={
+            "asset": ASSET,
+            "dedup_key": event_id,
+            "direction": "increase",
+            "kind": "balance_delta",
+            "network": "bsc-mainnet",
+            "new_checkpoint": {"block_hash": _hash(110), "block_number": "110"},
+            "old_checkpoint": {"block_hash": _hash(100), "block_number": "100"},
+            "signed_delta_raw": str(PAY),
+            "wallet_id": WALLET,
+        },
+    )
+
+
+def test_expl_fix_reorg_before_first_revision(tmp_path: Path) -> None:
+    """A reorg fences the worker before any revision exists, and does not bump twice."""
+    database = Database(tmp_path / "early.sqlite")
+    event_id = "early-reorg"
+    try:
+        _checkpoint_job(database, event_id)
+        assert claim_job(database, TENANT, event_id) is True
+        owned = job_for(database, TENANT, event_id)
+        assert owned is not None
+        assert int(owned["event_revision"]) == 1
+        assert supersede_checkpoint(database, TENANT, "bsc-mainnet", _hash(110)) == 1
+        fenced = job_for(database, TENANT, event_id)
+        assert fenced is not None
+        assert fenced["state"] == "retry"
+        assert fenced["retry_reason"] == "reorg"
+        assert int(fenced["event_revision"]) == 2
+        assert latest_revision(database, TENANT, event_id) is None
+        assert complete_job(
+            database, TENANT, event_id, {"verdict": "MATCHES_OWN_REQUEST"}, "stale-before-revision",
+            attempt=int(owned["attempt"]),
+            event_revision=int(owned["event_revision"]),
+            state="done",
+            retry_reason=None,
+            hold_token=None,
+        ) == "stale"
+        assert latest_revision(database, TENANT, event_id) is None
+        assert int(job_for(database, TENANT, event_id)["event_revision"]) == 2
+        assert supersede_checkpoint(database, TENANT, "bsc-mainnet", _hash(110)) == 0
+        assert int(job_for(database, TENANT, event_id)["event_revision"]) == 2
+    finally:
+        database.close()
+
+
+def test_expl_fix_stale_discovery_is_not_overwritten(tmp_path: Path) -> None:
+    """A superseded attempt cannot publish or replace the discovery it no longer owns."""
+    database = Database(tmp_path / "discovery.sqlite")
+    event_id = "stale-discovery"
+    manager = "0x" + "ab" * 20
+    request = {
+        "address": manager,
+        "block_hash": _hash(40),
+        "block_number": 40,
+        "data_words": [SLIS],
+        "kind": "request",
+        "log_index": 4,
+        "topic": "0x" + "cd" * 32,
+        "tx_id": REQ,
+        "tx_index": 0,
+    }
+    try:
+        _checkpoint_job(database, event_id)
+        assert claim_job(database, TENANT, event_id) is True
+        owned = job_for(database, TENANT, event_id)
+        assert owned is not None
+        save_interval(database, TENANT, event_id, 40, [request], attempt=1, generation=1)
+        save_lookback(
+            database, TENANT, "bsc-mainnet", OWNER, manager, 40,
+            event_id=event_id, attempt=1, generation=1,
+        )
+        save_requests(
+            database, TENANT, "bsc-mainnet", OWNER, manager, [request],
+            event_id=event_id, attempt=1, generation=1,
+        )
+        assert supersede_checkpoint(database, TENANT, "bsc-mainnet", _hash(100)) == 1
+        save_interval(database, TENANT, event_id, 1, [{"kind": "claim", "tx_id": CLAIM}], attempt=1, generation=1)
+        save_lookback(
+            database, TENANT, "bsc-mainnet", OWNER, manager, 1,
+            event_id=event_id, attempt=1, generation=1,
+        )
+        later = dict(request)
+        later["tx_id"] = REQ_B
+        save_requests(
+            database, TENANT, "bsc-mainnet", OWNER, manager, [later],
+            event_id=event_id, attempt=1, generation=1,
+        )
+        cursor, logs = load_interval(database, TENANT, event_id)
+        assert cursor == 40
+        assert logs[0]["tx_id"] == REQ
+        assert load_lookback(database, TENANT, "bsc-mainnet", OWNER, manager) == 40
+        stored = load_requests(database, TENANT, "bsc-mainnet", OWNER, manager)
+        assert [row["tx_id"] for row in stored] == [REQ]
+        assert complete_job(
+            database, TENANT, event_id, {"verdict": "MATCHES_OWN_REQUEST"}, "stale-discovery",
+            attempt=int(owned["attempt"]),
+            event_revision=int(owned["event_revision"]),
+            state="done",
+            retry_reason=None,
+            hold_token=None,
+        ) == "stale"
+        assert latest_revision(database, TENANT, event_id) is None
+        assert int(job_for(database, TENANT, event_id)["event_revision"]) == 2
+    finally:
+        database.close()
+
+
+def _other_process_claim(path: Path, event_id: str) -> tuple[str, str]:
+    script = (
+        "import sys\n"
+        "from guardian.storage import Database\n"
+        "from guardian.explanations.store import claim_job, job_for\n"
+        "database = Database(sys.argv[1])\n"
+        "try:\n"
+        "    claimed = claim_job(database, sys.argv[2], sys.argv[3])\n"
+        "    row = job_for(database, sys.argv[2], sys.argv[3])\n"
+        "    print('claimed' if claimed else 'refused')\n"
+        "    print(0 if row is None else int(row['attempt']))\n"
+        "finally:\n"
+        "    database.close()\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(path), TENANT, event_id],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    lines = completed.stdout.splitlines()
+    assert len(lines) == 2
+    return lines[0], lines[1]
+
+
+def test_expl_fix_unexpired_lease_is_not_stolen(tmp_path: Path) -> None:
+    """Another process cannot take a running job until its lease expires."""
+    path = tmp_path / "lease.sqlite"
+    event_id = "leased-job"
+    database = Database(path)
+    try:
+        enqueue(
+            database, TENANT, event_id,
+            account=OWNER, network="bsc-mainnet", wallet_id=WALLET,
+            payload={"dedup_key": event_id, "kind": "balance_delta", "direction": "increase", "network": "bsc-mainnet"},
+        )
+        assert claim_job(database, TENANT, event_id) is True
+        force_pending(database, TENANT, event_id)
+        owned = job_for(database, TENANT, event_id)
+        assert owned is not None
+        assert owned["state"] == "running"
+        assert int(owned["attempt"]) == 1
+        database.conn.commit()
+    finally:
+        database.close()
+    assert _other_process_claim(path, event_id) == ("refused", "1")
+    database = Database(path)
+    try:
+        database.conn.execute(
+            "UPDATE explanation_job_leases SET expires_at=? WHERE tenant_id=? AND event_id=?",
+            ("2000-01-01T00:00:00Z", TENANT, event_id),
+        )
+        database.conn.commit()
+    finally:
+        database.close()
+    assert _other_process_claim(path, event_id) == ("claimed", "2")
