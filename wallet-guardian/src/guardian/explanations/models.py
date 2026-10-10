@@ -31,7 +31,9 @@ FALSE_NO_MATCH_GAPS = frozenset({
     "read_error",
     "receipt_checkpoint_unverified",
     "receipt_status_unavailable",
+    "request_evidence_conflict",
     "request_index_mismatch",
+    "transaction_index_mismatch",
     "truncated_logs",
 })
 CALL_LIMIT = 32

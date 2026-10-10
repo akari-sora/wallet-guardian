@@ -22,6 +22,9 @@ class Slot:
     bnb: int | None = None
     tx_id: str | None = None
     log_index: int | None = None
+    block_hash: str = ""
+    removed: bool = False
+    conflict: bool = False
 
 
 @dataclass
@@ -35,6 +38,9 @@ class FoundLog:
     log_index: int
     data_words: tuple[int, ...]
     raw: dict[str, Any]
+    removed: bool = False
+    block_hash: str = ""
+    conflict: bool = False
 
 
 @dataclass
@@ -50,9 +56,14 @@ def replay(start: list[Slot], logs: list[FoundLog]) -> tuple[list[ReplayLink], l
     links: list[ReplayLink] = []
     ordered = sorted(logs, key=lambda item: (item.block_number, item.tx_index, item.log_index))
     for log in ordered:
+        if log.removed or log.conflict:
+            continue
         if log.kind == "request":
             slis = log.data_words[0] if log.data_words else 0
-            queue.append(Slot(_request_identity(log), None, slis, None, log.tx_id, log.log_index))
+            queue.append(Slot(
+                _request_identity(log), None, slis, None, log.tx_id, log.log_index,
+                log.block_hash, False, False,
+            ))
             continue
         if log.kind != "claim":
             continue
@@ -134,42 +145,79 @@ def lookback_bounds(old_block: int, cursor: int | None) -> tuple[int, int, int] 
     return low, high, (0 if low == 0 else low)
 
 
-def assign_request_identity(slots: list[Slot], logs: list[FoundLog]) -> None:
-    """Attach a unique prior request log to a queue slot. Amount alone is not enough."""
-    pool = [item for item in logs if item.kind == "request"]
-    used = {
-        (slot.tx_id, slot.log_index)
-        for slot in slots
-        if slot.tx_id and slot.log_index is not None
-    }
-    for slot in slots:
+def reconstruct_genesis_queue(slots: list[Slot], logs: list[FoundLog]) -> bool:
+    """Link slots by replaying every request and claim from an empty queue.
+
+    ``logs`` has to cover genesis through the block whose queue is ``slots``.
+    The only log with a matching slis amount is not a link. A removed log, a
+    conflicting copy, or a log with no block hash does not become an identity.
+    Returns False without writing when the replay does not reproduce ``slots``.
+    """
+    _links, queue = replay([], [item for item in logs if item.kind in {"request", "claim"}])
+    if len(queue) != len(slots):
+        return False
+    if any(left.slis != right.slis for left, right in zip(queue, slots)):
+        return False
+    linked: list[tuple[str, int, str]] = []
+    for rebuilt in queue:
+        if (
+            not rebuilt.tx_id
+            or rebuilt.log_index is None
+            or not rebuilt.block_hash
+            or rebuilt.removed
+            or rebuilt.conflict
+        ):
+            return False
+        linked.append((rebuilt.tx_id, int(rebuilt.log_index), rebuilt.block_hash))
+    for slot, (tx_id, log_index, _block_hash) in zip(slots, linked):
+        if slot.tx_id and slot.log_index is not None and (slot.tx_id, slot.log_index) != (tx_id, log_index):
+            return False
+    for slot, (tx_id, log_index, block_hash) in zip(slots, linked):
         if slot.tx_id and slot.log_index is not None:
             continue
-        choices = [
-            item for item in pool
-            if (item.tx_id, item.log_index) not in used
-            and item.data_words
-            and item.data_words[0] == slot.slis
-        ]
-        if len(choices) != 1:
-            continue
-        chosen = choices[0]
-        slot.tx_id = chosen.tx_id
-        slot.log_index = chosen.log_index
-        used.add((chosen.tx_id, chosen.log_index))
+        slot.tx_id = tx_id
+        slot.log_index = log_index
+        slot.block_hash = block_hash
+        slot.removed = False
+        slot.conflict = False
+    return True
 
 
 def union_logs(existing: list[FoundLog], found: list[FoundLog]) -> list[FoundLog]:
-    """Keep the first validated copy of each transaction and log index."""
+    """Keep one copy of each transaction and log index.
+
+    A second copy that disagrees on kind, order, amount, block hash, or the
+    removal flag marks the kept row as a conflict. The two copies are not merged
+    into the cleaner one.
+    """
     merged: list[FoundLog] = []
-    seen: set[tuple[str, int]] = set()
+    index: dict[tuple[str, int], FoundLog] = {}
     for item in [*existing, *found]:
         key = (item.tx_id, item.log_index)
-        if key in seen:
+        prior = index.get(key)
+        if prior is None:
+            index[key] = item
+            merged.append(item)
             continue
-        seen.add(key)
-        merged.append(item)
+        if _same_provenance(prior, item):
+            continue
+        prior.conflict = True
+        prior.removed = prior.removed or item.removed
     return merged
+
+
+def _same_provenance(left: FoundLog, right: FoundLog) -> bool:
+    return (
+        left.kind == right.kind
+        and left.address == right.address
+        and left.account == right.account
+        and left.block_number == right.block_number
+        and left.tx_index == right.tx_index
+        and left.data_words == right.data_words
+        and left.removed == right.removed
+        and left.block_hash == right.block_hash
+        and left.conflict == right.conflict
+    )
 
 
 def log_record(log: FoundLog) -> dict[str, Any]:
@@ -180,10 +228,13 @@ def log_record(log: FoundLog) -> dict[str, Any]:
     return {
         "account": log.account,
         "address": log.address,
+        "block_hash": log.block_hash,
         "block_number": log.block_number,
+        "conflict": bool(log.conflict),
         "data_words": list(log.data_words),
         "kind": log.kind,
         "log_index": log.log_index,
+        "removed": bool(log.removed),
         "topic": topic,
         "tx_id": log.tx_id,
         "tx_index": log.tx_index,
@@ -193,6 +244,9 @@ def log_record(log: FoundLog) -> dict[str, Any]:
 def log_from_record(row: dict[str, Any]) -> FoundLog:
     topic = str(row.get("topic") or "")
     words = tuple(int(item) for item in row.get("data_words") or [])
+    block_hash = str(row.get("block_hash") or "")
+    removed = row.get("removed") in {True, 1, "1", "true"}
+    conflict = row.get("conflict") in {True, 1, "1", "true"}
     return FoundLog(
         str(row.get("kind") or ""),
         str(row.get("address") or ""),
@@ -202,7 +256,10 @@ def log_from_record(row: dict[str, Any]) -> FoundLog:
         int(row.get("tx_index") or 0),
         int(row.get("log_index") or 0),
         words,
-        {"topics": [topic]},
+        {"blockHash": block_hash, "removed": removed, "topics": [topic]},
+        removed,
+        block_hash.lower(),
+        conflict,
     )
 
 
@@ -231,7 +288,21 @@ def _parse_log(row: Any, kind: str, topic: str, proxy: str, account: str) -> Fou
     words = _data_words(row.get("data"), 1 if kind == "request" else 2)
     if words is None:
         return None
-    return FoundLog(kind, address, account, tx_id.lower(), block, tx_index, log_index, words, row)
+    return FoundLog(
+        kind, address, account, tx_id.lower(), block, tx_index, log_index, words, row,
+        _removed_flag(row), _block_hash(row), False,
+    )
+
+
+def _removed_flag(row: dict[str, Any]) -> bool:
+    return row.get("removed") in {True, 1, "true", "0x1", "0x01"}
+
+
+def _block_hash(row: dict[str, Any]) -> str:
+    digest = row.get("blockHash")
+    if isinstance(digest, str) and digest.startswith("0x") and len(digest) == 66:
+        return digest.lower()
+    return ""
 
 
 def _data_words(data: Any, count: int) -> tuple[int, ...] | None:

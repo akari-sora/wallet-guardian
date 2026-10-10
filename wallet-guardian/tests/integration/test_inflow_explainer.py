@@ -330,7 +330,12 @@ class ListaBackend:
         assert "0x" + keccak(bytes.fromhex(legacy_code[2:])).hex() == str(legacy["code_hash"]).lower()
         assert "0x" + keccak(bytes.fromhex(proxy_code[2:])).hex() == manifest.proxy_code_hash()
         scenario = self.scenario
-        old, new = (10, 4010) if scenario == "truncated" else (100, 110)
+        if scenario == "wrong_amount_lookback":
+            old, new = 5000, 5010
+        elif scenario == "truncated":
+            old, new = 10, 4010
+        else:
+            old, new = 100, 110
         self.old = old
         self.new = new
         claim_block = new
@@ -391,6 +396,11 @@ class ListaBackend:
             self._add_request(REQ, 95, 4, slis)
             self._add_claim(0, payment, status, beneficiary, tx_index=1)
             queue = [(42, slis, 1)]
+        elif scenario == "wrong_amount_lookback":
+            self._add_request(REQ_B, 4500, 4, slis)
+            self._add_historical_claim(4600, 0, payment)
+            self._add_claim(0, payment, status, beneficiary, tx_index=1)
+            queue = [(42, slis, 1)]
         else:
             if scenario != "same_block":
                 self._add_request(REQ, request_block, 4, slis)
@@ -406,7 +416,8 @@ class ListaBackend:
             self._add_upgrade(stored_impl, 0)
         elif scenario == "removed_upgrade":
             self._add_upgrade(stored_impl, 0, removed=True, address=OTHER, block=self.new - 3)
-        self.views[(self.queue_selector, _hash(old))] = _encode_queue(queue if scenario == "older_request" else [])
+        queued_at_old = scenario in {"older_request", "wrong_amount_lookback"}
+        self.views[(self.queue_selector, _hash(old))] = _encode_queue(queue if queued_at_old else [])
         self.views[(self.queue_selector, parent)] = _encode_queue(queue if scenario != "many" else queue)
         self.views[(self.queue_selector, claim_hash)] = _encode_queue(queue if scenario == "no_claim" else [])
         if scenario == "many":
@@ -422,6 +433,19 @@ class ListaBackend:
 
     def _pin_code(self, address: str, block_hash: str, code: str) -> None:
         self.code[(address.lower(), block_hash)] = code
+
+    def _add_historical_claim(self, block: int, index: int, payment: int) -> None:
+        """A claim that is already in history. It is not the transaction under explanation."""
+        self.logs.append({
+            "address": self.proxy,
+            "blockHash": _hash(block),
+            "blockNumber": hex(block),
+            "data": "0x" + _word(index) + _word(payment),
+            "logIndex": hex(8),
+            "topics": [self.claim_topic, pad_address(OWNER)],
+            "transactionHash": "0x" + "55" * 32,
+            "transactionIndex": hex(1),
+        })
 
     def _add_request(self, tx: str, block: int, log_index: int, slis: int, tx_index: int = 0) -> None:
         self.logs.append({
@@ -456,6 +480,7 @@ class ListaBackend:
             "hash": CLAIM,
             "input": self.for_selector + payload.hex(),
             "to": self.proxy,
+            "transactionIndex": hex(tx_index),
         }
         receipt_log = dict(row)
         self.receipt_log = receipt_log
@@ -465,6 +490,7 @@ class ListaBackend:
             "logs": [receipt_log],
             "status": status,
             "transactionHash": CLAIM,
+            "transactionIndex": hex(tx_index),
         }
 
     def _add_upgrade(
@@ -1294,3 +1320,106 @@ def test_expl_queue_roundtrip() -> None:
     populated = _encode_queue([(42, SLIS, 7)])
     assert list(decode(["(uint256,uint256,uint256)[]"], bytes.fromhex(empty[2:]))[0]) == []
     assert list(decode(["(uint256,uint256,uint256)[]"], bytes.fromhex(populated[2:]))[0]) == [(42, SLIS, 7)]
+
+
+def _mark_request_removed(backend: ListaBackend) -> None:
+    for row in backend.logs:
+        if str(row["topics"][0]).lower() == backend.request_topic:
+            row["removed"] = True
+
+
+def _conflict_request_hash(backend: ListaBackend) -> None:
+    original = next(row for row in backend.logs if str(row["topics"][0]).lower() == backend.request_topic)
+    twin = dict(original)
+    twin["blockHash"] = _hash(999)
+    backend.logs.append(twin)
+
+
+def _split_transaction_index(backend: ListaBackend) -> None:
+    """Discovery records index 2. The transaction and the receipt record index 1."""
+    for row in backend.logs:
+        if str(row["topics"][0]).lower() == backend.claim_topic:
+            row["transactionIndex"] = hex(2)
+    backend.txs[CLAIM]["transactionIndex"] = hex(1)
+    receipt = backend.receipts[CLAIM]
+    receipt["transactionIndex"] = hex(1)
+    receipt["logs"][0]["transactionIndex"] = hex(1)
+
+
+def _request_rows(tmp_path: Path) -> list[dict]:
+    database = _db(tmp_path)
+    try:
+        job = jobs_for(database, TENANT)[0]
+        return load_requests(
+            database, TENANT, str(job["network"]), str(job["account"]), _approved_manifest().proxy(),
+        )
+    finally:
+        database.close()
+
+
+def test_expl_fix_removed_request_is_not_verified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A removed request is not a verified link, including after it is only in the cache."""
+    backend, body = _cycle(tmp_path, monkeypatch, capsys, "older_request", mutate=_mark_request_removed)
+    assert body["verdict"] != "MATCHES_OWN_REQUEST"
+    assert body["facts"].get("request_linkage") != "verified"
+    assert "request_linkage" not in body["established_facts"]
+    assert body["request_identity"] is None
+    cached = _request_rows(tmp_path)
+    removed = [row for row in cached if row["tx_id"] == REQ]
+    assert removed
+    assert removed[0]["removed"] is True
+    assert removed[0]["block_hash"] == _hash(95)
+    backend.logs = [row for row in backend.logs if str(row["topics"][0]).lower() != backend.request_topic]
+    config = _desk(tmp_path, monkeypatch)
+    _event = _stored(tmp_path)[2]
+    again = main(
+        ["explain", "--mcm-config", str(config), "--event-id", _event, "--refresh"],
+        backend=backend,
+        clock=lambda: CLOCK,
+    )
+    shown = json.loads(capsys.readouterr().out)
+    assert again == 0, shown
+    stored = _stored(tmp_path)[0]
+    assert stored["verdict"] != "MATCHES_OWN_REQUEST"
+    assert stored["facts"].get("request_linkage") != "verified"
+    assert stored["request_identity"] is None
+    still = [row for row in _request_rows(tmp_path) if row["tx_id"] == REQ]
+    assert still[0]["removed"] is True
+    assert still[0]["block_hash"] == _hash(95)
+
+
+def test_expl_fix_conflicting_request_hash_is_not_verified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Two copies of one request log that disagree on the block hash are not a verified request."""
+    _backend, body = _cycle(tmp_path, monkeypatch, capsys, "match", mutate=_conflict_request_hash)
+    assert body["verdict"] != "MATCHES_OWN_REQUEST"
+    assert body["facts"].get("request_linkage") != "verified"
+    assert body["request_identity"] is None
+    cached = [row for row in _request_rows(tmp_path) if row["tx_id"] == REQ]
+    assert cached
+    assert cached[0]["conflict"] is True
+    assert cached[0]["block_hash"]
+
+
+def test_expl_fix_amount_lookback_does_not_link_another_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A later same-amount request is not the pending request when the window does not reach genesis."""
+    _backend, body = _cycle(tmp_path, monkeypatch, capsys, "wrong_amount_lookback")
+    assert body["verdict"] != "MATCHES_OWN_REQUEST"
+    assert body["facts"].get("request_linkage") != "verified"
+    identity = body["request_identity"] or ""
+    assert REQ_B not in identity
+    assert "discovery_incomplete" in body["gaps"]
+
+
+def test_expl_fix_transaction_index_must_agree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Discovery index 2 against transaction and receipt index 1 is not a verified claim."""
+    _backend, body = _cycle(tmp_path, monkeypatch, capsys, "match", mutate=_split_transaction_index)
+    assert body["verdict"] != "MATCHES_OWN_REQUEST"
+    assert "transaction_index_mismatch" in body["gaps"]

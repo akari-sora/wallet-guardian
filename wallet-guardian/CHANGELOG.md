@@ -23,6 +23,7 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 
 ### Fixed
 
+- A Lista request is not linked by a matching slisBNB amount or by a removed log. The cached row keeps the block hash and the removal flag, and a conflicting copy is not verified. The transaction index has to agree on the discovered claim, the transaction, and the receipt.
 - Experimental read-only attribution with bounded discovery. A verified request match requires an explicitly approved historical deployment and coherent transaction, receipt, request and checkpoint evidence. Incomplete evidence remains partial or unverified. Explanations do not certify fund safety, establish operator control, guarantee complete attribution, or change the underlying movement alert. No live historical-path qualification is claimed.
 - Diagnostics do not echo an unusable resolver mode or a network name that is a URL or an address. `resolver.requested_mode` is only `system`, `doh`, or `invalid`. Network errors quote an identifier-shaped name, otherwise `<invalid name>`.
 - Alias normalization collapses identical routes and rejects conflicting source lists or source order for the same canonical network and capability. The conflict is a config error. State keys are not rewritten and sources are not merged.

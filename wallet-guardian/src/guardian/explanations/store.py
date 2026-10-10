@@ -585,20 +585,42 @@ def save_lookback(database: Any, tenant: str, network: str, account: str, manage
 def load_requests(database: Any, tenant: str, network: str, account: str, manager: str) -> list[dict[str, Any]]:
     rows = database.conn.execute(
         """
-        SELECT tx_id, log_index, block_number, tx_index, slis, topic, address
+        SELECT tx_id, log_index, block_number, tx_index, slis, topic, address,
+               block_hash, removed, conflict, kind, data_json
         FROM explanation_request_evidence
         WHERE tenant_id=? AND network=? AND account=? AND manager=?
         ORDER BY block_number, tx_index, log_index
         """,
         (tenant, network, account, manager),
     ).fetchall()
-    return [{key: row[key] for key in row.keys()} for row in rows]
+    found = []
+    for row in rows:
+        item = {key: row[key] for key in row.keys()}
+        try:
+            parsed = json.loads(item.get("data_json") or "[]")
+        except json.JSONDecodeError:
+            parsed = []
+        if not isinstance(parsed, list) or not parsed:
+            parsed = [int(item["slis"])]
+        item["data_words"] = [int(word) for word in parsed]
+        item["removed"] = bool(item.get("removed"))
+        item["conflict"] = bool(item.get("conflict"))
+        item["kind"] = str(item.get("kind") or "request")
+        item["block_hash"] = str(item.get("block_hash") or "")
+        found.append(item)
+    return found
 
 
 def save_requests(database: Any, tenant: str, network: str, account: str, manager: str, logs: list[dict[str, Any]]) -> None:
+    """Keep request and claim logs, including a removal flag and block hash.
+
+    A second copy that disagrees does not replace the first. The row is marked
+    as a conflict and is not a verified request.
+    """
     with database.conn:
         for item in logs:
-            if item.get("kind") != "request":
+            kind = item.get("kind")
+            if kind not in {"request", "claim"}:
                 continue
             tx_id = item.get("tx_id")
             log_index = item.get("log_index")
@@ -607,12 +629,27 @@ def save_requests(database: Any, tenant: str, network: str, account: str, manage
                 continue
             if not isinstance(words, list) or not words:
                 continue
+            removed = 1 if item.get("removed") else 0
+            conflict = 1 if item.get("conflict") else 0
+            block_hash = str(item.get("block_hash") or "").lower()
+            data_json = canonical([int(word) for word in words])
             database.conn.execute(
                 """
                 INSERT INTO explanation_request_evidence(
-                  tenant_id, network, account, manager, tx_id, log_index, block_number, tx_index, slis, topic, address
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(tenant_id, network, account, manager, tx_id, log_index) DO NOTHING
+                  tenant_id, network, account, manager, tx_id, log_index, block_number, tx_index, slis, topic, address,
+                  block_hash, removed, conflict, kind, data_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tenant_id, network, account, manager, tx_id, log_index) DO UPDATE SET
+                  conflict = CASE
+                    WHEN explanation_request_evidence.block_hash != excluded.block_hash
+                      OR explanation_request_evidence.removed != excluded.removed
+                      OR explanation_request_evidence.kind != excluded.kind
+                      OR explanation_request_evidence.data_json != excluded.data_json
+                      OR explanation_request_evidence.block_number != excluded.block_number
+                      OR explanation_request_evidence.tx_index != excluded.tx_index
+                    THEN 1
+                    ELSE explanation_request_evidence.conflict
+                  END
                 """,
                 (
                     tenant,
@@ -626,5 +663,10 @@ def save_requests(database: Any, tenant: str, network: str, account: str, manage
                     str(words[0]),
                     str(item.get("topic") or ""),
                     str(item.get("address") or manager),
+                    block_hash,
+                    removed,
+                    conflict,
+                    str(kind),
+                    data_json,
                 ),
             )

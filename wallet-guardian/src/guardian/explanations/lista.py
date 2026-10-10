@@ -19,9 +19,9 @@ from guardian.explanations.discovery import (
     _data_words,
     _parse_log,
     _topic_address,
-    assign_request_identity,
     discover_logs,
     lookback_bounds,
+    reconstruct_genesis_queue,
     replay,
     request_identity,
     union_logs,
@@ -224,6 +224,9 @@ def _one_claim(
         facts["implementation_at_execution"] = "unverified"
         gaps.append(header_error or "implementation_at_execution_unverified")
         return {"verdict": "PARTIAL", "effect": None, "identity": None, "uuid": None, "calculation": None}
+    if claim.block_hash and claim.block_hash != header["hash"]:
+        gaps.append("claim_evidence_mismatch")
+        return {"verdict": "PARTIAL", "effect": None, "identity": None, "uuid": None, "calculation": None}
     checkpoint_gap = _checkpoint_identity(tx, receipt, header["hash"])
     if checkpoint_gap:
         gaps.append(checkpoint_gap)
@@ -366,11 +369,23 @@ def _link_request(
         else:
             gaps.append("discovery_incomplete")
         return {"uuid": None if slot.uuid is None else str(slot.uuid)}
+    if slot.removed or slot.conflict or not slot.block_hash:
+        facts["request_linkage"] = "inconsistent"
+        gaps.append("request_evidence_conflict")
+        return {"uuid": None if slot.uuid is None else str(slot.uuid)}
     facts["request_linkage"] = "verified"
     established_identity = request_identity(manifest.chain_id(), manifest.proxy(), account, slot.tx_id, slot.log_index)
     refs.append(f"request:{established_identity}")
     amounts["requested_slis_amount"] = str(slot.slis)
     request_log = next((item for item in logs if item.tx_id == slot.tx_id and item.log_index == slot.log_index), None)
+    if request_log is not None and (request_log.removed or request_log.conflict or not request_log.block_hash):
+        facts["request_linkage"] = "inconsistent"
+        gaps.append("request_evidence_conflict")
+        return {"identity": established_identity, "uuid": None if slot.uuid is None else str(slot.uuid)}
+    if request_log is not None and request_log.block_hash != slot.block_hash:
+        facts["request_linkage"] = "inconsistent"
+        gaps.append("request_evidence_conflict")
+        return {"identity": established_identity, "uuid": None if slot.uuid is None else str(slot.uuid)}
     if request_log is not None and request_log.data_words and request_log.data_words[0] != slot.slis:
         facts["request_linkage"] = "inconsistent"
         gaps.append("request_amount_inconsistent")
@@ -725,21 +740,16 @@ def _fill_request_identity(
 ) -> None:
     if not slots or all(slot.tx_id and slot.log_index is not None for slot in slots):
         return
-    known: list[FoundLog] = []
-    getter = getattr(ctx, "known_requests", None)
-    if callable(getter):
-        loaded = getter()
-        if isinstance(loaded, list):
-            known = [item for item in loaded if isinstance(item, FoundLog)]
-    assign_request_identity(slots, [*known, *[item for item in logs if item.kind == "request"]])
-    if all(slot.tx_id and slot.log_index is not None for slot in slots):
-        return
+    known = _known_history(ctx)
     cursor = getattr(ctx, "lookback_cursor", None)
+    if cursor == 0:
+        _reconstruct_prior_slots(slots, known, logs, old_block)
+        return
     bounds = lookback_bounds(old_block, cursor if isinstance(cursor, int) else None)
     if bounds is None:
         return
     low, high, next_cursor = bounds
-    found, error = _fetch_requests(rpc, manifest, account, low, high)
+    found, error = _fetch_history(rpc, manifest, account, low, high)
     if error:
         gaps.append(error)
         return
@@ -750,35 +760,61 @@ def _fill_request_identity(
     if callable(save_cursor):
         save_cursor(next_cursor)
     ctx.lookback_cursor = next_cursor
-    assign_request_identity(slots, [*known, *found])
+    if next_cursor != 0:
+        return
+    _reconstruct_prior_slots(slots, _known_history(ctx), [*logs, *found], old_block)
 
 
-def _fetch_requests(
+def _known_history(ctx: Any) -> list[FoundLog]:
+    getter = getattr(ctx, "known_requests", None)
+    if not callable(getter):
+        return []
+    loaded = getter()
+    if not isinstance(loaded, list):
+        return []
+    return [item for item in loaded if isinstance(item, FoundLog)]
+
+
+def _reconstruct_prior_slots(slots: list[Slot], known: list[FoundLog], logs: list[FoundLog], old_block: int) -> None:
+    """Replay from genesis. Do not attach the only amount match in a partial window."""
+    prior = [
+        item for item in [*known, *logs]
+        if item.kind in {"request", "claim"} and item.block_number <= old_block
+    ]
+    reconstruct_genesis_queue(slots, union_logs([], prior))
+
+
+def _fetch_history(
     rpc: ExplanationRpc,
     manifest: ExplainerManifest,
     account: str,
     low: int,
     high: int,
 ) -> tuple[list[FoundLog], str | None]:
-    spec = manifest.event("RequestWithdraw(address,uint256)")
-    if spec is None:
-        return [], "stale_abi"
-    topic = str(spec["topic"]).lower()
-    rows, error = rpc.call("eth_getLogs", [{
-        "address": manifest.proxy(),
-        "fromBlock": hex(low),
-        "toBlock": hex(high),
-        "topics": [topic, pad_address(account)],
-    }])
-    if error:
-        return [], error
-    if not isinstance(rows, list):
-        return [], "logs_unavailable"
+    """Request and claim logs in one inclusive window. Claims are required to replay the queue."""
     found: list[FoundLog] = []
-    for row in rows:
-        parsed = _parse_log(row, "request", topic, manifest.proxy(), account)
-        if parsed is not None:
-            found.append(parsed)
+    for signature, kind in (
+        ("RequestWithdraw(address,uint256)", "request"),
+        ("ClaimWithdrawal(address,uint256,uint256)", "claim"),
+    ):
+        spec = manifest.event(signature)
+        if spec is None:
+            return [], "stale_abi"
+        topic = str(spec["topic"]).lower()
+        rows, error = rpc.call("eth_getLogs", [{
+            "address": manifest.proxy(),
+            "fromBlock": hex(low),
+            "toBlock": hex(high),
+            "topics": [topic, pad_address(account)],
+        }])
+        if error:
+            return [], error
+        if not isinstance(rows, list):
+            return [], "logs_unavailable"
+        for row in rows:
+            parsed = _parse_log(row, kind, topic, manifest.proxy(), account)
+            if parsed is not None:
+                found.append(parsed)
     return found, None
 
 
@@ -792,6 +828,10 @@ def _tx_receipt_identity(tx: Mapping[str, Any], receipt: Mapping[str, Any], clai
     for value in (_hex_int(receipt.get("blockNumber")), _hex_int(tx.get("blockNumber"))):
         if value is not None and value != claim.block_number:
             return "receipt_identity_mismatch"
+    tx_index = _hex_int(tx.get("transactionIndex"))
+    receipt_index = _hex_int(receipt.get("transactionIndex"))
+    if tx_index is None or receipt_index is None or tx_index != claim.tx_index or receipt_index != claim.tx_index:
+        return "transaction_index_mismatch"
     return None
 
 
@@ -856,6 +896,9 @@ def _bound_claim_log(
     logged_block = _hex_int(match.get("blockNumber"))
     if logged_block is not None and logged_block != claim.block_number:
         return "receipt_identity_mismatch", None
+    logged_index = _hex_int(match.get("transactionIndex"))
+    if logged_index is None or logged_index != claim.tx_index:
+        return "transaction_index_mismatch", None
     logged_hash = match.get("blockHash")
     if isinstance(logged_hash, str) and logged_hash.lower() != header_hash:
         return "receipt_identity_mismatch", None
