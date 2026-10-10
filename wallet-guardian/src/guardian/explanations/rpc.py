@@ -28,13 +28,33 @@ class ExplanationRpc:
     def historical(self, block_hash: str) -> dict[str, Any]:
         return {"blockHash": block_hash, "requireCanonical": True}
 
+    def remaining_seconds(self) -> float:
+        """Seconds left in the tighter of the event budget and the shared round budget."""
+        event_left = TIME_LIMIT_SECONDS - (float(self.clock()) - self.started)
+        left = event_left
+        budget = self.round_budget
+        if budget is not None and getattr(budget, "remaining", None):
+            shared = budget.remaining()
+            if shared is not None:
+                left = min(left, float(shared))
+        return left
+
     def call(self, method: str, params: list[Any]) -> tuple[Any, str | None]:
         if self._blocked(method, params):
             return None, self.stopped or "deadline"
+        left = self.remaining_seconds()
+        if left <= 0:
+            self.stopped = "deadline"
+            return None, "deadline"
         self.calls += 1
         self.seen.append({"method": method, "params": params})
         try:
-            result = self.transport.request(self.source_id, evm_rpc(method, params), priority="low")
+            result = self.transport.request(
+                self.source_id,
+                evm_rpc(method, params),
+                priority="low",
+                timeout=left,
+            )
         except Exception as exc:
             reason = getattr(exc, "reason", None)
             if reason == "rate_limited":
@@ -57,6 +77,9 @@ class ExplanationRpc:
             return None, _error_code(body.get("error"))
         if getattr(result, "ok", True) is False:
             return None, _error_code(body.get("error")) if body.get("error") else "read_error"
+        if self.remaining_seconds() <= 0:
+            self.stopped = "deadline"
+            return None, "deadline"
         return body.get("result"), None
 
     def _blocked(self, method: str, params: list[Any]) -> bool:

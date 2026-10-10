@@ -589,13 +589,23 @@ def _mcm_run(
     notification_resolve: Any = None,
 ) -> tuple[dict, int]:
     public, private, database = _open_mcm(args.mcm_config)
+    chosen = _chosen_backend(backend)
+
+    def publish(payload: dict) -> None:
+        marker = getattr(chosen, "mark_report_printed", None)
+        if callable(marker):
+            marker()
+        _print(payload)
+        sys.stdout.flush()
+        args._stdout_sent = True
+
     try:
         report = run_capability_pipeline(
             public,
             private.accounts,
             private,
             database,
-            backend=_chosen_backend(backend),
+            backend=chosen,
             clock=time.time if clock is None else clock,
             no_send=bool(args.no_send),
             sender=sender,
@@ -603,6 +613,7 @@ def _mcm_run(
             price_input=_optional_bytes(getattr(args, "price_input", None)),
             notification_backend=notification_backend,
             notification_resolve=notification_resolve,
+            report_ready=publish,
         )
     finally:
         database.close()
@@ -792,6 +803,7 @@ def main(
 ) -> int:
     load_local_env()
     parser = build_parser()
+    args = argparse.Namespace()
     try:
         args = parser.parse_args(argv)
         if getattr(args, "mcm_config", None):
@@ -818,7 +830,8 @@ def main(
     except Exception as exc:  # noqa: BLE001
         payload = {"status": "error", "error_type": type(exc).__name__, "error": redact(str(exc))}
         code = 1
-    _print(payload)
+    if not getattr(args, "_stdout_sent", False):
+        _print(payload)
     return code
 
 

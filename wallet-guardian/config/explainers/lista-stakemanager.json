@@ -50,29 +50,8 @@
   "abi_hash": "b33e1a89b474d359b5b0b3ce67e4ecbca1af90c4d884626b523c525c5d95db39",
   "chain_id": 56,
   "explainer_id": "lista-stakemanager",
-  "implementations": [
-    {
-      "calculation": "legacy_share",
-      "code_hash": "0x3bc45d466ab3dfb4dd2d878b9c7566d2368cd21eeb633c454bf911d6b9ccab13",
-      "from_block": 0,
-      "implementation": "0x0000000000000000000000000000000000001e6a",
-      "live_bytecode_verified": false,
-      "note": "Specification pin of the legacy integer-share rule. Not a live eth_getCode reading.",
-      "receipt_implies_payment": true,
-      "to_block": null
-    },
-    {
-      "calculation": "stored_bnb",
-      "code_hash": "0x6eec44921d18f7237ab9d24c99d90794c00811755c2b3f1582fb0124f0f3ee9d",
-      "from_block": 0,
-      "implementation": "0x0000000000000000000000000000000000001e6b",
-      "live_bytecode_verified": false,
-      "note": "Specification pin of the stored request-time BNB rule. Not a live eth_getCode reading.",
-      "receipt_implies_payment": true,
-      "to_block": null
-    }
-  ],
-  "manifest_hash": "861f9d511c23ced63438d539f87b67dd49265d672d7b7fcc6fb0946e5ba4d6f1",
+  "implementations": [],
+  "manifest_hash": "30cd444e33ec05a71257e079b0b11a53154aba2dcf447d4e1b24acff2fa135b3",
   "network": "bsc-mainnet",
   "proxy": {
     "address": "0x1adb950d8bb3da4be104211d5ab038628e477fe6",

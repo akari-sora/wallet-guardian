@@ -17,16 +17,21 @@ VERDICTS = frozenset({
 # A truncated window or a failed historical read is not a contradiction.
 FALSE_NO_MATCH_GAPS = frozenset({
     "checkpoint_unverified",
+    "claim_evidence_mismatch",
+    "deadline",
+    "discovery_incomplete",
     "empty_interval",
     "empty_request_array",
     "historical_state_unavailable",
     "logs_unavailable",
     "no_claim_in_interval",
+    "provider_call_budget",
     "pruned_logs",
     "rate_limited",
     "read_error",
-    "deadline",
-    "provider_call_budget",
+    "receipt_checkpoint_unverified",
+    "receipt_status_unavailable",
+    "request_index_mismatch",
     "truncated_logs",
 })
 CALL_LIMIT = 32

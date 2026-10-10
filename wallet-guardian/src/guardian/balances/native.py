@@ -459,12 +459,9 @@ def commit_eligible(
         if status == "committed":
             alert = planned.get("alert")
             if isinstance(alert, dict):
-                try:
-                    from guardian.explanations.engine import note_increase
+                from guardian.explanations.engine import note_increase
 
-                    note_increase(database, tenant, item, alert)
-                except Exception:
-                    pass
+                note_increase(database, tenant, item, alert)
             return (1 if planned.get("alert") else 0), decision
         if status == "rejected":
             return 0, decision

@@ -73,15 +73,25 @@ def discover_logs(
     account: str,
     start_block: int,
     end_block: int,
-) -> tuple[list[FoundLog], str | None]:
-    """Claim and request logs for one account on the registered manager, inside the interval."""
+    *,
+    window_high: int | None = None,
+) -> tuple[list[FoundLog], str | None, int]:
+    """Claim and request logs inside one bounded slice of ``(start, end]``.
+
+    The third value is the next exclusive high block, or ``-1`` when this
+    interval is fully covered. A wider span is resumable (``truncated_logs``),
+    not an empty result.
+    """
     if end_block <= start_block:
-        return [], "empty_interval"
-    if end_block - start_block > LOG_SPAN_MAX:
-        return [], "truncated_logs"
+        return [], "empty_interval", -1
+    high = end_block if window_high is None else window_high
+    if high <= start_block:
+        return [], None, -1
     owner = normalize_address(account)
     if owner is None:
-        return [], "bad_address"
+        return [], "bad_address", -1
+    incomplete = high - start_block > LOG_SPAN_MAX
+    low = high - LOG_SPAN_MAX if incomplete else start_block
     found: list[FoundLog] = []
     for signature, kind in (
         ("ClaimWithdrawal(address,uint256,uint256)", "claim"),
@@ -89,24 +99,111 @@ def discover_logs(
     ):
         spec = manifest.event(signature)
         if spec is None:
-            return [], "stale_abi"
+            return [], "stale_abi", high
         topic = str(spec["topic"]).lower()
         rows, error = rpc.call("eth_getLogs", [{
             "address": manifest.proxy(),
-            "fromBlock": hex(start_block + 1),
-            "toBlock": hex(end_block),
+            "fromBlock": hex(low + 1),
+            "toBlock": hex(high),
             "topics": [topic, pad_address(owner)],
         }])
         if error:
-            return [], error
+            return [], error, high
         if not isinstance(rows, list):
-            return [], "logs_unavailable"
+            return [], "logs_unavailable", high
         for row in rows:
             parsed = _parse_log(row, kind, topic, manifest.proxy(), owner)
             if parsed is None:
                 continue
             found.append(parsed)
-    return found, None
+    return found, ("truncated_logs" if incomplete else None), (low if incomplete else -1)
+
+
+def lookback_bounds(old_block: int, cursor: int | None) -> tuple[int, int, int] | None:
+    """One bounded request search at or before the old checkpoint.
+
+    Returns ``(low_inclusive, high_inclusive, next_cursor)``. ``next_cursor``
+    is ``0`` when the search reached genesis. ``None`` means nothing remains.
+    """
+    if cursor == 0 or old_block <= 0:
+        return None
+    high = old_block if cursor is None else cursor
+    if high <= 0:
+        return None
+    low = max(0, high - LOG_SPAN_MAX)
+    return low, high, (0 if low == 0 else low)
+
+
+def assign_request_identity(slots: list[Slot], logs: list[FoundLog]) -> None:
+    """Attach a unique prior request log to a queue slot. Amount alone is not enough."""
+    pool = [item for item in logs if item.kind == "request"]
+    used = {
+        (slot.tx_id, slot.log_index)
+        for slot in slots
+        if slot.tx_id and slot.log_index is not None
+    }
+    for slot in slots:
+        if slot.tx_id and slot.log_index is not None:
+            continue
+        choices = [
+            item for item in pool
+            if (item.tx_id, item.log_index) not in used
+            and item.data_words
+            and item.data_words[0] == slot.slis
+        ]
+        if len(choices) != 1:
+            continue
+        chosen = choices[0]
+        slot.tx_id = chosen.tx_id
+        slot.log_index = chosen.log_index
+        used.add((chosen.tx_id, chosen.log_index))
+
+
+def union_logs(existing: list[FoundLog], found: list[FoundLog]) -> list[FoundLog]:
+    """Keep the first validated copy of each transaction and log index."""
+    merged: list[FoundLog] = []
+    seen: set[tuple[str, int]] = set()
+    for item in [*existing, *found]:
+        key = (item.tx_id, item.log_index)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return merged
+
+
+def log_record(log: FoundLog) -> dict[str, Any]:
+    topic = ""
+    topics = log.raw.get("topics") if isinstance(log.raw, dict) else None
+    if isinstance(topics, list) and topics:
+        topic = str(topics[0])
+    return {
+        "account": log.account,
+        "address": log.address,
+        "block_number": log.block_number,
+        "data_words": list(log.data_words),
+        "kind": log.kind,
+        "log_index": log.log_index,
+        "topic": topic,
+        "tx_id": log.tx_id,
+        "tx_index": log.tx_index,
+    }
+
+
+def log_from_record(row: dict[str, Any]) -> FoundLog:
+    topic = str(row.get("topic") or "")
+    words = tuple(int(item) for item in row.get("data_words") or [])
+    return FoundLog(
+        str(row.get("kind") or ""),
+        str(row.get("address") or ""),
+        str(row.get("account") or ""),
+        str(row.get("tx_id") or ""),
+        int(row.get("block_number") or 0),
+        int(row.get("tx_index") or 0),
+        int(row.get("log_index") or 0),
+        words,
+        {"topics": [topic]},
+    )
 
 
 def _parse_log(row: Any, kind: str, topic: str, proxy: str, account: str) -> FoundLog | None:

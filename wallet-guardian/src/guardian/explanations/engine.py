@@ -9,15 +9,27 @@ from guardian.explanations.lista import ListaExplainer
 from guardian.explanations.models import document, empty_amounts, empty_parties, fingerprint
 from guardian.explanations.registry import ExplainerManifest, load_packaged
 from guardian.explanations.rpc import ExplanationRpc
+from guardian.explanations.discovery import log_from_record, log_record
 from guardian.explanations.store import (
+    account_for_wallet,
     claim_job,
+    clear_enqueue_failure,
+    complete_job,
     enqueue,
-    finish_job,
+    enqueue_failures,
     force_pending,
     hold_token,
-    insert_revision,
+    job_for,
     jobs_for,
     latest_revision,
+    load_interval,
+    load_lookback,
+    load_requests,
+    record_enqueue_failure,
+    release_attempt,
+    save_interval,
+    save_lookback,
+    save_requests,
 )
 
 _PLUGINS = (ListaExplainer(),)
@@ -25,6 +37,7 @@ _INCOMPLETE = frozenset({
     "checkpoint_hash_mismatch",
     "checkpoint_unverified",
     "deadline",
+    "discovery_incomplete",
     "historical_state_unavailable",
     "logs_unavailable",
     "provider_call_budget",
@@ -32,6 +45,7 @@ _INCOMPLETE = frozenset({
     "rate_limited",
     "read_error",
     "reorg",
+    "truncated_logs",
 })
 _HOLD = frozenset({
     "checkpoint_hash_mismatch",
@@ -46,22 +60,36 @@ _HOLD = frozenset({
 
 
 def note_increase(database: Any, tenant: str, item: Any, alert: dict[str, Any]) -> None:
-    """Queue one native increase. The account stays off the alert payload."""
-    if alert.get("kind") != "balance_delta" or alert.get("direction") != "increase":
+    """Queue one native increase or an internal native credit. The account stays off the alert."""
+    balance = alert.get("kind") == "balance_delta" and alert.get("direction") == "increase"
+    if not balance and not any(plugin.matches(alert) for plugin in _PLUGINS):
         return
     account = item.get("account") if isinstance(item, dict) else None
     event_id = alert.get("dedup_key")
+    network = str(alert.get("network") or "")
+    wallet_id = str(alert.get("wallet_id") or "")
     if not isinstance(account, str) or not isinstance(event_id, str) or not event_id:
         return
-    enqueue(
-        database,
-        tenant,
-        event_id,
-        account=account,
-        network=str(alert.get("network") or ""),
-        wallet_id=str(alert.get("wallet_id") or ""),
-        payload=alert,
-    )
+    try:
+        enqueue(
+            database,
+            tenant,
+            event_id,
+            account=account,
+            network=network,
+            wallet_id=wallet_id,
+            payload=alert,
+        )
+    except Exception:
+        record_enqueue_failure(
+            database,
+            tenant,
+            event_id,
+            account=account,
+            network=network,
+            wallet_id=wallet_id,
+            payload=alert,
+        )
 
 
 def drain_pending(
@@ -74,8 +102,10 @@ def drain_pending(
     source_for: Callable[[str], str | None],
     only_event: str | None = None,
     force: bool = False,
+    account_by_wallet: dict[str, str] | None = None,
 ) -> None:
     """Finish queued explanations inside the remaining round. One failure stays local."""
+    recover_missing_jobs(database, tenant, account_by_wallet)
     manifests = load_packaged()
     for job in jobs_for(database, tenant):
         if only_event is not None and job["event_id"] != only_event:
@@ -94,7 +124,7 @@ def refresh_event(
     clock: Callable[[], float],
     source_for: Callable[[str], str | None],
 ) -> dict[str, Any] | None:
-    """Explicit read-only recompute. A running job is left to its owner."""
+    """Explicit read-only recompute. A live owner keeps the job; an abandoned one is reclaimed."""
     force_pending(database, tenant, event_id)
     drain_pending(
         database, tenant, transport, clock,
@@ -115,8 +145,6 @@ def _drain_job(
     force: bool,
 ) -> None:
     event_id = str(job["event_id"])
-    if job["state"] == "running":
-        return
     if job["state"] == "done" and not force:
         return
     if not force and round_budget is not None and getattr(round_budget, "expired", None) and round_budget.expired():
@@ -128,39 +156,135 @@ def _drain_job(
             return
     if not claim_job(database, tenant, event_id):
         return
+    owned = job_for(database, tenant, event_id) or job
+    attempt = int(owned["attempt"])
+    generation = int(owned["event_revision"])
+    try:
+        _run_claimed(
+            database, tenant, owned, transport, clock, round_budget, source_for, manifest, attempt, generation,
+        )
+    finally:
+        release_attempt(tenant, event_id, attempt)
+
+
+def _run_claimed(
+    database: Any,
+    tenant: str,
+    job: dict[str, Any],
+    transport: Any,
+    clock: Callable[[], float],
+    round_budget: Any | None,
+    source_for: Callable[[str], str | None],
+    manifest: ExplainerManifest | None,
+    attempt: int,
+    generation: int,
+) -> None:
+    event_id = str(job["event_id"])
     alert = job["payload"] if isinstance(job["payload"], dict) else {}
     if manifest is None:
         matched = any(plugin.matches(alert) for plugin in _PLUGINS)
         if matched:
-            body = _unavailable(event_id, int(job["event_revision"]), "stale_abi", alert)
+            body = _unavailable(event_id, generation, "stale_abi", alert)
         else:
-            body = _unavailable(event_id, int(job["event_revision"]), None, alert, verdict="NOT_APPLICABLE")
-        _store(database, tenant, job, body, manifest)
+            body = _unavailable(event_id, generation, None, alert, verdict="NOT_APPLICABLE")
+        _store(database, tenant, job, body, manifest, attempt, generation)
         return
     plugin = next((item for item in _PLUGINS if item.explainer_id == manifest.explainer_id), None)
     if plugin is None or not plugin.matches(alert):
-        body = _unavailable(event_id, int(job["event_revision"]), None, alert, verdict="NOT_APPLICABLE")
-        _store(database, tenant, job, body, manifest)
+        body = _unavailable(event_id, generation, None, alert, verdict="NOT_APPLICABLE")
+        _store(database, tenant, job, body, manifest, attempt, generation)
         return
     source_id = source_for(str(job["network"]))
     if not source_id:
-        body = _unavailable(event_id, int(job["event_revision"]), "endpoint_missing", alert, manifest)
-        _store(database, tenant, job, body, manifest)
+        body = _unavailable(event_id, generation, "endpoint_missing", alert, manifest)
+        _store(database, tenant, job, body, manifest, attempt, generation)
         return
     rpc = ExplanationRpc(transport, source_id, clock, round_budget)
     ctx = SimpleNamespace(alert=alert, account=job["account"], manifest=manifest, rpc=rpc)
+    _bind_discovery(ctx, database, tenant, event_id, manifest, str(job["account"]), str(job["network"]))
     try:
         body = plugin.explain(ctx)
     except Exception:
-        body = _unavailable(event_id, int(job["event_revision"]), "read_error", alert, manifest)
+        body = _unavailable(event_id, generation, "read_error", alert, manifest)
     if not isinstance(body, dict):
-        body = _unavailable(event_id, int(job["event_revision"]), "read_error", alert, manifest)
-    body["event_revision"] = int(job["event_revision"])
+        body = _unavailable(event_id, generation, "read_error", alert, manifest)
+    _downgrade_if_late(body, rpc)
+    body["event_revision"] = generation
     body["event_id"] = event_id
-    _store(database, tenant, job, body, manifest)
+    _store(database, tenant, job, body, manifest, attempt, generation)
 
 
-def _store(database: Any, tenant: str, job: dict[str, Any], body: dict[str, Any], manifest: ExplainerManifest | None) -> None:
+def _downgrade_if_late(body: dict[str, Any], rpc: ExplanationRpc) -> None:
+    """A response that landed after the budget is not a verified match and does not touch the alert."""
+    late = rpc.stopped == "deadline" or rpc.remaining_seconds() <= 0
+    if not late:
+        return
+    gaps = [str(item) for item in body.get("gaps") or []]
+    if "deadline" not in gaps:
+        gaps.append("deadline")
+    body["gaps"] = sorted(set(gaps))
+    if body.get("verdict") == "MATCHES_OWN_REQUEST":
+        body["verdict"] = "UNVERIFIED"
+        facts = body.get("facts")
+        if isinstance(facts, dict):
+            facts["beneficiary_payment"] = "unavailable"
+            facts["implementation_at_execution"] = "unverified"
+            facts["request_linkage"] = "unavailable"
+        body["established_facts"] = []
+        body["explained_effects"] = []
+
+
+def _bind_discovery(
+    ctx: Any,
+    database: Any,
+    tenant: str,
+    event_id: str,
+    manifest: ExplainerManifest,
+    account: str,
+    network: str,
+) -> None:
+    cursor, rows = load_interval(database, tenant, event_id)
+    ctx.interval_cursor = cursor
+    ctx.saved_logs = [log_from_record(item) for item in rows]
+    ctx.lookback_cursor = load_lookback(database, tenant, network, account, manifest.proxy())
+    ctx.known_requests = lambda: [
+        log_from_record({
+            "account": account,
+            "address": str(item.get("address") or manifest.proxy()),
+            "block_number": int(item["block_number"]),
+            "data_words": [int(item["slis"])],
+            "kind": "request",
+            "log_index": int(item["log_index"]),
+            "topic": str(item.get("topic") or ""),
+            "tx_id": str(item["tx_id"]),
+            "tx_index": int(item["tx_index"]),
+        })
+        for item in load_requests(database, tenant, network, account, manifest.proxy())
+    ]
+
+    def save_interval_rows(next_cursor: int | None, logs: list[Any]) -> None:
+        save_interval(database, tenant, event_id, next_cursor, [log_record(item) for item in logs])
+
+    def save_request_rows(logs: list[Any]) -> None:
+        save_requests(database, tenant, network, account, manifest.proxy(), [log_record(item) for item in logs])
+
+    def save_lookback_cursor(next_cursor: int) -> None:
+        save_lookback(database, tenant, network, account, manifest.proxy(), next_cursor)
+
+    ctx.save_interval = save_interval_rows
+    ctx.save_requests = save_request_rows
+    ctx.save_lookback = save_lookback_cursor
+
+
+def _store(
+    database: Any,
+    tenant: str,
+    job: dict[str, Any],
+    body: dict[str, Any],
+    manifest: ExplainerManifest | None,
+    attempt: int,
+    generation: int,
+) -> None:
     gaps = {str(item) for item in body.get("gaps") or []}
     reason = body.get("retry_reason") if isinstance(body.get("retry_reason"), str) else None
     incomplete = (reason in _INCOMPLETE) or bool(gaps & _INCOMPLETE)
@@ -178,16 +302,18 @@ def _store(database: Any, tenant: str, job: dict[str, Any], body: dict[str, Any]
     body["funds_marked_safe"] = False
     body["severity_changed"] = False
     evidence = fingerprint(_evidence(body))
-    insert_revision(database, tenant, str(job["event_id"]), body, evidence)
     token = _token(database, tenant, job, manifest) if hold_reason and incomplete else None
-    finish_job(
+    complete_job(
         database,
         tenant,
         str(job["event_id"]),
+        body,
+        evidence,
+        attempt=attempt,
+        event_revision=generation,
         state="retry" if incomplete else "done",
         retry_reason=body.get("retry_reason") if incomplete else None,
         hold_token=token,
-        event_revision=int(job["event_revision"]),
     )
 
 
@@ -288,16 +414,98 @@ def _unavailable(
 
 
 def _fail_closed(database: Any, tenant: str, job: dict[str, Any], gap: str) -> None:
-    if job["state"] == "running":
-        body = _unavailable(str(job["event_id"]), int(job["event_revision"]), gap, job.get("payload") or {})
-        _store(database, tenant, job, body, None)
-        return
+    event_id = str(job["event_id"])
+    current = job_for(database, tenant, event_id) or job
+    if str(current.get("state")) != "running":
+        if not claim_job(database, tenant, event_id):
+            return
+        current = job_for(database, tenant, event_id) or current
+    attempt = int(current["attempt"])
+    generation = int(current["event_revision"])
     try:
-        if claim_job(database, tenant, str(job["event_id"])):
-            body = _unavailable(str(job["event_id"]), int(job["event_revision"]), gap, job.get("payload") or {})
-            _store(database, tenant, job, body, None)
+        body = _unavailable(event_id, generation, gap, current.get("payload") or {})
+        _store(database, tenant, current, body, None, attempt, generation)
+    finally:
+        release_attempt(tenant, event_id, attempt)
+
+
+def recover_missing_jobs(database: Any, tenant: str, account_by_wallet: dict[str, str] | None = None) -> None:
+    """Enqueue investigations that committed without a job. A failure stays visible until it lands."""
+    known = account_by_wallet or {}
+    present = {str(item["event_id"]) for item in jobs_for(database, tenant)}
+    for failed in enqueue_failures(database, tenant):
+        event_id = str(failed["event_id"])
+        if event_id in present:
+            clear_enqueue_failure(database, tenant, event_id)
+            continue
+        account = failed.get("account")
+        network = failed.get("network")
+        wallet_id = failed.get("wallet_id")
+        payload = failed.get("payload") if isinstance(failed.get("payload"), dict) else {}
+        if not all(isinstance(item, str) and item for item in (account, network, wallet_id)):
+            continue
+        enqueue(
+            database,
+            tenant,
+            event_id,
+            account=str(account),
+            network=str(network),
+            wallet_id=str(wallet_id),
+            payload=payload,
+        )
+        clear_enqueue_failure(database, tenant, event_id)
+        present.add(event_id)
+    try:
+        alerts = database.alerts_for(tenant)
     except Exception:
+        record_enqueue_failure(
+            database,
+            tenant,
+            "__recover__",
+            account="",
+            network="",
+            wallet_id="",
+            payload={"reason": "alerts_unreadable"},
+        )
         return
+    for alert in alerts:
+        if not isinstance(alert, dict) or not _should_queue(alert):
+            continue
+        event_id = alert.get("dedup_key")
+        wallet_id = alert.get("wallet_id")
+        if not isinstance(event_id, str) or not event_id or event_id in present:
+            continue
+        if not isinstance(wallet_id, str) or not wallet_id:
+            continue
+        account = known.get(wallet_id) or account_for_wallet(database, tenant, wallet_id)
+        if account is None:
+            record_enqueue_failure(
+                database,
+                tenant,
+                event_id,
+                account="",
+                network=str(alert.get("network") or ""),
+                wallet_id=wallet_id,
+                payload=alert,
+            )
+            continue
+        enqueue(
+            database,
+            tenant,
+            event_id,
+            account=account,
+            network=str(alert.get("network") or ""),
+            wallet_id=wallet_id,
+            payload=alert,
+        )
+        clear_enqueue_failure(database, tenant, event_id)
+        present.add(event_id)
+
+
+def _should_queue(alert: dict[str, Any]) -> bool:
+    if alert.get("kind") == "balance_delta" and alert.get("direction") == "increase":
+        return True
+    return any(plugin.matches(alert) for plugin in _PLUGINS)
 
 
 def _hash_of(point: Any) -> str:

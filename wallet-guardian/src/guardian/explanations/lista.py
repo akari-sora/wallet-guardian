@@ -12,13 +12,19 @@ from eth_abi import decode, encode
 from eth_hash.auto import keccak
 from eth_utils import function_signature_to_4byte_selector
 
-from guardian.chains.evm.accounting import normalize_address
+from guardian.chains.evm.accounting import normalize_address, pad_address
 from guardian.explanations.discovery import (
     FoundLog,
     Slot,
+    _data_words,
+    _parse_log,
+    _topic_address,
+    assign_request_identity,
     discover_logs,
+    lookback_bounds,
     replay,
     request_identity,
+    union_logs,
     upgraded_topic,
 )
 from guardian.explanations.models import (
@@ -49,11 +55,15 @@ class ListaExplainer:
     version = "1"
 
     def matches(self, alert: Mapping[str, Any]) -> bool:
-        if alert.get("kind") != "balance_delta" or alert.get("direction") != "increase":
+        if alert.get("network") != "bsc-mainnet" or alert.get("asset") != "evm-native:56":
             return False
-        if alert.get("network") != "bsc-mainnet":
-            return False
-        return alert.get("asset") == "evm-native:56"
+        if alert.get("kind") == "balance_delta" and alert.get("direction") == "increase":
+            return True
+        return (
+            alert.get("transfer_origin") == "evm_internal"
+            and alert.get("direction") == "in"
+            and alert.get("kind") in {"native_eth", "native_unit", "asset_usd"}
+        )
 
     def explain(self, ctx: Any) -> dict[str, Any]:
         alert = ctx.alert
@@ -74,18 +84,21 @@ class ListaExplainer:
             "old": "" if old is None else old[1],
         }
         if account is None or old is None or new is None:
-            return _finish(
+            return _sealed(
+                rpc,
                 event_id, manifest, "UNVERIFIED", facts, ["malformed_event"], [], [],
                 parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, None,
             )
         chain, chain_error = _chain_id(rpc)
         if chain_error:
-            return _finish(
+            return _sealed(
+                rpc,
                 event_id, manifest, "UNVERIFIED", facts, [chain_error], [], [],
                 parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, chain_error,
             )
         if chain != manifest.chain_id():
-            return _finish(
+            return _sealed(
+                rpc,
                 event_id, manifest, "UNVERIFIED", facts, ["wrong_chain"], [], [],
                 parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, None,
             )
@@ -93,30 +106,42 @@ class ListaExplainer:
         new_header, new_error = _header(rpc, new[0])
         if old_error or new_error or old_header is None or new_header is None:
             code = old_error or new_error or "checkpoint_unverified"
-            return _finish(
+            return _sealed(
+                rpc,
                 event_id, manifest, "UNVERIFIED", facts, [code], [], [],
                 parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, code,
             )
         if old_header["hash"] != old[1] or new_header["hash"] != new[1]:
-            return _finish(
+            return _sealed(
+                rpc,
                 event_id, manifest, "UNVERIFIED", facts, ["checkpoint_hash_mismatch"], [], [],
                 parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, "reorg",
             )
-        logs, log_error = discover_logs(rpc, manifest, account, old[0], new[0])
-        if log_error:
+        logs, log_error = _collect_logs(ctx, rpc, manifest, account, old[0], new[0])
+        if log_error and log_error != "truncated_logs":
             extra = _empty_queue_gap(rpc, manifest, account, new[1], gaps)
             gaps.extend(extra)
             gaps.append(log_error)
-            return _finish(
-                event_id, manifest, "UNVERIFIED", facts, gaps, [], [],
+            return _sealed(
+                rpc, event_id, manifest, "UNVERIFIED", facts, gaps, [], [],
                 parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, log_error,
             )
-        claims = [item for item in logs if item.kind == "claim"]
+        if log_error == "truncated_logs":
+            gaps.append("truncated_logs")
+        _remember_requests(ctx, logs)
+        claims, conflict = _unique_claims([item for item in logs if item.kind == "claim"])
+        if conflict:
+            gaps.append("claim_evidence_mismatch")
         if not claims:
+            if "truncated_logs" in gaps:
+                return _sealed(
+                    rpc, event_id, manifest, "UNVERIFIED", facts, gaps, [], [],
+                    parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, "truncated_logs",
+                )
             gaps.append("no_claim_in_interval")
             gaps.extend(_empty_queue_gap(rpc, manifest, account, new[1], gaps))
-            return _finish(
-                event_id, manifest, "UNVERIFIED", facts, gaps, [], [],
+            return _sealed(
+                rpc, event_id, manifest, "UNVERIFIED", facts, gaps, [], [],
                 parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, None,
             )
         effects: list[dict[str, Any]] = []
@@ -127,8 +152,8 @@ class ListaExplainer:
         verdicts: list[str] = []
         for claim in claims:
             outcome = _one_claim(
-                rpc, manifest, account, claim, logs, old[1], facts, gaps, contradictions,
-                established, parties, amounts, refs,
+                rpc, manifest, account, claim, logs, old[0], old[1], facts, gaps, contradictions,
+                established, parties, amounts, refs, ctx,
             )
             calculation = outcome["calculation"] or calculation
             if outcome["effect"] is not None:
@@ -140,8 +165,8 @@ class ListaExplainer:
                 request_uuid = str(outcome["uuid"])
             verdicts.append(str(outcome["verdict"]))
             if outcome["verdict"] == "NO_MATCH":
-                return _finish(
-                    event_id, manifest, "NO_MATCH", facts, gaps, contradictions, established,
+                return _sealed(
+                    rpc, event_id, manifest, "NO_MATCH", facts, gaps, contradictions, established,
                     parties, amounts, effects, _residual(alert, explained), refs, checkpoints,
                     identities[0] if len(identities) == 1 else None, request_uuid, None, calculation,
                 )
@@ -159,8 +184,8 @@ class ListaExplainer:
         elif "provider_call_budget" in gaps:
             retry = "provider_call_budget"
         identity = identities[0] if len(identities) == 1 else None
-        return _finish(
-            event_id, manifest, verdict, facts, gaps, contradictions, established,
+        return _sealed(
+            rpc, event_id, manifest, verdict, facts, gaps, contradictions, established,
             parties, amounts, effects, _residual(alert, explained), refs, checkpoints,
             identity, request_uuid, retry, calculation,
         )
@@ -172,6 +197,7 @@ def _one_claim(
     account: str,
     claim: FoundLog,
     logs: list[FoundLog],
+    old_block: int,
     old_hash: str,
     facts: dict[str, str],
     gaps: list[str],
@@ -180,8 +206,8 @@ def _one_claim(
     parties: dict[str, str | None],
     amounts: dict[str, str | None],
     refs: list[str],
+    ctx: Any,
 ) -> dict[str, Any]:
-    payment = claim.data_words[1] if len(claim.data_words) > 1 else None
     tx, tx_error = rpc.call("eth_getTransactionByHash", [claim.tx_id])
     receipt, receipt_error = rpc.call("eth_getTransactionReceipt", [claim.tx_id])
     refs.append(f"tx:{claim.tx_id}")
@@ -189,8 +215,18 @@ def _one_claim(
     if tx_error or receipt_error or not isinstance(tx, dict) or not isinstance(receipt, dict):
         gaps.append(tx_error or receipt_error or "read_error")
         return {"verdict": "PARTIAL", "effect": None, "identity": None, "uuid": None, "calculation": None}
-    if str(receipt.get("transactionHash") or "").lower() != claim.tx_id:
-        gaps.append("receipt_identity_mismatch")
+    identity_gap = _tx_receipt_identity(tx, receipt, claim)
+    if identity_gap:
+        gaps.append(identity_gap)
+        return {"verdict": "PARTIAL", "effect": None, "identity": None, "uuid": None, "calculation": None}
+    header, header_error = _header(rpc, claim.block_number)
+    if header_error or header is None or not header.get("parent"):
+        facts["implementation_at_execution"] = "unverified"
+        gaps.append(header_error or "implementation_at_execution_unverified")
+        return {"verdict": "PARTIAL", "effect": None, "identity": None, "uuid": None, "calculation": None}
+    checkpoint_gap = _checkpoint_identity(tx, receipt, header["hash"])
+    if checkpoint_gap:
+        gaps.append(checkpoint_gap)
         return {"verdict": "PARTIAL", "effect": None, "identity": None, "uuid": None, "calculation": None}
     submitter = normalize_address(tx.get("from"))
     parties["tx_submitter"] = submitter
@@ -202,18 +238,22 @@ def _one_claim(
         contradictions.append("beneficiary_contradiction")
         facts["beneficiary_payment"] = "contradicted"
         return {"verdict": "NO_MATCH", "effect": None, "identity": None, "uuid": None, "calculation": None}
-    status = receipt.get("status")
-    if status not in {"0x1", "0x01", 1}:
+    status_kind = _status_kind(receipt.get("status"))
+    if status_kind == "failed":
         contradictions.append("failed_payment")
         facts["beneficiary_payment"] = "contradicted"
         return {"verdict": "NO_MATCH", "effect": None, "identity": None, "uuid": None, "calculation": None}
-    if not _receipt_contains(receipt, claim):
-        gaps.append("claim_log_not_in_receipt")
+    if status_kind != "success":
+        gaps.append("receipt_status_unavailable")
+        facts["beneficiary_payment"] = "unavailable"
         return {"verdict": "PARTIAL", "effect": None, "identity": None, "uuid": None, "calculation": None}
-    header, header_error = _header(rpc, claim.block_number)
-    if header_error or header is None or not header.get("parent"):
-        facts["implementation_at_execution"] = "unverified"
-        gaps.append("implementation_at_execution_unverified")
+    bound_gap, words = _bound_claim_log(receipt, claim, account, manifest.proxy(), header["hash"])
+    if bound_gap or words is None:
+        gaps.append(bound_gap or "claim_log_not_in_receipt")
+        return {"verdict": "PARTIAL", "effect": None, "identity": None, "uuid": None, "calculation": None}
+    logged_index = words[0]
+    if calldata_index is None or calldata_index != logged_index:
+        gaps.append("request_index_mismatch")
         return {"verdict": "PARTIAL", "effect": None, "identity": None, "uuid": None, "calculation": None}
     interval, impl_gap = _implementation(rpc, manifest, header, claim.tx_index, refs)
     if impl_gap or interval is None:
@@ -224,7 +264,8 @@ def _one_claim(
         facts["implementation_at_execution"] = "verified"
         established.append("implementation_at_execution")
         calculation = str(interval.get("calculation") or "")
-    if interval and interval.get("receipt_implies_payment") is True and payment is not None:
+    payment = words[1]
+    if interval and interval.get("receipt_implies_payment") is True and words == claim.data_words:
         facts["beneficiary_payment"] = "verified"
         parties["payout_recipient"] = account
         established.append("beneficiary_payment")
@@ -232,9 +273,10 @@ def _one_claim(
     else:
         facts["beneficiary_payment"] = "unavailable"
         gaps.append("payment_not_implied")
+        payment = None
     _role(rpc, manifest, header["hash"], submitter, facts)
     link = _link_request(
-        rpc, manifest, account, claim, logs, old_hash, header, calculation, facts, gaps, amounts, refs,
+        rpc, manifest, account, claim, logs, old_block, old_hash, header, calculation, facts, gaps, amounts, refs, ctx,
     )
     identity = link.get("identity")
     uuid = link.get("uuid")
@@ -269,6 +311,7 @@ def _link_request(
     account: str,
     claim: FoundLog,
     logs: list[FoundLog],
+    old_block: int,
     old_hash: str,
     header: dict[str, Any],
     calculation: str | None,
@@ -276,6 +319,7 @@ def _link_request(
     gaps: list[str],
     amounts: dict[str, str | None],
     refs: list[str],
+    ctx: Any,
 ) -> dict[str, Any]:
     start, start_error = _queue(rpc, manifest, account, old_hash)
     if start_error or start is None:
@@ -314,8 +358,13 @@ def _link_request(
         return {}
     slot = link.slot
     if not slot.tx_id or slot.log_index is None:
+        _fill_request_identity(ctx, rpc, manifest, account, old_block, [slot], logs, gaps)
+    if not slot.tx_id or slot.log_index is None:
         facts["request_linkage"] = "ambiguous"
-        gaps.append("request_identity_incomplete")
+        if getattr(ctx, "lookback_cursor", None) == 0:
+            gaps.append("request_identity_incomplete")
+        else:
+            gaps.append("discovery_incomplete")
         return {"uuid": None if slot.uuid is None else str(slot.uuid)}
     facts["request_linkage"] = "verified"
     established_identity = request_identity(manifest.chain_id(), manifest.proxy(), account, slot.tx_id, slot.log_index)
@@ -387,16 +436,19 @@ def _implementation(
     end, end_error = _storage(rpc, manifest.proxy(), claim_hash)
     if start_error or end_error or start is None or end is None:
         return None, "implementation_at_execution_unverified"
-    upgrades, upgrade_error = _upgrades(rpc, manifest.proxy(), header["number"])
-    if upgrade_error:
+    upgrades, upgrade_error = _upgrades(rpc, manifest.proxy(), header["number"], claim_hash)
+    if upgrade_error or upgrades is None:
         return None, "implementation_at_execution_unverified"
     if any(item[0] == tx_index for item in upgrades):
         return None, "implementation_at_execution_unverified"
     impl = start
-    for upgrade_index, upgraded in upgrades:
+    for upgrade_index, _log_index, upgraded in upgrades:
         if upgrade_index < tx_index:
             impl = upgraded
-    if not upgrades and start != end:
+    terminal = start
+    for _upgrade_index, _log_index, upgraded in upgrades:
+        terminal = upgraded
+    if terminal != end:
         return None, "implementation_at_execution_unverified"
     code, code_error = rpc.call("eth_getCode", [impl, rpc.historical(claim_hash)])
     proxy_code, proxy_error = rpc.call("eth_getCode", [manifest.proxy(), rpc.historical(claim_hash)])
@@ -424,7 +476,12 @@ def _implementation(
     return None, "code_hash_mismatch"
 
 
-def _upgrades(rpc: ExplanationRpc, proxy: str, block: int) -> tuple[list[tuple[int, str]], str | None]:
+def _upgrades(
+    rpc: ExplanationRpc,
+    proxy: str,
+    block: int,
+    header_hash: str,
+) -> tuple[list[tuple[int, int, str]] | None, str | None]:
     rows, error = rpc.call("eth_getLogs", [{
         "address": proxy,
         "fromBlock": hex(block),
@@ -432,23 +489,40 @@ def _upgrades(rpc: ExplanationRpc, proxy: str, block: int) -> tuple[list[tuple[i
         "topics": [upgraded_topic()],
     }])
     if error:
-        return [], error
+        return None, error
     if not isinstance(rows, list):
-        return [], "read_error"
-    found: list[tuple[int, str]] = []
+        return None, "read_error"
+    found: list[tuple[int, int, str]] = []
     for row in rows:
-        if not isinstance(row, dict):
-            continue
-        topics = row.get("topics")
-        if not isinstance(topics, list) or len(topics) < 2:
-            continue
-        impl = normalize_address("0x" + str(topics[1])[-40:])
-        index = _hex_int(row.get("transactionIndex"))
-        if impl is None or index is None:
-            continue
-        found.append((index, impl))
+        parsed = _one_upgrade(row, proxy, block, header_hash)
+        if parsed is None:
+            return None, "implementation_at_execution_unverified"
+        found.append(parsed)
     found.sort()
     return found, None
+
+
+def _one_upgrade(row: Any, proxy: str, block: int, header_hash: str) -> tuple[int, int, str] | None:
+    if not isinstance(row, dict) or _removed(row):
+        return None
+    if normalize_address(row.get("address")) != proxy:
+        return None
+    if _hex_int(row.get("blockNumber")) != block:
+        return None
+    digest = row.get("blockHash")
+    if not isinstance(digest, str) or digest.lower() != header_hash:
+        return None
+    topics = row.get("topics")
+    if not isinstance(topics, list) or not topics or str(topics[0]).lower() != upgraded_topic():
+        return None
+    if len(topics) < 2:
+        return None
+    impl = normalize_address("0x" + str(topics[1])[-40:])
+    tx_index = _hex_int(row.get("transactionIndex"))
+    log_index = _hex_int(row.get("logIndex"))
+    if impl is None or tx_index is None or log_index is None:
+        return None
+    return tx_index, log_index, impl
 
 
 def _storage(rpc: ExplanationRpc, proxy: str, block_hash: str) -> tuple[str | None, str | None]:
@@ -584,6 +658,214 @@ def _chain_id(rpc: ExplanationRpc) -> tuple[int | None, str | None]:
     return value, None
 
 
+def _collect_logs(
+    ctx: Any,
+    rpc: ExplanationRpc,
+    manifest: ExplainerManifest,
+    account: str,
+    start_block: int,
+    end_block: int,
+) -> tuple[list[FoundLog], str | None]:
+    cursor = getattr(ctx, "interval_cursor", None)
+    saved = [item for item in (getattr(ctx, "saved_logs", None) or []) if isinstance(item, FoundLog)]
+    if cursor == -1:
+        return saved, None
+    found, error, next_high = discover_logs(
+        rpc,
+        manifest,
+        account,
+        start_block,
+        end_block,
+        window_high=None if cursor is None else int(cursor),
+    )
+    if error and error != "truncated_logs":
+        return saved, error
+    merged = union_logs(saved, found)
+    saver = getattr(ctx, "save_interval", None)
+    if callable(saver):
+        saver(next_high, merged)
+    ctx.interval_cursor = next_high
+    ctx.saved_logs = merged
+    return merged, error
+
+
+def _remember_requests(ctx: Any, logs: list[FoundLog]) -> None:
+    saver = getattr(ctx, "save_requests", None)
+    if callable(saver):
+        saver([item for item in logs if item.kind == "request"])
+
+
+def _unique_claims(claims: list[FoundLog]) -> tuple[list[FoundLog], bool]:
+    chosen: dict[tuple[str, int], FoundLog] = {}
+    order: list[tuple[str, int]] = []
+    conflict = False
+    for claim in claims:
+        key = (claim.tx_id, claim.log_index)
+        prior = chosen.get(key)
+        if prior is None:
+            chosen[key] = claim
+            order.append(key)
+            continue
+        if (prior.address, prior.account, prior.data_words, prior.block_number) != (
+            claim.address, claim.account, claim.data_words, claim.block_number,
+        ):
+            conflict = True
+    return [chosen[key] for key in order], conflict
+
+
+def _fill_request_identity(
+    ctx: Any,
+    rpc: ExplanationRpc,
+    manifest: ExplainerManifest,
+    account: str,
+    old_block: int,
+    slots: list[Slot],
+    logs: list[FoundLog],
+    gaps: list[str],
+) -> None:
+    if not slots or all(slot.tx_id and slot.log_index is not None for slot in slots):
+        return
+    known: list[FoundLog] = []
+    getter = getattr(ctx, "known_requests", None)
+    if callable(getter):
+        loaded = getter()
+        if isinstance(loaded, list):
+            known = [item for item in loaded if isinstance(item, FoundLog)]
+    assign_request_identity(slots, [*known, *[item for item in logs if item.kind == "request"]])
+    if all(slot.tx_id and slot.log_index is not None for slot in slots):
+        return
+    cursor = getattr(ctx, "lookback_cursor", None)
+    bounds = lookback_bounds(old_block, cursor if isinstance(cursor, int) else None)
+    if bounds is None:
+        return
+    low, high, next_cursor = bounds
+    found, error = _fetch_requests(rpc, manifest, account, low, high)
+    if error:
+        gaps.append(error)
+        return
+    saver = getattr(ctx, "save_requests", None)
+    if callable(saver):
+        saver(found)
+    save_cursor = getattr(ctx, "save_lookback", None)
+    if callable(save_cursor):
+        save_cursor(next_cursor)
+    ctx.lookback_cursor = next_cursor
+    assign_request_identity(slots, [*known, *found])
+
+
+def _fetch_requests(
+    rpc: ExplanationRpc,
+    manifest: ExplainerManifest,
+    account: str,
+    low: int,
+    high: int,
+) -> tuple[list[FoundLog], str | None]:
+    spec = manifest.event("RequestWithdraw(address,uint256)")
+    if spec is None:
+        return [], "stale_abi"
+    topic = str(spec["topic"]).lower()
+    rows, error = rpc.call("eth_getLogs", [{
+        "address": manifest.proxy(),
+        "fromBlock": hex(low),
+        "toBlock": hex(high),
+        "topics": [topic, pad_address(account)],
+    }])
+    if error:
+        return [], error
+    if not isinstance(rows, list):
+        return [], "logs_unavailable"
+    found: list[FoundLog] = []
+    for row in rows:
+        parsed = _parse_log(row, "request", topic, manifest.proxy(), account)
+        if parsed is not None:
+            found.append(parsed)
+    return found, None
+
+
+def _tx_receipt_identity(tx: Mapping[str, Any], receipt: Mapping[str, Any], claim: FoundLog) -> str | None:
+    tx_hash = str(tx.get("hash") or "").lower()
+    if tx_hash and tx_hash != claim.tx_id:
+        return "receipt_identity_mismatch"
+    receipt_hash = str(receipt.get("transactionHash") or "").lower()
+    if receipt_hash != claim.tx_id:
+        return "receipt_identity_mismatch"
+    for value in (_hex_int(receipt.get("blockNumber")), _hex_int(tx.get("blockNumber"))):
+        if value is not None and value != claim.block_number:
+            return "receipt_identity_mismatch"
+    return None
+
+
+def _checkpoint_identity(tx: Mapping[str, Any], receipt: Mapping[str, Any], header_hash: str) -> str | None:
+    tx_block = tx.get("blockHash")
+    if isinstance(tx_block, str) and tx_block.lower() != header_hash:
+        return "receipt_identity_mismatch"
+    receipt_block = receipt.get("blockHash")
+    if not isinstance(receipt_block, str) or not receipt_block.startswith("0x") or len(receipt_block) != 66:
+        return "receipt_checkpoint_unverified"
+    if receipt_block.lower() != header_hash:
+        return "receipt_identity_mismatch"
+    return None
+
+
+def _status_kind(status: Any) -> str:
+    if status in {1, "0x1", "0x01"}:
+        return "success"
+    if status in {0, "0x0", "0x00"}:
+        return "failed"
+    return "unavailable"
+
+
+def _bound_claim_log(
+    receipt: Mapping[str, Any],
+    claim: FoundLog,
+    account: str,
+    proxy: str,
+    header_hash: str,
+) -> tuple[str | None, tuple[int, ...] | None]:
+    logs = receipt.get("logs")
+    if not isinstance(logs, list):
+        return "claim_log_not_in_receipt", None
+    match = None
+    expected_topic = ""
+    topics = claim.raw.get("topics") if isinstance(claim.raw, dict) else None
+    if isinstance(topics, list) and topics:
+        expected_topic = str(topics[0]).lower()
+    for row in logs:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("transactionHash") or "").lower() != claim.tx_id:
+            continue
+        if _hex_int(row.get("logIndex")) != claim.log_index:
+            continue
+        row_topics = row.get("topics")
+        if not isinstance(row_topics, list) or not row_topics or str(row_topics[0]).lower() != expected_topic:
+            continue
+        match = row
+        break
+    if match is None:
+        return "claim_log_not_in_receipt", None
+    if _removed(match) or normalize_address(match.get("address")) != proxy:
+        return "claim_evidence_mismatch", None
+    row_topics = match.get("topics")
+    beneficiary = _topic_address(row_topics[1]) if isinstance(row_topics, list) and len(row_topics) > 1 else None
+    if beneficiary != account:
+        return "claim_evidence_mismatch", None
+    words = _data_words(match.get("data"), 2)
+    if words is None or words != claim.data_words:
+        return "claim_evidence_mismatch", None
+    logged_block = _hex_int(match.get("blockNumber"))
+    if logged_block is not None and logged_block != claim.block_number:
+        return "receipt_identity_mismatch", None
+    logged_hash = match.get("blockHash")
+    if isinstance(logged_hash, str) and logged_hash.lower() != header_hash:
+        return "receipt_identity_mismatch", None
+    return None, words
+
+
+def _removed(row: Mapping[str, Any]) -> bool:
+    return row.get("removed") in {True, 1, "true", "0x1", "0x01"}
+
+
 def _receipt_contains(receipt: Mapping[str, Any], claim: FoundLog) -> bool:
     logs = receipt.get("logs")
     if not isinstance(logs, list):
@@ -667,6 +949,50 @@ def _hex_int(value: Any) -> int | None:
         return int(value, 16)
     except ValueError:
         return None
+
+
+def _sealed(
+    rpc: ExplanationRpc,
+    event_id: str,
+    manifest: ExplainerManifest | None,
+    verdict: str,
+    facts: dict[str, str],
+    gaps: list[str],
+    contradictions: list[str],
+    established: list[str],
+    parties: dict[str, str | None],
+    amounts: dict[str, str | None],
+    effects: list[dict[str, Any]],
+    residual: dict[str, str],
+    refs: list[str],
+    checkpoints: dict[str, str],
+    identity: str | None,
+    request_uuid: str | None,
+    retry: str | None,
+    calculation: str | None = None,
+) -> dict[str, Any]:
+    late = rpc.stopped == "deadline" or rpc.remaining_seconds() <= 0
+    if late:
+        if "deadline" not in gaps:
+            gaps.append("deadline")
+        if verdict == "MATCHES_OWN_REQUEST":
+            verdict = "UNVERIFIED"
+            facts = dict(facts)
+            facts["beneficiary_payment"] = "unavailable"
+            facts["implementation_at_execution"] = "unverified"
+            facts["request_linkage"] = "unavailable"
+            established = []
+            effects = []
+        retry = "deadline"
+    if "truncated_logs" in gaps or "discovery_incomplete" in gaps:
+        if verdict == "MATCHES_OWN_REQUEST":
+            verdict = "PARTIAL"
+        if retry is None:
+            retry = "truncated_logs" if "truncated_logs" in gaps else "discovery_incomplete"
+    return _finish(
+        event_id, manifest, verdict, facts, gaps, contradictions, established,
+        parties, amounts, effects, residual, refs, checkpoints, identity, request_uuid, retry, calculation,
+    )
 
 
 def _finish(

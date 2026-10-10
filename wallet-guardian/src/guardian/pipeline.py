@@ -190,6 +190,7 @@ def run_capability_pipeline(
     price_input: bytes | None = None,
     notification_backend: Any = None,
     notification_resolve: Any = None,
+    report_ready: Callable[[dict[str, Any]], None] | None = None,
 ) -> RunReport:
     """Read configured wallets and commit one capability cycle."""
     begin_untrusted_notes()
@@ -255,7 +256,16 @@ def run_capability_pipeline(
     for account, network in enabled:
         peers.setdefault(network, []).append((account.wallet_id, account.normalized.canonical))
     log_done: set[str] = set()
-    from guardian.balances.native import prime_native_balances
+    account_by_wallet = {
+        account.wallet_id: account.normalized.canonical
+        for account, _network in enabled
+    }
+    from guardian.balances.native import RoundBudget, prime_native_balances
+
+    round_budget = RoundBudget(clock, started_at, deadline)
+    _drain_explanations(
+        database, tenant, transport, clock, round_budget, public_config, private_inputs, account_by_wallet,
+    )
 
     balance_prime = prime_native_balances(
         public_config=public_config,
@@ -397,6 +407,7 @@ def run_capability_pipeline(
         cursors=cursors,
         alerts=alerts,
     )
+    _queue_explained_alerts(database, tenant, alerts, account_by_wallet)
     emitted = finished_cycle.get("notification_decision", [])
     finished = _iso(clock())
     status = "ok"
@@ -429,20 +440,6 @@ def run_capability_pipeline(
         handoff=handoff,
         clock=clock,
     )
-    try:
-        from guardian.balances.native import RoundBudget
-        from guardian.explanations.engine import drain_pending
-
-        drain_pending(
-            database,
-            tenant,
-            transport,
-            clock,
-            round_budget=RoundBudget(clock, started_at, deadline),
-            source_for=lambda network: _family_source(public_config, private_inputs, network, "evm_rpc"),
-        )
-    except Exception:
-        pass
     unknown = [
         _req_key(row["wallet_id"], row["network"], row["capability"])
         for row in rows
@@ -496,7 +493,62 @@ def run_capability_pipeline(
         "started": started,
         "status": status,
     })
+    if report_ready is not None:
+        report_ready(report.as_dict())
+    _drain_explanations(
+        database, tenant, transport, clock, round_budget, public_config, private_inputs, account_by_wallet,
+    )
     return report
+
+
+def _drain_explanations(
+    database: Any,
+    tenant: str,
+    transport: Any,
+    clock: Any,
+    round_budget: Any,
+    public_config: Any,
+    private_inputs: Any,
+    account_by_wallet: dict[str, str],
+) -> None:
+    """Run queued explanations on the round budget already in force."""
+    from guardian.explanations.engine import drain_pending
+    from guardian.explanations.store import record_cycle_failure
+
+    try:
+        drain_pending(
+            database,
+            tenant,
+            transport,
+            clock,
+            round_budget=round_budget,
+            source_for=lambda network: _family_source(public_config, private_inputs, network, "evm_rpc"),
+            account_by_wallet=account_by_wallet,
+        )
+    except Exception as exc:
+        if not record_cycle_failure(database, tenant, type(exc).__name__):
+            raise
+
+
+def _queue_explained_alerts(
+    database: Any,
+    tenant: str,
+    alerts: list[dict[str, Any]],
+    account_by_wallet: dict[str, str],
+) -> None:
+    """Queue an internal native credit after its alert is committed."""
+    from guardian.explanations.engine import note_increase
+
+    for alert in alerts:
+        if not isinstance(alert, dict):
+            continue
+        if alert.get("transfer_origin") != "evm_internal" or alert.get("direction") != "in":
+            continue
+        wallet_id = alert.get("wallet_id")
+        account = account_by_wallet.get(wallet_id) if isinstance(wallet_id, str) else None
+        if not isinstance(account, str):
+            continue
+        note_increase(database, tenant, {"account": account}, alert)
 
 
 def probe_sources(
