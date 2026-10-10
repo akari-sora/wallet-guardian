@@ -33,6 +33,7 @@ from guardian.explanations.models import (
     document,
     empty_amounts,
     empty_parties,
+    observed_raw_amount,
     settlement_ratio,
 )
 from guardian.explanations.registry import ExplainerManifest
@@ -78,6 +79,11 @@ class ListaExplainer:
         amounts = empty_amounts()
         refs: list[str] = []
         event_id = str(alert.get("dedup_key") or alert.get("identity") or "")
+        if _internal_credit(alert):
+            return _explain_transfer(
+                ctx, alert, manifest, rpc, account, facts, gaps, contradictions, established,
+                parties, amounts, refs, event_id,
+            )
         old, new = _checkpoints(alert)
         checkpoints = {
             "new": "" if new is None else new[1],
@@ -117,78 +123,172 @@ class ListaExplainer:
                 event_id, manifest, "UNVERIFIED", facts, ["checkpoint_hash_mismatch"], [], [],
                 parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, "reorg",
             )
-        logs, log_error = _collect_logs(ctx, rpc, manifest, account, old[0], new[0])
-        if log_error and log_error != "truncated_logs":
-            extra = _empty_queue_gap(rpc, manifest, account, new[1], gaps)
-            gaps.extend(extra)
-            gaps.append(log_error)
-            return _sealed(
-                rpc, event_id, manifest, "UNVERIFIED", facts, gaps, [], [],
-                parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, log_error,
-            )
-        if log_error == "truncated_logs":
-            gaps.append("truncated_logs")
-        _remember_requests(ctx, logs)
-        claims, conflict = _unique_claims([item for item in logs if item.kind == "claim"])
-        if conflict:
-            gaps.append("claim_evidence_mismatch")
-        if not claims:
-            if "truncated_logs" in gaps:
-                return _sealed(
-                    rpc, event_id, manifest, "UNVERIFIED", facts, gaps, [], [],
-                    parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, "truncated_logs",
-                )
-            gaps.append("no_claim_in_interval")
-            gaps.extend(_empty_queue_gap(rpc, manifest, account, new[1], gaps))
-            return _sealed(
-                rpc, event_id, manifest, "UNVERIFIED", facts, gaps, [], [],
-                parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, None,
-            )
-        effects: list[dict[str, Any]] = []
-        identities: list[str] = []
-        calculation: str | None = None
-        request_uuid: str | None = None
-        explained = 0
-        verdicts: list[str] = []
-        for claim in claims:
-            outcome = _one_claim(
-                rpc, manifest, account, claim, logs, old[0], old[1], facts, gaps, contradictions,
-                established, parties, amounts, refs, ctx,
-            )
-            calculation = outcome["calculation"] or calculation
-            if outcome["effect"] is not None:
-                effects.append(outcome["effect"])
-                explained += int(outcome["effect"]["raw_amount"])
-            if outcome["identity"]:
-                identities.append(outcome["identity"])
-            if outcome.get("uuid"):
-                request_uuid = str(outcome["uuid"])
-            verdicts.append(str(outcome["verdict"]))
-            if outcome["verdict"] == "NO_MATCH":
-                return _sealed(
-                    rpc, event_id, manifest, "NO_MATCH", facts, gaps, contradictions, established,
-                    parties, amounts, effects, _residual(alert, explained), refs, checkpoints,
-                    identities[0] if len(identities) == 1 else None, request_uuid, None, calculation,
-                )
-        if verdicts and all(item == "MATCHES_OWN_REQUEST" for item in verdicts) and not gaps:
-            verdict = "MATCHES_OWN_REQUEST"
-        elif any(item in {"MATCHES_OWN_REQUEST", "PARTIAL"} for item in verdicts):
-            verdict = "PARTIAL"
-        else:
-            verdict = "UNVERIFIED"
-        retry = None
-        if "rate_limited" in gaps:
-            retry = "rate_limited"
-        elif "deadline" in gaps:
-            retry = "deadline"
-        elif "provider_call_budget" in gaps:
-            retry = "provider_call_budget"
-        identity = identities[0] if len(identities) == 1 else None
-        return _sealed(
-            rpc, event_id, manifest, verdict, facts, gaps, contradictions, established,
-            parties, amounts, effects, _residual(alert, explained), refs, checkpoints,
-            identity, request_uuid, retry, calculation,
+        return _finish_span(
+            ctx, alert, manifest, rpc, account, facts, gaps, contradictions, established,
+            parties, amounts, refs, event_id, old, new, checkpoints, None, None,
         )
+
+
+def _internal_credit(alert: Mapping[str, Any]) -> bool:
+    return (
+        alert.get("transfer_origin") == "evm_internal"
+        and alert.get("direction") == "in"
+        and alert.get("kind") in {"native_eth", "native_unit", "asset_usd"}
+    )
+
+
+def _explain_transfer(
+    ctx: Any,
+    alert: Mapping[str, Any],
+    manifest: ExplainerManifest,
+    rpc: ExplanationRpc,
+    account: str | None,
+    facts: dict[str, str],
+    gaps: list[str],
+    contradictions: list[str],
+    established: list[str],
+    parties: dict[str, str | None],
+    amounts: dict[str, str | None],
+    refs: list[str],
+    event_id: str,
+) -> dict[str, Any]:
+    """Explain one internal native credit from its block, transaction, and amount.
+
+    The alert has no balance checkpoint. None is invented. The residual uses
+    ``raw_amount`` even when a later read fails.
+    """
+    checkpoints = {"new": "", "old": ""}
+    block = _transfer_block(alert)
+    tx_id = _transfer_tx(alert)
+    amount = _transfer_amount(alert)
+
+    def stop(code: str, retry: str | None) -> dict[str, Any]:
+        return _sealed(
+            rpc, event_id, manifest, "UNVERIFIED", facts, [code], [], [],
+            parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, retry,
+        )
+
+    if account is None or block is None or tx_id is None or amount is None:
+        return stop("malformed_event", None)
+    chain, chain_error = _chain_id(rpc)
+    if chain_error:
+        return stop(chain_error, chain_error)
+    if chain != manifest.chain_id():
+        return stop("wrong_chain", None)
+    header, header_error = _header(rpc, block)
+    if header_error or header is None or not header.get("parent"):
+        return stop(header_error or "checkpoint_unverified", header_error or "checkpoint_unverified")
+    parent_header, parent_error = _header(rpc, block - 1)
+    if parent_error or parent_header is None:
+        return stop(parent_error or "checkpoint_unverified", parent_error or "checkpoint_unverified")
+    if parent_header["hash"] != header["parent"]:
+        return stop("parent_hash_mismatch", None)
+    old = (block - 1, str(parent_header["hash"]))
+    new = (block, str(header["hash"]))
+    return _finish_span(
+        ctx, alert, manifest, rpc, account, facts, gaps, contradictions, established,
+        parties, amounts, refs, event_id, old, new, checkpoints, amount, tx_id,
+    )
+
+
+def _finish_span(
+    ctx: Any,
+    alert: Mapping[str, Any],
+    manifest: ExplainerManifest,
+    rpc: ExplanationRpc,
+    account: str,
+    facts: dict[str, str],
+    gaps: list[str],
+    contradictions: list[str],
+    established: list[str],
+    parties: dict[str, str | None],
+    amounts: dict[str, str | None],
+    refs: list[str],
+    event_id: str,
+    old: tuple[int, str],
+    new: tuple[int, str],
+    checkpoints: dict[str, str],
+    bound_amount: int | None,
+    only_tx: str | None,
+) -> dict[str, Any]:
+    logs, log_error = _collect_logs(ctx, rpc, manifest, account, old[0], new[0])
+    if log_error and log_error != "truncated_logs":
+        extra = _empty_queue_gap(rpc, manifest, account, new[1], gaps)
+        gaps.extend(extra)
+        gaps.append(log_error)
+        return _sealed(
+            rpc, event_id, manifest, "UNVERIFIED", facts, gaps, [], [],
+            parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, log_error,
+        )
+    if log_error == "truncated_logs":
+        gaps.append("truncated_logs")
+    _remember_requests(ctx, logs)
+    claims, conflict = _unique_claims([item for item in logs if item.kind == "claim"])
+    if only_tx is not None:
+        claims = [item for item in claims if item.tx_id == only_tx]
+    if conflict:
+        gaps.append("claim_evidence_mismatch")
+    if not claims:
+        if "truncated_logs" in gaps:
+            return _sealed(
+                rpc, event_id, manifest, "UNVERIFIED", facts, gaps, [], [],
+                parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, "truncated_logs",
+            )
+        gaps.append("no_claim_in_interval")
+        gaps.extend(_empty_queue_gap(rpc, manifest, account, new[1], gaps))
+        return _sealed(
+            rpc, event_id, manifest, "UNVERIFIED", facts, gaps, [], [],
+            parties, amounts, [], _residual(alert, 0), refs, checkpoints, None, None, None,
+        )
+    effects: list[dict[str, Any]] = []
+    identities: list[str] = []
+    calculation: str | None = None
+    request_uuid: str | None = None
+    explained = 0
+    verdicts: list[str] = []
+    for claim in claims:
+        outcome = _one_claim(
+            rpc, manifest, account, claim, logs, old[0], old[1], facts, gaps, contradictions,
+            established, parties, amounts, refs, ctx,
+        )
+        calculation = outcome["calculation"] or calculation
+        if outcome["effect"] is not None:
+            effects.append(outcome["effect"])
+            explained += int(outcome["effect"]["raw_amount"])
+        if outcome["identity"]:
+            identities.append(outcome["identity"])
+        if outcome.get("uuid"):
+            request_uuid = str(outcome["uuid"])
+        verdicts.append(str(outcome["verdict"]))
+        if outcome["verdict"] == "NO_MATCH":
+            return _sealed(
+                rpc, event_id, manifest, "NO_MATCH", facts, gaps, contradictions, established,
+                parties, amounts, effects, _residual(alert, explained), refs, checkpoints,
+                identities[0] if len(identities) == 1 else None, request_uuid, None, calculation,
+            )
+    if bound_amount is not None:
+        payment = amounts.get("actual_claim_payment")
+        if isinstance(payment, str) and payment.lstrip("-").isdigit() and int(payment) != bound_amount:
+            gaps.append("amount_inconsistent")
+    if verdicts and all(item == "MATCHES_OWN_REQUEST" for item in verdicts) and not gaps:
+        verdict = "MATCHES_OWN_REQUEST"
+    elif any(item in {"MATCHES_OWN_REQUEST", "PARTIAL"} for item in verdicts):
+        verdict = "PARTIAL"
+    else:
+        verdict = "UNVERIFIED"
+    retry = None
+    if "rate_limited" in gaps:
+        retry = "rate_limited"
+    elif "deadline" in gaps:
+        retry = "deadline"
+    elif "provider_call_budget" in gaps:
+        retry = "provider_call_budget"
+    identity = identities[0] if len(identities) == 1 else None
+    return _sealed(
+        rpc, event_id, manifest, verdict, facts, gaps, contradictions, established,
+        parties, amounts, effects, _residual(alert, explained), refs, checkpoints,
+        identity, request_uuid, retry, calculation,
+    )
 
 
 def _one_claim(
@@ -937,6 +1037,35 @@ def _empty_queue_gap(rpc: ExplanationRpc, manifest: ExplainerManifest, account: 
     return []
 
 
+def _transfer_block(alert: Mapping[str, Any]) -> int | None:
+    raw = alert.get("block_number")
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int) and raw >= 1:
+        return raw
+    if isinstance(raw, str) and raw.isdigit() and int(raw) >= 1:
+        return int(raw)
+    return None
+
+
+def _transfer_tx(alert: Mapping[str, Any]) -> str | None:
+    raw = alert.get("tx_id")
+    if isinstance(raw, str) and raw.startswith("0x") and len(raw) == 66:
+        return raw.lower()
+    return None
+
+
+def _transfer_amount(alert: Mapping[str, Any]) -> int | None:
+    raw = alert.get("raw_amount")
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int) and raw >= 0:
+        return raw
+    if isinstance(raw, str) and raw.isdigit():
+        return int(raw)
+    return None
+
+
 def _checkpoints(alert: Mapping[str, Any]) -> tuple[tuple[int, str] | None, tuple[int, str] | None]:
     return _point(alert.get("old_checkpoint")), _point(alert.get("new_checkpoint"))
 
@@ -960,11 +1089,7 @@ def _point(value: Any) -> tuple[int, str] | None:
 
 
 def _residual(alert: Mapping[str, Any], explained: int) -> dict[str, str]:
-    raw = alert.get("signed_delta_raw")
-    try:
-        observed = int(raw)
-    except (TypeError, ValueError):
-        observed = 0
+    observed = observed_raw_amount(alert)
     return {
         "asset": str(alert.get("asset") or "evm-native:56"),
         "explained_raw_amount": str(explained),

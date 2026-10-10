@@ -1416,6 +1416,106 @@ def test_expl_fix_amount_lookback_does_not_link_another_request(
     assert "discovery_incomplete" in body["gaps"]
 
 
+def _producer_internal(amount: int, identity: str, block: int) -> dict:
+    """The alert dict the native-internal producer actually stores."""
+    from decimal import Decimal
+
+    from guardian.rules import AlertPolicy, Candidate
+
+    decision = AlertPolicy(Decimal("0.5"), Decimal("1000"), {"bsc-mainnet": Decimal("1.0")}).apply([
+        Candidate(
+            tenant_id=TENANT,
+            wallet_id=WALLET,
+            network="bsc-mainnet",
+            capability="history.native_internal",
+            identity=identity,
+            kind="asset",
+            raw_amount=amount,
+            is_native=True,
+            direction="in",
+            tx_id=CLAIM,
+            transfer_origin="evm_internal",
+            execution_evidence="evidenced",
+            attribution="trace",
+            block_number=block,
+            asset=ASSET,
+        )
+    ])
+    assert len(decision) == 1
+    assert decision[0].kind == "native_unit"
+    alert = decision[0].as_dict()
+    assert alert["transfer_origin"] == "evm_internal"
+    assert alert["direction"] == "in"
+    assert alert["raw_amount"] == str(amount)
+    assert alert["tx_id"] == CLAIM
+    assert alert["block_number"] == str(block)
+    assert "old_checkpoint" not in alert
+    assert "new_checkpoint" not in alert
+    assert "signed_delta_raw" not in alert
+    return alert
+
+
+def _refresh_internal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    alert: dict,
+) -> tuple[ListaBackend, dict]:
+    _inject_approved(monkeypatch)
+    config = _desk(tmp_path, monkeypatch)
+    backend = ListaBackend("match", tmp_path)
+    database = _db(tmp_path)
+    database.upsert_tenant(TENANT, TENANT)
+    database.upsert_wallet_identity(TENANT, WALLET, "evm", OWNER, "Wallet A")
+    assert database.add_alert(TENANT, alert["dedup_key"], alert) is True
+    note_increase(database, TENANT, {"account": OWNER}, alert)
+    database.close()
+    code = main(
+        ["explain", "--mcm-config", str(config), "--event-id", alert["dedup_key"], "--refresh"],
+        backend=backend,
+        clock=lambda: CLOCK,
+    )
+    shown = json.loads(capsys.readouterr().out)
+    assert code == 0, shown
+    assert shown["status"] == "ok"
+    return backend, shown["explanation"]
+
+
+def test_expl_fix_internal_native_uses_transfer_amount(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The producer payload is explained from its transaction and amount, with no balance checkpoint."""
+    backend = ListaBackend("match", tmp_path)
+    alert = _producer_internal(PAY, "lista-internal", backend.new)
+    backend, body = _refresh_internal(tmp_path, monkeypatch, capsys, alert)
+    assert backend.calls
+    assert body["verdict"] == "MATCHES_OWN_REQUEST", body["gaps"]
+    assert "malformed_event" not in body["gaps"]
+    assert body["residual"]["observed_raw_amount"] == str(PAY)
+    assert body["checkpoint_hashes"] == {"new": "", "old": ""}
+    assert body["request_identity"] is not None
+    assert body["request_identity"].endswith(f"{REQ}:4")
+    assert _job(tmp_path)["state"] == "done"
+    stored = _stored(tmp_path)[0]
+    assert stored["verdict"] == "MATCHES_OWN_REQUEST"
+    assert stored["residual"]["observed_raw_amount"] == str(PAY)
+
+
+def test_expl_fix_internal_amount_disagreement_stays_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A transfer amount that is not the claim payment stays partial and keeps the real amount."""
+    backend = ListaBackend("match", tmp_path)
+    alert = _producer_internal(PAY + 9, "lista-internal-partial", backend.new)
+    _backend, body = _refresh_internal(tmp_path, monkeypatch, capsys, alert)
+    assert body["verdict"] == "PARTIAL", body
+    assert "amount_inconsistent" in body["gaps"]
+    assert "malformed_event" not in body["gaps"]
+    assert body["residual"]["observed_raw_amount"] == str(PAY + 9)
+    assert body["checkpoint_hashes"] == {"new": "", "old": ""}
+    assert _backend.calls
+
+
 def test_expl_fix_transaction_index_must_agree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:

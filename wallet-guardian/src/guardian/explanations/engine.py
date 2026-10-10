@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 from guardian.explanations.lista import ListaExplainer
-from guardian.explanations.models import document, empty_amounts, empty_parties, fingerprint
+from guardian.explanations.models import document, empty_amounts, empty_parties, fingerprint, observed_raw_amount
 from guardian.explanations.registry import ExplainerManifest, load_packaged
 from guardian.explanations.rpc import ExplanationRpc
 from guardian.explanations.discovery import log_from_record, log_record
@@ -371,11 +371,7 @@ def _unavailable(
     verdict: str = "UNVERIFIED",
 ) -> dict[str, Any]:
     gaps = [] if gap is None else [gap]
-    signed = alert.get("signed_delta_raw") if isinstance(alert, dict) else None
-    try:
-        observed = int(signed)
-    except (TypeError, ValueError):
-        observed = 0
+    observed = observed_raw_amount(alert)
     old = _hash_of(alert.get("old_checkpoint") if isinstance(alert, dict) else None)
     new = _hash_of(alert.get("new_checkpoint") if isinstance(alert, dict) else None)
     return document(

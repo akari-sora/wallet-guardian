@@ -4,6 +4,8 @@ A native balance increase is still a `balance_delta`. This page describes a sepa
 
 Experimental read-only attribution with bounded discovery. A verified request match requires an explicitly approved historical deployment and coherent transaction, receipt, request and checkpoint evidence. Incomplete evidence remains partial or unverified. Explanations do not certify fund safety, establish operator control, guarantee complete attribution, or change the underlying movement alert. No live historical-path qualification is claimed.
 
+An internal native credit is explained from that transfer. The producer payload carries `tx_id`, `block_number`, a nonzero `raw_amount`, direction `in`, and `transfer_origin` `evm_internal`. The explanation reads that block, its parent, the transaction, and the receipt. `residual.observed_raw_amount` is that `raw_amount`. No balance checkpoint is created for it, and a missing checkpoint is not stored as zero.
+
 There is no live probe. `config/explainers/lista-stakemanager.json` keeps the allowlisted calls and an empty `implementations` list. `implementation_at_execution` stays unverified until a reviewed deployment interval is added. `live_bytecode_verified` is false. The candidate specification is lista-dao/synclub-contracts commit `2a60d77d9d9c7059736385a4425ca38492425c8e`. Synthetic calculation pins live in the test fixture and are not loaded by the packaged manifest.
 
 ## Verdicts

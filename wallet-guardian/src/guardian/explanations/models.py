@@ -89,6 +89,25 @@ def empty_parties() -> dict[str, str | None]:
     }
 
 
+def observed_raw_amount(alert: Any) -> int:
+    """Wei from a balance delta, or from a transfer when that delta is absent.
+
+    Zero is only the result when neither field is an integer. A present
+    ``raw_amount`` is not replaced with zero.
+    """
+    if not isinstance(alert, dict):
+        return 0
+    for key in ("signed_delta_raw", "raw_amount"):
+        raw = alert.get(key)
+        if isinstance(raw, bool):
+            continue
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, str) and raw.lstrip("-").isdigit():
+            return int(raw)
+    return 0
+
+
 def settlement_ratio(payment: int | None, requested: int | None) -> str | None:
     if payment is None or requested is None or requested <= 0 or payment < 0:
         return None
