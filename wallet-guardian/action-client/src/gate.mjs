@@ -64,7 +64,7 @@ export function clientConfirmDecision({ plan, task, mainnetSend, mode }) {
     mode: resolvedMode,
     walletRequestAllowed: Boolean(plan && plan.wallet_request_allowed === true),
     simulationComplete: simulationAllowsSend(plan && plan.simulation),
-    planBlocked: Array.isArray(plan && plan.block_reasons) && plan.block_reasons.length > 0,
+    planBlocked: !Array.isArray(plan && plan.block_reasons) || plan.block_reasons.length > 0,
   });
 }
 

@@ -247,13 +247,15 @@ test("account change and chain change invalidate a stored pass", async () => {
     },
   });
   for (let i = 0; i < 500 && !h.elements.get("view").textContent.includes("Lista"); i += 1) await tick();
-  await h.app.reverifyCurrent(approvalFixture());
+  h.setTestApprovals(approvalFixture());
+  await h.app.reverifyCurrent();
   assert.equal(h.app.getState().reread.reread, "pass");
   assert.equal(h.elements.get("verify-send").textContent.includes("closed"), true);
   assert.equal(h.elements.get("verify-simulation").textContent.includes("not done"), true);
   selected = "0x" + "4".repeat(40);
   h.providerListeners.get("accountsChanged")([selected]);
   assert.equal(h.app.getState().reread.reread, "insufficient");
+  h.clearTestApprovals();
   await h.app.reverifyCurrent();
   assert.equal(h.app.getState().reread.reread, "fail");
   assert.equal(h.app.getState().reread.reasons.includes("account_changed"), true);
@@ -266,7 +268,8 @@ test("account change and chain change invalidate a stored pass", async () => {
 test("a passing re-read does not enable send when the harness mainnet flag is on", async () => {
   const taskBody = await richTask();
   const h = await preview(taskBody, (init) => rpcResponse(chainResult(JSON.parse(init.body))));
-  await h.app.reverifyCurrent(approvalFixture());
+  h.setTestApprovals(approvalFixture());
+  await h.app.reverifyCurrent();
   assert.equal(h.app.getState().reread.reread, "pass");
   const button = h.elements.get("view").children.flatMap(function walk(node) {
     return [node, ...(node.children ? node.children.flatMap(walk) : [])];
@@ -288,7 +291,8 @@ test("revision bump drops a stored pass", async () => {
     },
   });
   for (let i = 0; i < 500 && !h.elements.get("view").textContent.includes("Lista"); i += 1) await tick();
-  await h.app.reverifyCurrent(approvalFixture());
+  h.setTestApprovals(approvalFixture());
+  await h.app.reverifyCurrent();
   assert.equal(h.app.getState().reread.reread, "pass");
   current = await richTask(2);
   await h.app.loadPrivateTask(current.ref, h.app.getState().loadGeneration);
@@ -311,9 +315,11 @@ test("a second re-read clears the displayed pass while the new read is in progre
     }
     return rpcResponse(chainResult(body));
   });
-  await h.app.reverifyCurrent(approvalFixture());
+  h.setTestApprovals(approvalFixture());
+  await h.app.reverifyCurrent();
   assert.match(h.elements.get("verify-reread").textContent, /pass/);
-  const pending = h.app.reverifyCurrent(approvalFixture());
+  h.setTestApprovals(approvalFixture());
+  const pending = h.app.reverifyCurrent();
   for (let i = 0; i < 50 && chainCalls < 2; i += 1) await tick();
   assert.equal(h.elements.get("verify-reread").textContent.includes("pass"), false);
   assert.equal(h.app.getState().reread.reasons.includes("updating"), true);
@@ -327,7 +333,8 @@ test("a second re-read clears the displayed pass while the new read is in progre
 test("DOM expiry repaints a pass once the block deadline passes", async () => {
   const taskBody = await richTask();
   const h = await preview(taskBody, (init) => rpcResponse(chainResult(JSON.parse(init.body), { blockAge: 118 })));
-  await h.app.reverifyCurrent(approvalFixture());
+  h.setTestApprovals(approvalFixture());
+  await h.app.reverifyCurrent();
   assert.match(h.elements.get("verify-reread").textContent, /pass/);
   assert.equal(typeof h.documentListeners.get("visibilitychange"), "function");
   assert.equal(typeof h.windowListeners.get("focus"), "function");
@@ -343,13 +350,15 @@ test("disconnect and provider replacement invalidate a stored pass", async () =>
   const taskBody = await richTask();
   const h = await preview(taskBody, (init) => rpcResponse(chainResult(JSON.parse(init.body))));
   assert.equal(typeof h.providerListeners.get("disconnect"), "function");
-  await h.app.reverifyCurrent(approvalFixture());
+  h.setTestApprovals(approvalFixture());
+  await h.app.reverifyCurrent();
   assert.match(h.elements.get("verify-reread").textContent, /pass/);
   h.providerListeners.get("disconnect")({ code: 4900, message: "disconnected" });
   assert.equal(h.elements.get("verify-reread").textContent.includes("pass"), false);
   assert.equal(h.app.getState().reread.reasons.includes("provider_disconnected"), true);
   assert.equal(h.app.getState().reread.allowSend, "closed");
-  await h.app.reverifyCurrent(approvalFixture());
+  h.setTestApprovals(approvalFixture());
+  await h.app.reverifyCurrent();
   assert.match(h.elements.get("verify-reread").textContent, /pass/);
   let removed = false;
   const previous = h.window.ethereum.removeListener;
@@ -390,9 +399,11 @@ test("WG-P2-R2-03 a later wallet chain failure does not keep the previous pass",
     },
   });
   for (let i = 0; i < 500 && !h.elements.get("view").textContent.includes("Lista"); i += 1) await tick();
-  await h.app.reverifyCurrent(approvalFixture());
+  h.setTestApprovals(approvalFixture());
+  await h.app.reverifyCurrent();
   assert.equal(h.app.getState().reread.reread, "pass");
-  await h.app.reverifyCurrent(approvalFixture());
+  h.setTestApprovals(approvalFixture());
+  await h.app.reverifyCurrent();
   assert.notEqual(h.app.getState().reread.reread, "pass");
   assert.equal(h.app.getState().reread.reread, "insufficient");
   assert.equal(h.app.getState().reread.reasons.includes("wallet_unverified"), true);

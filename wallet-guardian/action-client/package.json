@@ -13,7 +13,8 @@
     "test:review": "node --test --test-force-exit tests/*.test.mjs",
     "test:runtime": "node --test integration/d1-private-runtime.test.mjs",
     "test:wallets": "node --test --test-force-exit tests/wallet-discovery.test.mjs tests/wallet-selection.test.mjs tests/walletconnect-sdk.test.mjs tests/walletconnect-page.test.mjs",
-    "test:wallets:artifact": "node --test --test-force-exit integration/wallets-artifact.test.mjs integration/walletconnect-artifact.test.mjs"
+    "test:wallets:artifact": "node --test --test-force-exit integration/wallets-artifact.test.mjs integration/walletconnect-artifact.test.mjs",
+    "test:artifact:sendoff": "node --test --test-force-exit integration/sendoff-artifact.test.mjs"
   },
   "devDependencies": {
     "@walletconnect/sign-client": "2.25.0",

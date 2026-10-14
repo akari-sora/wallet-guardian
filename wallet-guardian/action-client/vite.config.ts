@@ -3,6 +3,8 @@ import { defineConfig, loadEnv, type Plugin } from "vite";
 import { pagesHeaders } from "./src/csp.mjs";
 import { walletConnectConfig } from "./src/wallets/walletconnect-config.mjs";
 
+const SEND_VARIANT = "off";
+
 // WALLET-CONNECT-01 W-B5: dist/_headers (CSP) follows the actual build. WalletConnect endpoints are
 // only allowed when this build offers WalletConnect (both public settings present).
 function pagesHeadersPlugin(walletConnect: boolean): Plugin {
@@ -11,6 +13,24 @@ function pagesHeadersPlugin(walletConnect: boolean): Plugin {
     apply: "build",
     generateBundle() {
       this.emitFile({ type: "asset", fileName: "_headers", source: pagesHeaders({ walletConnect }) });
+    },
+  };
+}
+
+function forbidSendModules(variant: string): Plugin {
+  return {
+    name: "wallet-guardian-forbid-send-modules",
+    apply: "build",
+    generateBundle() {
+      if (variant !== "off") return;
+      const found: string[] = [];
+      for (const id of this.getModuleIds()) {
+        const normalized = id.split("\\").join("/");
+        if (normalized.includes("/src/send/")) found.push(normalized);
+      }
+      if (found.length > 0) {
+        this.error(`send variant off cannot include src/send modules: ${found.join(", ")}`);
+      }
     },
   };
 }
@@ -30,6 +50,9 @@ export default defineConfig(({ mode }) => {
         "@reown/appkit/core": fileURLToPath(new URL("./src/wallets/appkit-not-shipped.mjs", import.meta.url)),
       },
     },
-    plugins: [pagesHeadersPlugin(wc.enabled)],
+    define: {
+      __WG_SEND_VARIANT__: JSON.stringify(SEND_VARIANT),
+    },
+    plugins: [pagesHeadersPlugin(wc.enabled), forbidSendModules(SEND_VARIANT)],
   };
 });

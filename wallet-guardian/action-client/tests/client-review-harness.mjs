@@ -65,6 +65,18 @@ export async function harness({ onFetch, onWallet, initialSession = session(), p
     imports.set(match[1], await import(pathToFileURL(resolve(sourceRoot, match[1])).href));
   }
   for (const [name, override] of Object.entries(importOverrides)) imports.set(name, override(imports.get(name)));
+  const injectedApprovals = { enabled: false, value: undefined };
+  const listaModule = imports.get("./lista-reread.mjs");
+  if (listaModule && typeof listaModule.reverifyListaClaim === "function") {
+    const reverifyListaClaim = listaModule.reverifyListaClaim;
+    imports.set("./lista-reread.mjs", {
+      ...listaModule,
+      reverifyListaClaim(input) {
+        if (!injectedApprovals.enabled) return reverifyListaClaim(input);
+        return reverifyListaClaim({ ...input, testApprovals: injectedApprovals.value });
+      },
+    });
+  }
   const elements = new Map(['view','banner','login','logout','cancel-task','load-sample','file','clear','session','verify','verify-reread','verify-simulation','verify-send','verify-reasons','wallet-outcome','poison-note','wallet-picker','wallet-status','wallet-list'].map(x => [x, new Element()]));
   const calls = [], walletCalls = [];
   const providerListeners = new Map();
@@ -131,7 +143,9 @@ export async function harness({ onFetch, onWallet, initialSession = session(), p
   ).outputText;
   vm.runInContext(transpiled, context, { filename: 'review-actual-main.cjs', timeout:3000 });
   for (let i = 0; i < 5; i++) await tick();
-  return { app:context.__review, elements, calls, walletCalls, providerListeners, documentListeners, windowListeners, window };
+  return { app:context.__review, elements, calls, walletCalls, providerListeners, documentListeners, windowListeners, window,
+    setTestApprovals(value) { injectedApprovals.enabled = true; injectedApprovals.value = value; },
+    clearTestApprovals() { injectedApprovals.enabled = false; injectedApprovals.value = undefined; } };
 }
 
 export async function envelope() {
