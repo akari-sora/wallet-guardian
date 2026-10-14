@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,70 @@ from guardian.storage import Database
 
 _ADDRESS = re.compile(r"(?i)0x[0-9a-f]{40}")
 _LATEST = re.compile(r"^([^_]+)_([^_]+)_(.+)$")
+_LATENCY_ROWS = ("awaiting_finality", "legacy_only", "matched", "matched_tx_level", "mcm_only", "uncomparable")
+
+
+def latency_delta_seconds(mcm_observed_at: Any, legacy_observed_at: Any) -> int | float | None:
+    """Seconds MCM detected after the legacy monitor. Missing clocks are null, not 0."""
+    mcm = _instant(mcm_observed_at)
+    legacy = _instant(legacy_observed_at)
+    if mcm is None or legacy is None:
+        return None
+    return _json_number((mcm - legacy).total_seconds())
+
+
+def _group_latency_delta(legacy_row: Mapping[str, Any], mcm_rows: Sequence[Mapping[str, Any]]) -> int | float | None:
+    """One delta when every MCM copy shares a clock. Disagreeing clocks stay null."""
+    stamps: list[str] = []
+    for row in mcm_rows:
+        stamp = row.get("observed_at")
+        if not isinstance(stamp, str) or not stamp:
+            return None
+        if stamp not in stamps:
+            stamps.append(stamp)
+    if len(stamps) != 1:
+        return None
+    return latency_delta_seconds(stamps[0], legacy_row.get("observed_at"))
+
+
+def _stamp_latency_column(report: dict[str, Any]) -> None:
+    for name in _LATENCY_ROWS:
+        rows = report.get(name)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict):
+                row.setdefault("latency_delta_seconds", None)
+
+
+def _instant(value: Any) -> datetime | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return None
+        return value.astimezone(timezone.utc)
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _json_number(value: float) -> int | float:
+    nearest = round(value, 6)
+    if nearest == int(nearest):
+        return int(nearest)
+    return nearest
 
 
 def compare_with_legacy(
@@ -80,7 +145,11 @@ def compare_with_legacy(
         right = mcm_by.get(key)
         if left is not None and right is not None:
             bucket = matched if _settled(left) and _settled(right) else awaiting
-            bucket.append(_public_event(left))
+            public = _public_event(left)
+            public["latency_delta_seconds"] = latency_delta_seconds(
+                right.get("observed_at"), left.get("observed_at"),
+            )
+            bucket.append(public)
             continue
         only = left if left is not None else right
         if only is None:
@@ -127,6 +196,7 @@ def compare_with_legacy(
     _drop_awaiting_duplicates(report)
     _explain_legacy_not_scanned(report)
     _strip_internal(report)
+    _stamp_latency_column(report)
     return report
 
 
@@ -499,11 +569,12 @@ def _in_window(observed: str, window: tuple[str | None, str | None]) -> bool:
     return True
 
 
-def _public_event(row: dict[str, str]) -> dict[str, str]:
+def _public_event(row: Mapping[str, str]) -> dict[str, Any]:
     tx = row.get("tx") or ""
-    public = {
+    public: dict[str, Any] = {
         "kind": row.get("kind", ""),
         "label": row.get("label", ""),
+        "latency_delta_seconds": None,
         "network": row.get("network", ""),
         "position": row.get("position", ""),
         "subject": _mask_subject(row.get("subject", "")),
@@ -714,6 +785,7 @@ def _apply_tx_level(
         if key in settled_mcm:
             public["classification"] = "matched_tx_level"
             public["classification_reason"] = ""
+            public["latency_delta_seconds"] = _group_latency_delta(row, settled_mcm[key])
             matched_tx.append(public)
             matched_public.add((public["wallet_id"], public["network"], public["tx"]))
             continue
