@@ -404,9 +404,11 @@ def _execute_capability_pipeline(
             _note_isolated_read(account.wallet_id, network, observations, code)
             observations[(account.wallet_id, network, "exposure_news")] = news_coverage
     from guardian.balances.reconcile import reconcile_native, refresh_balance_decisions, stamp_native_quotes
+    from guardian.pricing.token_valuation import apply_token_valuation
 
     pending_gaps = _replay_pending_candidates(database, tenant, candidates)
     stamp_native_quotes(candidates, balance_prime.quotes, balance_prime.decimals)
+    apply_token_valuation(candidates, public_config, transport, clock)
     reconcile_native(database, tenant, candidates)
     balance_prime.decisions = refresh_balance_decisions(database, tenant, balance_prime.decisions)
     sanction_alerts = _apply_sanctions(
@@ -2157,8 +2159,10 @@ def _etherscan_transfers(items, address: str, wallet_id: str, network: str, nati
             position = str(item.get("logIndex") if item.get("logIndex") not in (None, "") else item.get("transactionIndex") or "0")
             capability = "history.fungible"
         block_hash = item.get("blockHash") if isinstance(item.get("blockHash"), str) else None
+        decimals = _flexible_int(item.get("tokenDecimal"))
         rows.append({
             "asset": asset,
+            "decimals": decimals,
             "block": _transfer_block(item),
             "block_hash": block_hash,
             "capability": capability,
@@ -2221,6 +2225,8 @@ def _emit_transfers(rows, candidates, events, seen_transfers, tenant, chain_id, 
             counterparty=row.get("counterparty") if isinstance(row.get("counterparty"), str) and row.get("counterparty") else None,
             block_number=block if isinstance(block, int) else None,
             asset=asset,
+            decimals=row.get("decimals") if isinstance(row.get("decimals"), int) and not isinstance(row.get("decimals"), bool) else None,
+            valuation_reason=row.get("valuation_reason") if isinstance(row.get("valuation_reason"), str) else None,
         ))
         _remember_event(
             events,

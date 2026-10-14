@@ -233,6 +233,93 @@ class CoinGeckoClient:
             }
         return parsed
 
+    def token_prices(
+        self,
+        *,
+        network_id: str,
+        contracts: list[str],
+        max_age_seconds: int,
+        now: int,
+    ) -> dict[str, dict[str, Any]]:
+        """One token_price call for this platform. A miss is unavailable, never 0."""
+        network = self.catalog.priced_network(network_id)
+        keys = []
+        for contract in contracts:
+            if not isinstance(contract, str) or not contract:
+                continue
+            normalized = _normalize(network, contract) if network is not None else None
+            if normalized is None or normalized[0] != "token":
+                continue
+            if normalized[1] not in keys:
+                keys.append(normalized[1])
+        if network is None or not keys:
+            return {key: {"quality": "unavailable", "reason": "unsupported_network"} for key in keys}
+        operation = Operation(
+            protocol="rest",
+            adapter="coingecko",
+            http_method="GET",
+            path=f"/api/v3/simple/token_price/{network.platform_id}",
+            query=self._query({"contract_addresses": ",".join(keys)}),
+        )
+        parsed: dict[str, dict[str, Any]] = {
+            key.lower() if network.family == "evm" else key: {"quality": "unavailable", "reason": "not_read"}
+            for key in keys
+        }
+        try:
+            result = read_with_retry(
+                lambda: self.transport.request(self.source_id, operation),
+                retry_attempts=self.transport.retry_attempts(self.source_id),
+                sleep=self.sleep,
+                random=self.random,
+                clock=self.clock,
+            )
+        except BudgetExhausted as exc:
+            return {key: {"quality": "unavailable", "reason": exc.reason or "budget"} for key in parsed}
+        except (SecurityError, TransportError) as exc:
+            if getattr(exc, "reason", None) == "fixture_miss":
+                raise
+            return {key: {"quality": "unavailable", "reason": getattr(exc, "reason", None) or "read_error"} for key in parsed}
+        if getattr(result, "category", "") == "rate_limited" or getattr(result, "status", 0) == 429:
+            return {key: {"quality": "unavailable", "reason": "rate_limited"} for key in parsed}
+        body = getattr(result, "body", None)
+        if not isinstance(body, dict):
+            return {key: {"quality": "unavailable", "reason": "malformed"} for key in parsed}
+        for key in list(parsed):
+            entry = _entry(network, key, "token", body)
+            if not isinstance(entry, dict) or entry.get("usd") is None:
+                parsed[key] = {"quality": "unavailable", "reason": "absent"}
+                continue
+            try:
+                price = provider_decimal(entry.get("usd"))
+                updated = provider_timestamp(entry.get("last_updated_at")) if "last_updated_at" in entry else None
+            except ValueError:
+                parsed[key] = {"quality": "unavailable", "reason": "malformed"}
+                continue
+            if price <= 0:
+                parsed[key] = {"quality": "unavailable", "reason": "non_positive_price"}
+                continue
+            quality, age, reason = price_age(now, updated, max_age_seconds=max_age_seconds)
+            if quality != "available":
+                parsed[key] = {
+                    "age_seconds": age,
+                    "last_updated_at": updated,
+                    "quality": quality,
+                    "quoted_at": now,
+                    "reason": reason or quality,
+                    "source": self.source_id,
+                }
+                continue
+            parsed[key] = {
+                "age_seconds": age,
+                "last_updated_at": updated,
+                "price": price,
+                "quality": "available",
+                "quoted_at": now,
+                "reason": "",
+                "source": self.source_id,
+            }
+        return parsed
+
     def _parse(
         self,
         *,
