@@ -617,9 +617,11 @@ def _run_indexer(scan, source_id, source, adapter, wallet_id, address, stored, p
         native = _walk_pages(scan, chunks, origin, wallet_id, "history.native_external", source_id, True, lambda start, end: _safe_blockscout(client, "txlist", address, start, end, page_size, stored, chain_id, pro))
         _remember_plan(plan_cache, source_id, scan.network, native.refusal)
         if native.refusal or _indexer_stopped(native) or _plan_cached(plan_cache, source_id, scan.network):
+            _walk_bsc_internal(scan, client, source, source_id, wallet_id, address)
             return native
         token = _walk_pages(scan, chunks, origin, wallet_id, "history.fungible", source_id, False, lambda start, end: _safe_blockscout(client, "tokentx", address, start, end, page_size, stored, chain_id, pro), cursor=False)
         _remember_plan(plan_cache, source_id, scan.network, token.refusal)
+        _walk_bsc_internal(scan, client, source, source_id, wallet_id, address)
         native.rows.extend(token.rows)
         if token.stopped:
             native.stopped = token.stopped
@@ -850,9 +852,35 @@ def _nodereal_sides(client, category, address, start, end, stored):
 
 
 def _walk_bsc_internal(scan, client, source, source_id, wallet_id, address) -> None:
-    """NodeReal internal history on BSC only, with its own cursor."""
-    if scan.network != "bsc-mainnet" or scan.head is None:
+    """Internal history for the routed source. The network name is not the switch."""
+    if scan.head is None:
         return
+    key = (wallet_id, scan.network, "history.native_internal")
+    if key in scan.observations:
+        return
+    chosen = _ready_internal_source(scan)
+    if chosen is None:
+        return
+    route_id, route_source = chosen
+    adapter = str(route_source.get("adapter") or "")
+    if route_id != source_id:
+        _record_indexer(scan, route_id, adapter)
+    if adapter == "blockscout":
+        _walk_blockscout_internal(scan, route_source, route_id, wallet_id, address)
+        return
+    if adapter != "nodereal_transfers":
+        return
+    if source_id != route_id or not isinstance(client, NodeRealClient):
+        source_id = route_id
+        source = route_source
+        client = NodeRealClient(
+            _LimitedTransport(scan.transport, scan, source_id),
+            source_id,
+            network=scan.network,
+            clock=scan.clock,
+            sleep=_sleep(scan, source_id),
+            random=lambda: 0.0,
+        )
     from guardian.balances.internal import normalize_internal_batch, status_for_refusal
     from guardian.sources.etherscan import HistoryRead
 
@@ -893,34 +921,114 @@ def _walk_bsc_internal(scan, client, source, source_id, wallet_id, address) -> N
     _set_internal_status(scan, wallet_id, status_for_refusal(outcome.refusal or outcome.stopped or "read_error"))
 
 
-def _note_bsc_internal(scan, wallet_id: str, private_inputs: Any) -> None:
-    if scan.network != "bsc-mainnet":
-        return
+def _walk_blockscout_internal(scan, source, source_id, wallet_id, address) -> None:
+    """Keyless or keyed Blockscout internal rows. Both use REST v2, not ``/api``."""
+    from guardian.balances.internal import normalize_internal_batch, status_for_refusal
+    from guardian.sources.etherscan import HistoryRead
+
+    stored = _stored_block(scan, wallet_id, "history.native_internal")
+    scan.seen.add((wallet_id, scan.network, "history.native_internal"))
+    chunks, origin = _indexer_chunks(scan, source, stored)
+    stop_at = stored if isinstance(stored, int) else (origin - 1)
+    client = _blockscout(scan, source_id, source, _LimitedTransport(scan.transport, scan, source_id))
+    chain_id = scan.chain_id if isinstance(scan.chain_id, int) and not isinstance(scan.chain_id, bool) else None
+    span = [] if not chunks else [(chunks[0][0], chunks[-1][1])]
+
+    def fetch(_start: int, end: int):
+        read = client.read_v2(
+            address,
+            "internal-transactions",
+            capability="history.native_internal",
+            stop_block=stop_at,
+            previous_cursor=None if stored is None else str(stored),
+        )
+        if read is None or getattr(read, "blocked", False) or read.category == "error" or not read.pagination_complete:
+            return read
+        normalized = normalize_internal_batch(read.items, chain_id=chain_id, owner=address)
+        if normalized.gap:
+            return HistoryRead(
+                "history.native_internal",
+                normalized.rows,
+                False,
+                False,
+                (normalized.gap,),
+                None if stored is None else str(stored),
+                "partial",
+                False,
+                normalized.gap,
+                (normalized.gap,),
+                "",
+            )
+        name = "empty" if not normalized.rows else "ok"
+        return HistoryRead("history.native_internal", normalized.rows, True, True, (), str(end), name, False, "", (), "")
+
+    outcome = _walk_pages(
+        scan, span, origin, wallet_id, "history.native_internal", source_id, True, fetch, cursor=True,
+    )
     key = (wallet_id, scan.network, "history.native_internal")
     if key in scan.observations:
         return
-    chosen = None
-    for source_id in _route_ids(scan.public_config, scan.network, "history.native_external"):
-        source = scan.public_config.document["sources"].get(source_id, {})
-        if source.get("adapter") == "nodereal_transfers" and source.get("enabled") is True:
-            chosen = (source_id, source)
-            break
-    if chosen is None or not _endpoint_ready(scan, chosen[0]):
+    _set_internal_status(scan, wallet_id, status_for_refusal(outcome.refusal or outcome.stopped or "read_error"))
+
+
+def _ready_internal_source(scan) -> tuple[str, dict] | None:
+    sources = scan.public_config.document.get("sources") if isinstance(scan.public_config.document.get("sources"), dict) else {}
+    for source_id in _route_ids(scan.public_config, scan.network, "history.native_internal"):
+        source = sources.get(source_id, {})
+        if not isinstance(source, dict) or source.get("adapter") not in {"blockscout", "nodereal_transfers"}:
+            continue
+        if not _endpoint_ready(scan, source_id):
+            continue
+        if _internal_credential_block(scan, source):
+            continue
+        return source_id, source
+    return None
+
+
+def _internal_credential_block(scan, source) -> str | None:
+    """A missing key blocks the read. PRO without a key still attempts once."""
+    name = source.get("credential_env")
+    if not isinstance(name, str) or not name:
+        return None
+    if name == "BLOCKSCOUT_API_KEY":
+        return None
+    if _secret(scan, name):
+        return None
+    return name
+
+
+def _note_bsc_internal(scan, wallet_id: str, private_inputs: Any) -> None:
+    del private_inputs
+    key = (wallet_id, scan.network, "history.native_internal")
+    if key in scan.observations:
+        return
+    ids = _route_ids(scan.public_config, scan.network, "history.native_internal")
+    if not ids:
+        return
+    blocked_name = None
+    saw_endpoint = False
+    sources = scan.public_config.document.get("sources") if isinstance(scan.public_config.document.get("sources"), dict) else {}
+    for source_id in ids:
+        source = sources.get(source_id, {})
+        if not isinstance(source, dict) or source.get("adapter") not in {"blockscout", "nodereal_transfers"}:
+            continue
+        if not _endpoint_ready(scan, source_id):
+            continue
+        saw_endpoint = True
+        blocked = _internal_credential_block(scan, source)
+        if blocked:
+            blocked_name = blocked
+            continue
+        _set_internal_status(scan, wallet_id, "read_error")
+        return
+    if blocked_name:
+        _set_internal_status(scan, wallet_id, "credential_missing", credential_hint(blocked_name))
+        return
+    if not saw_endpoint:
         _set_internal_status(scan, wallet_id, "not_queried")
-        return
-    source_id, source = chosen
-    status = private_inputs.source_status.get(source_id)
-    credential_name = source.get("credential_env") if isinstance(source.get("credential_env"), str) else None
-    missing = credential_name is not None and (status is None or not getattr(status, "credential_present", False))
-    if missing:
-        _set_internal_status(scan, wallet_id, "credential_missing", credential_hint(credential_name))
-        return
-    _set_internal_status(scan, wallet_id, "read_error")
 
 
 def _set_internal_status(scan, wallet_id: str, status: str, hint: str = "") -> None:
-    if scan.network != "bsc-mainnet":
-        return
     key = (wallet_id, scan.network, "history.native_internal")
     if key in scan.observations:
         return
@@ -1009,7 +1117,12 @@ def _finish(scan, capability, wallets, origin, target, leaves, gaps, hard, stopp
     for wallet_id, _address in wallets:
         for name in capabilities:
             if hard and not leaves:
-                scan.observations[(wallet_id, scan.network, name)] = _blocked(hard)
+                if hard == "indexer_lag":
+                    scan.observations[(wallet_id, scan.network, name)] = _window(
+                        "partial", origin, target, source_id, False, scan.checkpoint, ("indexer_lag",),
+                    )
+                else:
+                    scan.observations[(wallet_id, scan.network, name)] = _blocked(hard)
                 scan.hold(scan.held_cursors, wallet_id, scan.network, name)
                 continue
             if complete:

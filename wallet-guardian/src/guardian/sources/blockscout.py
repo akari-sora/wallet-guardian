@@ -26,10 +26,18 @@ class _Stop(Exception):
     pass
 
 
+_V2_TAILS = {
+    "internal-transactions": "history.native_internal",
+    "token-transfers": "history.fungible",
+    "transactions": "history.native_external",
+}
+
+
 @dataclass
 class _State:
     failed: bool = False
     reason: str = ""
+    refused: bool = False
     explode: Exception | None = None
 
 
@@ -80,6 +88,8 @@ class BlockscoutClient:
                 query[key] = value
                 continue
             raise ValueError("bad_page")
+        # Blockscout v12 removed limit. A page token must not put it back.
+        query.pop("limit", None)
         if not query:
             raise ValueError("bad_page")
         return query
@@ -158,13 +168,18 @@ class BlockscoutClient:
             if refusal:
                 return _refused(capability, previous_cursor, refusal)
             body = result.body
+            if not result.ok or not isinstance(body, dict):
+                return _kept(capability, previous_cursor, str(getattr(result, "reason", "error") or "error"))
+            if action == "txlistinternal" and _indexer_lag(body):
+                return HistoryRead(
+                    capability, (), False, False, ("indexer_lag",), previous_cursor, "partial",
+                    False, "indexer_lag", ("indexer_lag",), "",
+                )
             if plan_not_supported(body):
                 return HistoryRead(
                     capability, (), False, False, (), previous_cursor, "error", True,
                     "plan_not_supported", ("plan_not_supported",), "",
                 )
-            if not result.ok or not isinstance(body, dict):
-                return _kept(capability, previous_cursor, str(getattr(result, "reason", "error") or "error"))
             rows = body.get("result")
             message = str(body.get("message") or "")
             if isinstance(rows, str):
@@ -231,6 +246,12 @@ class BlockscoutClient:
                 state.failed = True
                 state.reason = "error"
                 raise _Stop() from None
+            refusal = _http_refusal(result)
+            if refusal:
+                state.failed = True
+                state.refused = True
+                state.reason = refusal
+                raise _Stop()
             body = result.body
             if not result.ok or not isinstance(body, dict) or "items" not in body or not isinstance(body.get("items"), list):
                 state.failed = True
@@ -249,6 +270,8 @@ class BlockscoutClient:
         walk = walk_page_key(fetch, page_cap=page_cap, item_cap=item_cap, items_key="items", token_key="pageKey")
         if state.explode is not None:
             raise state.explode
+        if state.refused:
+            return _refused(capability, previous_cursor, state.reason or "error")
         if state.failed or walk.stop_reason != "exhausted":
             return _kept(capability, previous_cursor, state.reason or walk.stop_reason or "error")
         category = "empty" if not walk.items else "ok"
@@ -265,6 +288,102 @@ class BlockscoutClient:
             (),
             "",
         )
+
+    def read_v2(
+        self,
+        address: str,
+        tail: str,
+        *,
+        capability: str | None = None,
+        stop_block: int | None = None,
+        previous_cursor: str | None = None,
+        page_cap: int = 10,
+        item_cap: int = 5_000,
+    ) -> HistoryRead:
+        """Newest-first ``/api/v2/addresses/{address}/{tail}``.
+
+        ``tail`` is ``internal-transactions``, ``transactions``, or
+        ``token-transfers``. Pages follow ``next_page_params`` and stop once a
+        block is at or below ``stop_block``. The request never sends ``limit``.
+        A configured credential is ``Authorization: Bearer`` on this same path.
+        The base URL stays on the source. This method does not embed a key.
+        """
+        name = _V2_TAILS.get(tail)
+        if capability is None:
+            capability = name or "unspecified"
+        if name is None or not isinstance(address, str) or not address:
+            return _kept(capability, previous_cursor, "bad_path")
+        path = f"{_PREFIX}{address}/{tail}"
+        if not _address_path(path):
+            return _kept(capability, previous_cursor, "bad_path")
+        if stop_block is not None and (isinstance(stop_block, bool) or not isinstance(stop_block, int)):
+            return _kept(capability, previous_cursor, "bad_page")
+        if page_cap < 1 or item_cap < 1:
+            return _kept(capability, previous_cursor, "bad_page")
+        kept: list[Any] = []
+        token: dict[str, Any] | None = None
+        pages = 0
+        while pages < page_cap:
+            query = None
+            headers = ("authorization",) if self._credential else None
+            if token is not None:
+                try:
+                    query = self.page_query(token)
+                except ValueError:
+                    return _kept(capability, previous_cursor, "bad_page")
+                if "limit" in query:
+                    return _kept(capability, previous_cursor, "bad_page")
+            operation = self.operation(path, query, headers)
+            try:
+                result = read_with_retry(
+                    lambda operation=operation: self.transport.request(self.source_id, operation),
+                    retry_attempts=self.transport.retry_attempts(self.source_id),
+                    sleep=self.sleep,
+                    random=self.random,
+                    clock=self.clock,
+                )
+            except (SecurityError, BudgetExhausted):
+                raise
+            except BootstrapStop as exc:
+                return HistoryRead(
+                    capability, (), False, False, (exc.reason,), previous_cursor,
+                    "partial", False, exc.reason, (exc.reason,), "",
+                )
+            except TransportError as exc:
+                if exc.reason == "fixture_miss":
+                    raise
+                return _kept(capability, previous_cursor, exc.reason)
+            except Exception:
+                return _kept(capability, previous_cursor, "error")
+            refusal = _http_refusal(result)
+            if refusal:
+                return _refused(capability, previous_cursor, refusal)
+            body = result.body
+            if not result.ok or not isinstance(body, dict) or "items" not in body or not isinstance(body.get("items"), list):
+                reason = "missing_items" if getattr(result, "ok", False) else str(getattr(result, "reason", "error") or "error")
+                return _kept(capability, previous_cursor, reason)
+            nxt = body.get("next_page_params")
+            if nxt is not None and (not isinstance(nxt, dict) or not nxt):
+                return _kept(capability, previous_cursor, "bad_page")
+            stop = False
+            for item in body["items"]:
+                block = _item_block(item)
+                if block is None:
+                    return _kept(capability, previous_cursor, "missing_block")
+                if stop_block is not None and block <= stop_block:
+                    stop = True
+                    break
+                kept.append(item)
+                if len(kept) >= item_cap:
+                    return _kept(capability, previous_cursor, "item_cap")
+            pages += 1
+            if stop or nxt is None:
+                category = "empty" if not kept else "ok"
+                return HistoryRead(
+                    capability, tuple(kept), True, True, (), previous_cursor, category, False, "", (), "",
+                )
+            token = nxt
+        return _kept(capability, previous_cursor, "page_cap")
 
 
 def _address_path(path: str) -> bool:
@@ -325,3 +444,32 @@ def _needs_key(text: str) -> bool:
 
 def _bot_challenge(text: str) -> bool:
     return "just a moment" in text
+
+
+def _indexer_lag(body: Mapping[str, Any]) -> bool:
+    """Blockscout ``txlistinternal`` status 2 means the indexer has not caught up."""
+    status = body.get("status")
+    if status == 2 or status == "2":
+        return True
+    parts: list[str] = []
+    for key in ("message", "result"):
+        value = body.get(key)
+        if isinstance(value, str):
+            parts.append(value.lower())
+    return "not yet been processed" in " ".join(parts)
+
+
+def _item_block(item: Any) -> int | None:
+    if not isinstance(item, Mapping):
+        return None
+    for key in ("block_number", "blockNumber", "block"):
+        value = item.get(key)
+        if isinstance(value, bool) or value is None:
+            continue
+        if isinstance(value, int):
+            return value if value >= 0 else None
+        if isinstance(value, str):
+            text = value.strip()
+            if text.isdigit():
+                return int(text)
+    return None

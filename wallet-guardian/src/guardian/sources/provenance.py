@@ -22,7 +22,7 @@ _RATE_HEADERS = (
     "x-ratelimit-remaining-quota",
 )
 _BLOCKSCOUT_CREDITS = 20
-_PATH_ADDRESS = re.compile(r"/(address|scripthash)/[^/]+")
+_PATH_ADDRESS = re.compile(r"/(address|addresses|scripthash)/[^/]+")
 _TRON_ACCOUNT = re.compile(r"/v1/accounts/[^/]+")
 
 
