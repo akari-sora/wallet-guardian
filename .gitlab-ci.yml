@@ -1,6 +1,7 @@
 # Locked offline tests from MR !1, plus the static Pages job from main.
 # The pages job does not set VITE_GUARDIAN_MAINNET_SEND and refuses a true value.
-# It runs only on main. This reconcile does not deploy.
+# It is manual on main, so a merge does not publish. D-11 (whether to delete
+# this job) stays the operator's decision. This reconcile does not deploy.
 
 stages:
   - test
@@ -27,7 +28,8 @@ python-tests:
     - python -m pip install --disable-pip-version-check uv
     - cd wallet-guardian
     - uv sync --frozen --group dev
-    - uv run --frozen pytest -q --junitxml=test-results/python.xml
+    - mkdir -p test-results
+    - uv run --frozen pytest -q -rf --durations=25 --timeout=60 --junitxml=test-results/python.xml
   artifacts:
     when: always
     reports:
@@ -66,6 +68,8 @@ pages:
       - public
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+      allow_failure: true
 
 # On-demand Linux host (tag wg-box-ondemand).
 # Shared-runner jobs above are unchanged.

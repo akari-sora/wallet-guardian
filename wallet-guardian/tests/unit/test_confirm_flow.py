@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -291,8 +292,16 @@ def test_env_local_configures_etherscan_without_leaking(tmp_path, monkeypatch):
 
 
 def test_client_gate_matches_python():
+    """The JS gate matches this tree. python:3.12-slim has no node binary.
+
+    ``client-tests`` runs the same file (``npm run test:gate``). This process
+    only repeats it when ``node`` is on ``PATH``.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed; client-tests runs src/gate.test.mjs")
     completed = subprocess.run(
-        ["node", "src/gate.test.mjs"],
+        [node, "src/gate.test.mjs"],
         cwd=ROOT / "action-client",
         check=False,
         capture_output=True,
