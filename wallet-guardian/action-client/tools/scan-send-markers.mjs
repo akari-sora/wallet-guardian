@@ -1,22 +1,42 @@
 /**
  * Scan built JavaScript for send-construction markers.
- * The WalletConnect SDK lazy chunk is exempt; application chunks are not.
+ * A file is exempt only when its bytes match the content-hash allowlist.
+ * The name walletconnect-sdk*.js is not an exemption.
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
-import { pathToFileURL } from "node:url";
+import { createHash } from "node:crypto";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const SEND_MARKER = /eth_sendTransaction|eth_sendRawTransaction|eth_signTransaction|wallet_sendCalls|testOnlyAllowWalletRequest|noBroadcast/g;
 
-export function isWalletConnectSdkChunk(rel) {
-  return /(^|\/)walletconnect-sdk[^/]*\.js$/.test(rel);
+const ALLOWLIST_PATH = join(dirname(fileURLToPath(import.meta.url)), "send-marker-allowlist.json");
+
+export function contentSha256(text) {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+export function loadAllowlist(path = ALLOWLIST_PATH) {
+  const document = JSON.parse(readFileSync(path, "utf8"));
+  const hashes = Array.isArray(document.sha256) ? document.sha256 : [];
+  return new Set(hashes.filter((item) => typeof item === "string" && item.length === 64));
+}
+
+export function isAllowlistedSdkContent(text, allowlist = loadAllowlist()) {
+  if (typeof text !== "string") return false;
+  return allowlist.has(contentSha256(text));
+}
+
+export function isWalletConnectSdkChunk(_rel, text) {
+  return isAllowlistedSdkContent(text);
 }
 
 export function scanText(text) {
   return text.match(SEND_MARKER) ?? [];
 }
 
-export function scanSendMarkers(dir) {
+export function scanSendMarkers(dir, options = {}) {
+  const allowlist = options.allowlist ?? loadAllowlist();
   const hits = [];
   const walk = (current) => {
     for (const name of readdirSync(current)) {
@@ -27,8 +47,9 @@ export function scanSendMarkers(dir) {
       }
       if (!name.endsWith(".js")) continue;
       const rel = relative(dir, absolute).split("\\").join("/");
-      if (isWalletConnectSdkChunk(rel)) continue;
-      const found = scanText(readFileSync(absolute, "utf8"));
+      const text = readFileSync(absolute, "utf8");
+      if (isAllowlistedSdkContent(text, allowlist)) continue;
+      const found = scanText(text);
       if (found.length > 0) hits.push({ file: rel, count: found.length, markers: [...new Set(found)] });
     }
   };

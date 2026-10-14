@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { isWalletConnectSdkChunk, scanSendMarkers, scanText } from "../tools/scan-send-markers.mjs";
+import { contentSha256, isAllowlistedSdkContent, isWalletConnectSdkChunk, scanSendMarkers, scanText } from "../tools/scan-send-markers.mjs";
 
 const CLIENT = fileURLToPath(new URL("..", import.meta.url));
 const DIST = join(CLIENT, "dist");
@@ -75,15 +75,24 @@ test("main.ts import graph does not include src/send", () => {
   assert.ok(graph.size > 10);
 });
 
-test("scanner reports an application marker and exempts the WalletConnect SDK chunk name", () => {
+test("scanner does not skip walletconnect-sdk files by name", () => {
   const root = mkdtempSync(join(tmpdir(), "wg-scan-"));
   mkdirSync(join(root, "assets"));
+  const sdk = "known-sdk-bytes eth_sendTransaction\n";
+  const spoof = "eth_sendTransaction wallet_sendCalls\n";
   writeFileSync(join(root, "assets/index-app.js"), "const method = \"eth_sendTransaction\";\n");
-  writeFileSync(join(root, "assets/walletconnect-sdk-abc123.js"), "eth_sendTransaction wallet_sendCalls\n");
-  const hits = scanSendMarkers(root);
-  assert.equal(hits.length, 1);
-  assert.equal(hits[0].file, "assets/index-app.js");
-  assert.equal(isWalletConnectSdkChunk("assets/walletconnect-sdk-abc123.js"), true);
+  writeFileSync(join(root, "assets/walletconnect-sdk-abc123.js"), spoof);
+  writeFileSync(join(root, "assets/vendor-chunk.js"), sdk);
+  const allowlist = new Set([contentSha256(sdk)]);
+  const hits = scanSendMarkers(root, { allowlist });
+  assert.deepEqual(hits.map((hit) => hit.file).sort(), [
+    "assets/index-app.js",
+    "assets/walletconnect-sdk-abc123.js",
+  ]);
+  assert.equal(isWalletConnectSdkChunk("assets/walletconnect-sdk-abc123.js"), false);
+  assert.equal(isWalletConnectSdkChunk("assets/walletconnect-sdk-abc123.js", spoof), false);
+  assert.equal(isAllowlistedSdkContent(sdk, allowlist), true);
+  assert.equal(isAllowlistedSdkContent(spoof, allowlist), false);
   assert.deepEqual(scanText("personal_sign"), []);
 });
 

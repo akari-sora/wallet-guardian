@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { sha256 } from "./artifact-manifest.mjs";
 import { findRelease, loadReleaseDocument, validateRelease, PATHS } from "./release-record.mjs";
-import { isWalletConnectSdkChunk, scanText } from "./scan-send-markers.mjs";
+import { isAllowlistedSdkContent, scanText } from "./scan-send-markers.mjs";
 
 const TASK_REF = `/t/ref_${"0".repeat(32)}`;
 
@@ -205,7 +205,7 @@ export async function verifyDeployedArtifact(options) {
   if (options.scanSendMarkers) {
     for (const [path, got] of seen) {
       if (!path.endsWith(".js") || !got || got.response.status !== 200) continue;
-      if (isWalletConnectSdkChunk(path)) continue;
+      if (isAllowlistedSdkContent(got.text)) continue;
       const found = scanText(got.text);
       if (found.length > 0) errors.push(`${path}: send marker ${[...new Set(found)].join(",")}`);
     }
