@@ -73,12 +73,13 @@ _PLUGINS = frozenset({
 _RELATIONSHIPS = frozenset({"owned_user_declared", "watch_only"})
 _FAMILIES = frozenset({"aptos", "bitcoin", "cosmos", "evm", "solana", "sui", "ton", "tron"})
 # Operator-unit floors for non-ETH networks init can enable. Not a USD equivalent.
+# Solana is omitted on purpose. run-once does not parse Solana transactions
+# and native balance deltas are EVM-only, so a SOL floor would not alert.
 _NATIVE_UNIT_FLOORS = {
     "avalanche-c": "10",
     "bitcoin-mainnet": "0.01",
     "bsc-mainnet": "1.0",
     "polygon-pos": "1000",
-    "solana-mainnet": "10",
 }
 _READ_ADAPTER = {
     "aptos": "aptos_rest",
