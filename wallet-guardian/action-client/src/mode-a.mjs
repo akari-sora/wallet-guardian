@@ -16,7 +16,8 @@ export const OUTCOME_TEXT = Object.freeze({
   unknown: "錢包結果：不明（unknown）。不會自動再送一次。",
   confirmed: "錢包結果：已核對經濟結果（confirmed）。雜湊本身不是完成。",
   replaced: "錢包結果：已替代（replaced）。舊雜湊與新雜湊都不是完成。",
-  failed: "錢包結果：失敗（failed）。不會自動再送。",
+  failed: "錢包結果：失敗（failed）。鏈上還原，不會自動再送。",
+  rejected: "錢包結果：已拒簽（rejected）。這不是鏈上失敗。新的點擊與兩次重讀之後才能再試，不會自動再送。",
 });
 
 const DRIFT_REASONS = new Set([
@@ -75,19 +76,56 @@ function hashText(value) {
   return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value);
 }
 
-function userRejected(error) {
-  if (!error || typeof error !== "object") return false;
-  if (error.code === 4001) return true;
-  return /user rejected|user denied|rejected the request/i.test(String(error.message || ""));
+/** Versioned wallet-error table. Further rows wait for a real-wallet sample. */
+export const WALLET_RETURN_TABLE_VERSION = 1;
+
+export const WALLET_RETURN_TABLE = Object.freeze({
+  version: WALLET_RETURN_TABLE_VERSION,
+  rejected: Object.freeze([
+    Object.freeze({ code: 4001 }),
+    Object.freeze({ code: 5000, messageIncludes: "User rejected", source: "walletconnect" }),
+  ]),
+});
+
+function errorCode(error) {
+  if (!error || typeof error !== "object") return null;
+  return typeof error.code === "number" && Number.isInteger(error.code) ? error.code : null;
+}
+
+function errorMessage(error) {
+  if (!error || typeof error !== "object" || typeof error.message !== "string") return "";
+  return error.message;
+}
+
+/** 4001, or WalletConnect 5000 whose message contains "User rejected". Everything else is ambiguous. */
+export function classifyWalletError(error) {
+  const code = errorCode(error);
+  const message = errorMessage(error);
+  for (const row of WALLET_RETURN_TABLE.rejected) {
+    if (code !== row.code) continue;
+    if (row.messageIncludes && !message.includes(row.messageIncludes)) continue;
+    return "rejected";
+  }
+  return "ambiguous";
 }
 
 export function interpretWalletReturn(value, error) {
   if (error) {
-    if (userRejected(error)) return { type: "rejected" };
-    return { type: "ambiguous" };
+    const classification = classifyWalletError(error);
+    if (classification === "rejected") {
+      return { type: "rejected", classification, tableVersion: WALLET_RETURN_TABLE_VERSION };
+    }
+    return { type: "ambiguous", classification: "ambiguous", tableVersion: WALLET_RETURN_TABLE_VERSION };
   }
-  if (!hashText(value)) return { type: "ambiguous" };
-  return { type: "submitted", txHash: value.toLowerCase() };
+  if (!hashText(value)) {
+    return { type: "ambiguous", classification: "ambiguous", tableVersion: WALLET_RETURN_TABLE_VERSION };
+  }
+  return {
+    type: "submitted",
+    classification: "submitted",
+    tableVersion: WALLET_RETURN_TABLE_VERSION,
+    txHash: value.toLowerCase(),
+  };
 }
 
 export function applyWalletEvent(track, event) {
@@ -99,8 +137,11 @@ export function applyWalletEvent(track, event) {
     newTransaction: false,
     economicVerified: false,
   };
-  if (!event || event.type === "rejected") {
+  if (!event) {
     return { ...base, status: "failed", txHash: null, replacementHash: null };
+  }
+  if (event.type === "rejected") {
+    return { ...base, status: "rejected", txHash: null, replacementHash: null };
   }
   if (event.type === "ambiguous") {
     return { ...base, status: "unknown", txHash: hashText(event.txHash) ? event.txHash.toLowerCase() : null };
@@ -338,11 +379,11 @@ export function recordEconomicOutcome(track, evidence) {
       economicReason: null,
     };
   }
-  const status = verdict.failed
-    ? "failed"
-    : (current.status === "unknown" || current.status === "failed" || current.status === "replaced"
-      ? current.status
-      : "pending");
+  const sticky = current.status === "unknown"
+    || current.status === "failed"
+    || current.status === "replaced"
+    || current.status === "rejected";
+  const status = verdict.failed ? "failed" : (sticky ? current.status : "pending");
   return {
     ...current,
     status,
@@ -363,7 +404,7 @@ export function recordReplacement(track, replacement) {
   });
 }
 
-/** Ambiguous, pending, replaced, failed, and confirmed claims do not start another Mode A send. */
+/** Ambiguous, pending, replaced, failed, rejected, and confirmed claims do not start another Mode A send. */
 export function retryModeA(track) {
   const status = track && track.status ? track.status : "idle";
   if (status === "idle") {
@@ -377,6 +418,28 @@ export function retryModeA(track) {
     hashIsDone: false,
     blocked: true,
   };
+}
+
+/**
+ * A rejected signature may be tried again only after a new user gesture and two new re-reads.
+ * Pending, unknown, failed, and every other status stay closed. This never schedules a retry.
+ */
+export function retryAllowed({ status, userClick, rereads } = {}) {
+  if (status !== "rejected") return false;
+  if (userClick !== true) return false;
+  if (!Number.isSafeInteger(rereads) || rereads < 2) return false;
+  return true;
+}
+
+/** Durable record that must be verified instead of sent again. Rejected is handled by retryAllowed. */
+export function confirmBlock(record) {
+  const status = record && record.status;
+  if (status === "pending" || status === "unknown" || status === "requested" || status === "replaced") {
+    return "verify_outcome";
+  }
+  if (status === "confirmed" || status === "failed") return "no_auto_retry";
+  if (status === "rejected") return "rejected";
+  return null;
 }
 
 /** One task, one in-flight guide. The outcome lives here, not only in a caller-supplied prior. */

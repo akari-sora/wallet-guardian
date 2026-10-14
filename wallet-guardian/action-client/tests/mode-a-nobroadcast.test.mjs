@@ -495,7 +495,7 @@ test("wallet outcomes never treat a hash as done and do not auto-retry", () => {
   assert.equal(again.blocked, true);
   assert.equal(again.newTransaction, false);
   const rejected = applyWalletEvent(null, { type: "rejected" });
-  assert.equal(rejected.status, "failed");
+  assert.equal(rejected.status, "rejected");
   assert.equal(retryModeA(rejected).blocked, true);
   const replaced = recordReplacement(submitted, {
     previousHash: submitted.txHash,
@@ -558,7 +558,7 @@ test("an ambiguous probe is not sent again", async () => {
     testOnlyAllowWalletRequest: true,
     provider: denied,
   });
-  assert.equal(rejected.outcome.status, "failed");
+  assert.equal(rejected.outcome.status, "rejected");
   const stopped = await guideListaModeA({
     ...guideInput().input,
     testOnlyAllowWalletRequest: true,
