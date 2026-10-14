@@ -40,6 +40,8 @@ This is an engineering estimate, not a provider quota and not a promise. The non
 
 A quiet Multicall3 round is 5 HTTP calls and 5 methods per chain: head, `eth_getCode`, one `aggregate3`, and two `eth_getLogs`. That is within 5 HTTP and within `4 + N` methods for one or more wallets. The method count does not grow with N on this path. An empty-code fallback adds one `eth_getBalance` per wallet instead of the single `eth_call`.
 
+A policy refusal of the first log source is outside that quiet ceiling. The refused source is asked once for the chunk, then both log directions move to the next source: one refused `eth_getLogs` plus the two queries on the next source, so the round is 6 HTTP (3 family calls plus 3 log calls). The ≤5 figure is the quiet-success ceiling. Capping the refusal path at 5 would drop one log direction or skip the failover that makes detection possible on publicnode BSC and OP, so the fall-through is not capped. A second refusal, or any non-policy failure, stops the chain: gap, no empty logs, no zero, no trigger, no cursor advance. Head, code, and balance stay on the family source and are not repeated for the log failover.
+
 Count the existing three-hour `run-once` monitor as well. Every endpoint that shares the provider account shares the budget. This command does not add a scheduler and does not change the monitor interval.
 
 ## Not run
