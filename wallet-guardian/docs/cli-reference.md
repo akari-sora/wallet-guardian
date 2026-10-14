@@ -710,8 +710,8 @@ options:
 ## `guardian install-service`
 
 ```text
-usage: guardian install-service [-h] [--db DB] [--tenant TENANT] [--json] [--dry-run] [--apply] [--mcm-config MCM_CONFIG] [--output OUTPUT] [--executable EXECUTABLE] [--config-dir CONFIG_DIR]
-                                [--state-dir STATE_DIR] [--user USER] [--offset-minutes OFFSET_MINUTES] [--legacy-executable LEGACY_EXECUTABLE]
+usage: guardian install-service [-h] [--db DB] [--tenant TENANT] [--json] [--dry-run] [--apply] [--schedule-mode {auto,launchd_agent}] [--mcm-config MCM_CONFIG] [--output OUTPUT]
+                                [--executable EXECUTABLE] [--config-dir CONFIG_DIR] [--state-dir STATE_DIR] [--user USER] [--offset-minutes OFFSET_MINUTES] [--legacy-executable LEGACY_EXECUTABLE]
 
 options:
   -h, --help            show this help message and exit
@@ -720,6 +720,8 @@ options:
   --json                print JSON (this is always on)
   --dry-run             print the plan and do not enable units
   --apply               install rendered units; refused when omitted
+  --schedule-mode {auto,launchd_agent}
+                        auto (default) selects systemd or cron; launchd_agent prints three LaunchAgents and does not load them
   --mcm-config MCM_CONFIG
   --output OUTPUT       write rendered units only under this directory
   --executable EXECUTABLE

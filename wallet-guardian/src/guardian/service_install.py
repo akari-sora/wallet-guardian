@@ -2,13 +2,18 @@
 
 The command prints absolute unit text and refuses to enable anything unless
 ``apply`` is set. Probes use an injectable runner. A dry-run never calls
-``systemctl``. This module does not sign, broadcast, or fetch code.
+``systemctl``. ``schedule_mode`` ``launchd_agent`` prints three LaunchAgent
+plists and writes them only under ``--output``. It does not call ``launchctl``
+or ``pmset``, and it does not load a plist. This module does not sign,
+broadcast, or fetch code.
 """
 
 from __future__ import annotations
 
 import os
+import plistlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -67,6 +72,17 @@ _USER = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 _TOKEN = re.compile(r"@[A-Z0-9_]+@")
 _DEFAULT_LEGACY = "/usr/local/sbin/guardian-legacy-collector"
 _WATCHDOG_CALENDAR = "*:0/15"
+_LAUNCHD_PROBE = "com.walletguardian.balance-probe.plist"
+_LAUNCHD_RUN_ONCE = "com.walletguardian.run-once.plist"
+_LAUNCHD_WATCHDOG = "com.walletguardian.watchdog.plist"
+_PROBE_MINUTES = tuple(range(0, 60, 5))
+_WATCHDOG_MINUTES = (0, 15, 30, 45)
+_RUN_ONCE_HOURS = tuple(range(0, 24, 3))
+_NEVER_SPAWN = frozenset({"launchctl", "pmset"})
+_START_INTERVAL_KEY = re.compile(r"<key>\s*StartInterval\s*</key>")
+START_INTERVAL_SLEEP_WARNING = (
+    "StartInterval: sleep will skip runs; a missed interval is not coalesced on wake"
+)
 Runner = Callable[[Sequence[str]], Any]
 
 
@@ -158,6 +174,89 @@ def render_units(
     return rendered
 
 
+def render_launchd_agents(
+    *,
+    executable: str,
+    version: str,
+    config_directory: str,
+    state_directory: str,
+    mcm_config: str,
+    offset_minutes: int,
+) -> dict[str, str]:
+    """Three LaunchAgent plists. Printed text only; nothing is loaded.
+
+    The probe agent runs ``balance-probe`` with a required absolute
+    ``--probe-state`` under the state directory and with ``--no-send``.
+    """
+    if version.strip().lower() in _MOVING:
+        raise ConfigError("installed version must be fixed")
+    offset = _offset(offset_minutes)
+    executable = _launchd_path(executable, "executable")
+    config_directory = _launchd_path(config_directory, "config directory")
+    state_directory = _launchd_path(state_directory, "state directory")
+    mcm_config = _launchd_path(mcm_config, "mcm config")
+    probe_state = _launchd_path(
+        os.fspath(Path(state_directory) / "balance-probe.sqlite"),
+        "probe state",
+    )
+    commands = {
+        _LAUNCHD_PROBE: [
+            executable,
+            "balance-probe",
+            "--mcm-config",
+            mcm_config,
+            "--probe-state",
+            probe_state,
+            "--no-send",
+        ],
+        _LAUNCHD_RUN_ONCE: [executable, "run-once", "--mcm-config", mcm_config, "--no-send"],
+        _LAUNCHD_WATCHDOG: [executable, "watchdog", "--no-send", "--mcm-config", mcm_config],
+    }
+    intervals = {
+        _LAUNCHD_PROBE: [{"Minute": minute} for minute in _PROBE_MINUTES],
+        _LAUNCHD_RUN_ONCE: [{"Hour": hour, "Minute": offset} for hour in _RUN_ONCE_HOURS],
+        _LAUNCHD_WATCHDOG: [{"Minute": minute} for minute in _WATCHDOG_MINUTES],
+    }
+    environment = {
+        "GUARDIAN_CONFIG_DIR": config_directory,
+        "GUARDIAN_INSTALLED_VERSION": version,
+        "GUARDIAN_STATE_DIR": state_directory,
+    }
+    _reject_fetch([executable, version, config_directory, state_directory, mcm_config, probe_state])
+    rendered: dict[str, str] = {}
+    for name in (_LAUNCHD_PROBE, _LAUNCHD_RUN_ONCE, _LAUNCHD_WATCHDOG):
+        arguments = commands[name]
+        _check_program_arguments(arguments)
+        text = _dump_plist(
+            {
+                "EnvironmentVariables": environment,
+                "Label": name[: -len(".plist")],
+                "ProgramArguments": arguments,
+                "StartCalendarInterval": intervals[name],
+            }
+        )
+        parsed = _program_arguments(text)
+        if parsed != arguments:
+            raise ConfigError("plist program arguments did not round-trip")
+        if _uses_start_interval(text):
+            raise ConfigError("generated plist must use StartCalendarInterval")
+        rendered[name] = text
+    return rendered
+
+
+def inspect_launchd_schedule(plist_text: str) -> list[str]:
+    """Warnings for one generated or supplied plist. This does not load it.
+
+    ``StartCalendarInterval`` is the schedule this package prints. ``StartInterval``
+    misses runs while the machine is asleep, so a plist that uses it warns.
+    """
+    if not isinstance(plist_text, str) or not plist_text.strip():
+        return []
+    if _uses_start_interval(plist_text):
+        return [START_INTERVAL_SLEEP_WARNING]
+    return []
+
+
 def classify_schedule(
     *,
     linger: bool,
@@ -226,8 +325,30 @@ def execute_install_service(
     systemd_present: bool | None = None,
     cron_present: bool | None = None,
     version: str | None = None,
+    schedule_mode: str | None = None,
+    supplied_plist: str | None = None,
 ) -> dict[str, Any]:
-    """Render the plan. Write only under ``output_dir`` unless ``apply`` is set."""
+    """Render the plan. Write only under ``output_dir`` unless ``apply`` is set.
+
+    ``launchd_agent`` prints or writes plists and does not load them. ``apply``
+    does not call ``launchctl``.
+    """
+    requested = "auto" if schedule_mode in {None, "", "auto"} else schedule_mode
+    if requested == "launchd_agent":
+        return _execute_launchd(
+            dry_run=dry_run,
+            apply=apply,
+            mcm_config=mcm_config,
+            output_dir=output_dir,
+            executable=executable,
+            config_directory=config_directory,
+            state_directory=state_directory,
+            offset_minutes=offset_minutes,
+            version=version,
+            supplied_plist=supplied_plist,
+        )
+    if requested != "auto":
+        raise ConfigError("schedule mode")
     applying = bool(apply) and not bool(dry_run)
     recorded: list[list[str]] = []
     facts = _probe(
@@ -332,6 +453,93 @@ def execute_install_service(
     return payload
 
 
+def _execute_launchd(
+    *,
+    dry_run: bool,
+    apply: bool,
+    mcm_config: str | None,
+    output_dir: str | None,
+    executable: str | None,
+    config_directory: str | None,
+    state_directory: str | None,
+    offset_minutes: int,
+    version: str | None,
+    supplied_plist: str | None,
+) -> dict[str, Any]:
+    """Print or write three LaunchAgents. Never load them and never spawn launchctl."""
+    applying = bool(apply) and not bool(dry_run)
+    pinned = installed_version() if version is None else version
+    paths = _launchd_paths(
+        executable=executable,
+        config_directory=config_directory,
+        state_directory=state_directory,
+        mcm_config=mcm_config,
+    )
+    offset = _offset(offset_minutes)
+    rendered = render_launchd_agents(
+        executable=paths["executable"],
+        version=pinned,
+        config_directory=paths["config_directory"],
+        state_directory=paths["state_directory"],
+        mcm_config=paths["mcm_config"],
+        offset_minutes=offset,
+    )
+    warnings = ["launchd_agent_not_loaded"]
+    for text in rendered.values():
+        warnings.extend(inspect_launchd_schedule(text))
+    if supplied_plist:
+        warnings.extend(inspect_launchd_schedule(supplied_plist))
+    if applying:
+        warnings.append("launchctl_refused")
+    planned = []
+    for name, text in rendered.items():
+        arguments = _program_arguments(text)
+        planned.append(
+            {
+                "action": "print_only",
+                "exec": shlex.join(arguments),
+                "name": name,
+                "program_arguments": arguments,
+            }
+        )
+    payload: dict[str, Any] = {
+        "applied": False,
+        "commands": [],
+        "common_cause": "same-host watchdog cannot alert when the host is down",
+        "cron_detected": False,
+        "cron_fallback": False,
+        "dry_run": not applying,
+        "executable": paths["executable"],
+        "fetches_code": False,
+        "installed": False,
+        "launchctl_called": False,
+        "linger": {
+            "present": False,
+            "user_manager": False,
+            "user_timer": "not_applicable",
+        },
+        "loaded": False,
+        "offset_minutes": offset,
+        "on_calendar": f"*-*-* 0/3:{offset:02d}:00",
+        "persistent_counts_as_on_time": False,
+        "planned_units": planned,
+        "probe_subcommand": "balance-probe",
+        "probe_subcommand_implemented": True,
+        "rendered": rendered,
+        "schedule_mode": "launchd_agent",
+        "selected_files": list(rendered),
+        "sender_started": False,
+        "status": "ok",
+        "systemctl_called": False,
+        "version": pinned,
+        "warnings": list(dict.fromkeys(warnings)),
+        "wrote": [],
+    }
+    if output_dir:
+        payload["wrote"] = _write_units(Path(output_dir), rendered)
+    return payload
+
+
 def _probe(
     user: str,
     runner: Runner,
@@ -391,17 +599,18 @@ def _paths(
     }
 
 
-def _resolve_executable(explicit: str | None) -> str:
+def _resolve_executable(explicit: str | None, *, path_of: Callable[[str, str], str] | None = None) -> str:
+    check = _unit_path if path_of is None else path_of
     if explicit:
-        return _unit_path(explicit, "executable")
+        return check(explicit, "executable")
     found = shutil.which("guardian")
     if found:
-        return _unit_path(found, "executable")
+        return check(found, "executable")
     name = "guardian.exe" if os.name == "nt" else "guardian"
     sibling = Path(sys.executable).resolve().with_name(name)
     if sibling.is_file():
-        return _unit_path(os.fspath(sibling), "executable")
-    return _unit_path(sys.executable, "executable")
+        return check(os.fspath(sibling), "executable")
+    return check(sys.executable, "executable")
 
 
 def _directory(value: str | None, default: Path) -> str:
@@ -426,6 +635,94 @@ def _unit_path(value: str, label: str) -> str:
     if "://" in text:
         raise ConfigError(f"{label} must be a local path")
     return text
+
+
+def _launchd_paths(
+    *,
+    executable: str | None,
+    config_directory: str | None,
+    state_directory: str | None,
+    mcm_config: str | None,
+) -> dict[str, str]:
+    config = _launchd_directory(config_directory, default_config_dir())
+    state = _launchd_directory(state_directory, default_state_dir())
+    return {
+        "config_directory": config,
+        "executable": _resolve_executable(executable, path_of=_launchd_path),
+        "mcm_config": _launchd_file(mcm_config, Path(config) / "monitor.json"),
+        "state_directory": state,
+    }
+
+
+def _launchd_directory(value: str | None, default: Path) -> str:
+    path = Path(value).expanduser() if value else default
+    return _launchd_path(os.fspath(path), "directory")
+
+
+def _launchd_file(value: str | None, default: Path) -> str:
+    path = Path(value).expanduser() if value else default
+    return _launchd_path(os.fspath(path), "file")
+
+
+def _launchd_path(value: str, label: str) -> str:
+    """Absolute local path. Spaces and brackets are kept for XML escaping."""
+    resolved = Path(value).expanduser().resolve()
+    if not resolved.is_absolute():
+        raise ConfigError(f"{label} must be absolute")
+    text = os.fspath(resolved)
+    if any(char in text for char in "\n\r\x00"):
+        raise ConfigError(f"{label} contains a forbidden character")
+    if "://" in text:
+        raise ConfigError(f"{label} must be a local path")
+    return text
+
+
+def _dump_plist(payload: Mapping[str, Any]) -> str:
+    raw = plistlib.dumps(dict(payload), fmt=plistlib.FMT_XML, sort_keys=True)
+    text = raw.decode("utf-8").replace("[", "&#91;").replace("]", "&#93;")
+    if not text.endswith("\n"):
+        text += "\n"
+    plistlib.loads(text.encode("utf-8"))
+    return text
+
+
+def _program_arguments(plist_text: str) -> list[str]:
+    loaded = plistlib.loads(plist_text.encode("utf-8"))
+    if not isinstance(loaded, dict):
+        raise ConfigError("plist program arguments")
+    arguments = loaded.get("ProgramArguments")
+    if not isinstance(arguments, list) or not arguments or not all(isinstance(item, str) for item in arguments):
+        raise ConfigError("plist program arguments")
+    return list(arguments)
+
+
+def _check_program_arguments(arguments: Sequence[str]) -> None:
+    if not arguments or not Path(arguments[0]).is_absolute():
+        raise ConfigError("executable must be absolute")
+    for part in arguments:
+        if part.startswith("/") and not Path(part).is_absolute():
+            raise ConfigError("program path must be absolute")
+    if "--no-send" not in arguments:
+        raise ConfigError("scheduled command must pass --no-send")
+    _reject_fetch(arguments)
+    for left, right in zip(arguments, arguments[1:], strict=False):
+        if f"{left} {right}".lower() == "uv sync":
+            raise ConfigError("unit would fetch code")
+
+
+def _reject_fetch(values: Sequence[str]) -> None:
+    for value in values:
+        lowered = value.lower()
+        if any(marker in lowered for marker in _FETCH_MARKERS):
+            raise ConfigError("unit would fetch code")
+
+
+def _uses_start_interval(plist_text: str) -> bool:
+    try:
+        loaded = plistlib.loads(plist_text.encode("utf-8"))
+    except (plistlib.InvalidFileException, UnicodeError, ValueError):
+        return _START_INTERVAL_KEY.search(plist_text) is not None
+    return isinstance(loaded, dict) and "StartInterval" in loaded
 
 
 def _offset(value: int) -> int:
@@ -584,6 +881,8 @@ def _default_runner(argv: Sequence[str], *, allow_systemctl: bool) -> CommandRes
 
 
 def _spawn(argv: Sequence[str]) -> CommandResult:
+    if not argv or argv[0] in _NEVER_SPAWN:
+        return CommandResult(127, "", "command refused")
     try:
         completed = subprocess.run(
             list(argv),
