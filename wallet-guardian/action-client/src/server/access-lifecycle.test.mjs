@@ -19,9 +19,11 @@ import { randomHex, sha256Hex } from "./http.mjs";
 import { checksumAddress } from "./siwe.mjs";
 import { getTask } from "./tasks.mjs";
 import { createPrimaryDatabase, privateTaskSchema } from "./test-db.mjs";
+import { productionViewOrigin } from "../view-origin.mjs";
 import { revokeWalletAccess, sqlBatchDb, validateCredentialId } from "../../tools/lib/revoke-access.mjs";
 
-const ORIGIN = "https://wallet-guardian-action-client.pages.dev";
+const ORIGIN = productionViewOrigin();
+const HOST = new URL(ORIGIN).host;
 const schema = privateTaskSchema();
 const sample = JSON.parse(readFileSync(new URL("../../public/sample-task.json", import.meta.url), "utf8"));
 
@@ -58,7 +60,7 @@ function openEnv() {
         return database.withSession(mode);
       },
     },
-    AUTH_DOMAIN: "wallet-guardian-action-client.pages.dev",
+    AUTH_DOMAIN: HOST,
     AUTH_URI: ORIGIN,
     AUTH_CHAIN_ID: "56",
   };
