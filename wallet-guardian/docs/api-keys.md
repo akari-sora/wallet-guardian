@@ -31,7 +31,7 @@ Environment:
 - `ETHERSCAN_API_KEY`
 - `ETHERSCAN_API_BASE` (the API origin; the client calls `/v2/api`)
 
-Without the key: native history uses a Blockscout keyless instance when that chain has one (Ethereum, Arbitrum, Polygon, Base, Optimism). Otherwise the row is `credential_missing`. Token history uses public RPC `eth_getLogs` with the configured chunk size. BSC does not use Etherscan.
+Without the key: in `examples/monitor.json`, native history falls back to a keyless Blockscout instance (Ethereum, Arbitrum, Polygon, Base, Optimism) when that instance's URL variable is set. A profile written by `guardian init` does not include keyless or PRO Blockscout. It adds a per-chain Blockscout source that needs a key, so without the key the row stays `credential_missing`. Token history uses public RPC `eth_getLogs` with the configured chunk size. BSC does not use Etherscan.
 
 <a id="nodereal"></a>
 
@@ -126,7 +126,7 @@ Base log endpoints, if you set them yourself:
 
 Signup: <https://gopluslabs.io>.
 
-What it unlocks: address and asset risk lookups. The privacy policy is unchanged: `third_party_wallet_queries` stays `deny_until_local_consent` unless you set `operator_approved_sources_only`. A deny still means the wallet address is not sent.
+What it unlocks: nothing in this preview. `run-once` does not call GoPlus. With or without a key and consent, the `address_risk` row is a blocked gap (`credential_missing`, `third_party_denied`, or `not_run`). No risk screening is performed. The privacy policy is unchanged: `third_party_wallet_queries` stays `deny_until_local_consent` unless you set `operator_approved_sources_only`. A deny still means the wallet address is not sent.
 
 Environment:
 
@@ -143,7 +143,7 @@ Free tier: check current terms on the GoPlus dashboard.
 
 Signup: <https://www.coingecko.com/en/api>.
 
-What it unlocks: native-coin USD quotes for native transfers and balance deltas (`simple/price`), and, when the source is enabled, free contract quotes for token transfers (`simple/token_price`, `contract_addresses`). A fresh token quote can meet `asset_usd_threshold`. `init` does not add a CoinGecko source. A missing, stale, or failed quote is `valuation_unknown`. It is never stored as 0 and never stored as 1. Without a quote, a pinned stablecoin whose raw size meets that USD floor, or a hit on `alerts.token_raw_thresholds` (`network:0xcontract` to a positive raw integer), writes an `unvalued_large_move` alert. That alert is not a USD valuation.
+What it unlocks: native-coin USD quotes for native transfers and balance deltas (`simple/price`), and, when the source is enabled, free contract quotes for token transfers (`simple/token_price`, `contract_addresses`). A fresh token quote can meet `asset_usd_threshold`. `init` does not add a CoinGecko source. A missing, stale, or failed quote is `valuation_unknown`. It is never stored as 0 and never stored as 1. Decimals come from Etherscan or one cached `decimals()` call per contract per round, and an unreadable value is not 0. Without a quote, a pinned stablecoin whose raw size meets that USD floor, or a hit on `alerts.token_raw_thresholds` (`network:0xcontract` to a positive raw integer), writes an `unvalued_large_move` alert. That alert is not a USD valuation.
 
 The adapter already calls the public keyless tier when `COINGECKO_API_KEY` is absent. That tier has a lower rate limit than a demo key. Check current terms; the public tier is commonly on the order of tens of calls per minute, and a demo key raises the monthly cap.
 
@@ -160,7 +160,7 @@ Environment:
 
 Signup: <https://www.helius.dev>.
 
-What it unlocks: Solana parsed transaction events. Those events do not mark plain RPC coverage complete and do not replace on-chain amounts.
+What it unlocks: nothing in this preview. `run-once` does not call Helius. The adapter exists and is tested offline, but the pipeline does not import it. Setting `HELIUS_API_KEY` changes nothing in a run. Solana transactions are not parsed, so there are no SOL/SPL transfer rows and no transfer alerts. Only the signature list is read. Those events would not mark plain RPC coverage complete and would not replace on-chain amounts.
 
 Environment:
 

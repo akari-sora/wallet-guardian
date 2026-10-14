@@ -6,6 +6,8 @@ The installable distribution is `wallet-guardian-monitor` (wheel `wallet_guardia
 
 This matrix is the preview claim for chain × capability. It is derived from `config/source-capabilities/*.json`, `config/chains`, `examples/monitor.json`, `src/guardian/sources/`, `src/guardian/protocols/`, `docs/api-keys.md`, `docs/mcm-01/network-tiers.plan.json`, and `docs/coverage.md`. The live probes below are recorded facts. This document does not re-run them. No monitored address, API key, or keyed URL appears here.
 
+**Which profile these cells describe.** Cells describe `examples/monitor.json`. A profile written by `guardian init` routes fewer sources: no keyless or PRO Blockscout, no Alchemy, no Tenderly Base log route, no CoinGecko, so token USD valuation is off in an init profile until you enable a CoinGecko source, no OFAC source, and no Helius route. Adapters that exist but are not called by `run-once` (Helius, GoPlus, Chainabuse) are not a keyed path in this preview, even when a key is set.
+
 ## How to read
 
 Allowed statuses, and only these:
@@ -132,7 +134,7 @@ Not added: Bitcoin Core `rss.xml` (593 KB) is refused by the parser's item cap. 
 | solana-mainnet | balances.token_accounts | operator Solana RPC | not_verified | no keyed token-account source on this route | not_verified | not_verified |
 | solana-mainnet | history.account_set | operator Solana RPC | not_verified | no keyed history source on this route | not_verified | not_verified |
 | solana-mainnet | permissions.spl | operator Solana RPC | not_verified | no keyed SPL source on this route | not_verified | not_verified |
-| solana-mainnet | history.native_external | parsed events need HELIUS_API_KEY; examples/monitor.json leaves the source disabled | credential_missing | Helius parsed events when the key and URL are set and the source is enabled | not_verified | partial |
+| solana-mainnet | history.native_external | parsed events need HELIUS_API_KEY; examples/monitor.json leaves the source disabled | credential_missing | Helius adapter exists (offline tests) but is not called by run-once | credential_missing | credential_missing |
 | bsc-mainnet | positions.kinza | Kinza plugin over the BSC RPC, offline CLI fixtures | not_verified | no separate Kinza API key | not_verified | not_verified |
 | ethereum-mainnet | positions.kinza | Kinza plugin over the Ethereum RPC, offline fixtures | not_verified | no separate Kinza API key | not_verified | not_verified |
 | configured-evm | positions.erc4626 | caller-supplied vaults over evm_rpc; the public vault registry is empty | not_verified | no keyed vault source | not_verified | not_verified |
@@ -143,7 +145,7 @@ Not added: Bitcoin Core `rss.xml` (593 KB) is refused by the parser's item cap. 
 | configured-evm | positions.uxlink | UXLINK balanceOf over the public asset file and evm_rpc | not_verified | no keyed UXLINK source | not_verified | not_verified |
 | solana-mainnet | positions.stake | solana_stake plugin over Solana RPC | not_verified | no keyed stake source | not_verified | not_verified |
 | * | prices.usd | CoinGecko public tier when COINGECKO_API_KEY is absent | not_verified | optional COINGECKO_API_KEY demo tier | not_verified | not_verified |
-| * | address_risk | GoPlus without GOPLUS_API_KEY | credential_missing | GoPlus with GOPLUS_API_KEY | not_verified | partial |
+| * | address_risk | GoPlus without GOPLUS_API_KEY | credential_missing | not called by run-once in rc.4 | credential_missing | blocked |
 | * | sanctions | public OFAC feed named by OFAC_SLS_FEED; no API key | not_verified | no keyed OFAC source | not_verified | not_verified |
 | * | address_risk | not enabled in examples/monitor.json | not_verified | Chainabuse would need an operator key this package does not configure | not_verified | not_verified |
 | * | positions | not enabled in examples/monitor.json | not_verified | DeBank is not a configured keyed source | not_verified | not_verified |
@@ -807,13 +809,13 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "capability": "history.native_external",
       "no_key_path": "parsed events need HELIUS_API_KEY; examples/monitor.json leaves the source disabled",
       "no_key_status": "credential_missing",
-      "keyed_path": "Helius parsed events when the key and URL are set and the source is enabled",
-      "keyed_status": "not_verified",
-      "status": "partial",
+      "keyed_path": "Helius adapter exists (offline tests) but is not called by run-once",
+      "keyed_status": "credential_missing",
+      "status": "credential_missing",
       "capability_files": [
         "config/source-capabilities/helius_parsed_events.json"
       ],
-      "note": "A missing key is credential_missing. Parsed events do not finish plain RPC coverage. No live Helius probe is recorded."
+      "note": "run-once does not call Helius. A key does not create a parsed-event path. Parsed events would not finish plain RPC coverage. No live Helius probe is recorded."
     },
     {
       "id": "bsc-mainnet/positions.kinza",
@@ -959,13 +961,13 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "capability": "address_risk",
       "no_key_path": "GoPlus without GOPLUS_API_KEY",
       "no_key_status": "credential_missing",
-      "keyed_path": "GoPlus with GOPLUS_API_KEY",
-      "keyed_status": "not_verified",
-      "status": "partial",
+      "keyed_path": "not called by run-once in rc.4",
+      "keyed_status": "credential_missing",
+      "status": "blocked",
       "capability_files": [
         "config/source-capabilities/goplus.json"
       ],
-      "note": "credential_missing is not a clean bill of health. third_party_wallet_queries stays deny_until_local_consent. No live risk probe is claimed."
+      "note": "run-once does not call GoPlus. credential_missing is not a clean bill of health. third_party_wallet_queries stays deny_until_local_consent. No live risk probe is claimed."
     },
     {
       "id": "sanctions/ofac",

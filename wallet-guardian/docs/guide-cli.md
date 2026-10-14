@@ -69,11 +69,11 @@ Public config stores names, not values. Init writes:
 
 A missing key is `credential_missing`. The row's `credential_hint` names the variable and a section of [api-keys.md](api-keys.md), for example `ETHERSCAN_API_KEY see docs/api-keys.md#etherscan`. The value is not printed. Init does not copy an environment value into the secret profile.
 
-No-key (`key_mode` `none`) leaves credential variables unset. Public RPC still runs when its endpoint variable is set. Keyed indexers stay `credential_missing` where no keyless path exists. Bring-your-own-key (`byo`) means you put your own values under the names already in the secret profile. The two modes are the same files. Details and free-tier limits are in [api-keys.md](api-keys.md).
+No-key (`key_mode` `none`) leaves credential variables unset. Public RPC still runs when its endpoint variable is set. In an init profile no keyless history path is configured: every keyed indexer without its key is `credential_missing` (or `unsupported_source` if its URL variable is unset). Bring-your-own-key (`byo`) means you put your own values under the names already in the secret profile. The two modes are the same files. Details and free-tier limits are in [api-keys.md](api-keys.md).
 
 Init's data-sharing summary lists each source before the write: whether a wallet address would be sent, that the machine hostname is not added, and which host would receive the call. GoPlus and Chainabuse are listed as off. `privacy.third_party_wallet_queries` stays `deny_until_local_consent`.
 
-If you include Solana, init enables the Helius parsed-events source. With no `HELIUS_API_KEY` that row is `credential_missing`. The checked-in `examples/monitor.json` leaves Helius disabled; a profile you create with `init` does not.
+If you include Solana, init lists a Helius source, but rc.4 `run-once` never calls it. Solana coverage is native balance, token accounts, the signature list and SPL authorities. Transactions are not parsed, so there are no Solana transfer rows or transfer alerts. The checked-in `examples/monitor.json` leaves Helius disabled; a profile you create with `init` lists the source and still does not call it.
 
 Endpoint variables are URLs you choose. Do not put a key inside the URL. Some providers put the key in the query string themselves (Etherscan `apikey`, Helius `api-key`). Blockscout sends its key as a bearer header.
 
