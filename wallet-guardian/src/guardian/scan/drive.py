@@ -1260,6 +1260,37 @@ def _cursor(wallet_id: str, network: str, capability: str, block: int) -> dict[s
     }
 
 
+def _record_log_disclosure(scan, source_id: str) -> None:
+    """Record a dedicated log host before a wallet address is placed in topics.
+
+    The family RPC is already the balance route. A different log source is a new
+    recipient. The row names the source and the method. It does not store the address.
+    """
+    if not isinstance(source_id, str) or not source_id or source_id == scan.source_id:
+        return
+    seen = getattr(scan, "_log_disclosed", None)
+    if not isinstance(seen, set):
+        seen = set()
+        scan._log_disclosed = seen
+    if source_id in seen:
+        return
+    book = getattr(scan.transport, "indexer_disclosures", None)
+    if not isinstance(book, list):
+        return
+    seen.add(source_id)
+    privacy = scan.public_config.document.get("privacy")
+    consent = privacy.get("third_party_wallet_queries") if isinstance(privacy, dict) else None
+    source = scan.public_config.document.get("sources", {}).get(source_id, {})
+    adapter = source.get("adapter") if isinstance(source, dict) else None
+    book.append({
+        "adapter": adapter if isinstance(adapter, str) and adapter else "evm_rpc",
+        "consent": consent if isinstance(consent, str) else "deny_until_local_consent",
+        "method": "eth_getLogs",
+        "purpose": "history.token and permissions.standard; wallet address in log topics",
+        "source_id": source_id,
+    })
+
+
 def _record_indexer(scan, source_id: str, adapter: str) -> None:
     """Record provider, method, and consent before an address is sent to an indexer."""
     book = getattr(scan.transport, "indexer_disclosures", None)
@@ -1748,6 +1779,7 @@ class _LogCapTransport:
 
     def request(self, source_id: str, operation, **kwargs):
         if _counts_as_log(operation):
+            _record_log_disclosure(self._scan, source_id)
             reason = _reserve_bootstrap(self._scan, source_id, _log_credits(operation))
             if reason:
                 raise BootstrapStop(reason)

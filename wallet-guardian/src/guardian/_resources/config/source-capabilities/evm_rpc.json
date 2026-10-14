@@ -225,11 +225,41 @@
   "limits": [
     {
       "name": "base_log_range",
-      "notes": "Base log reads use tenderly_base with range_limit 1000, then base-1rpc with range_limit 50 only when that source is enabled and the remaining daily budget can cover the catch-up. These are this package's configured read widths. Alchemy free eth_getLogs (10 blocks) is not this path.",
-      "retrieved": "2026-10-09",
+      "notes": "Base log reads use tenderly_base with range_limit 1000, then base-1rpc with range_limit 50 and base-logs-drpc with range_limit 100 only when that source is enabled and the remaining daily budget can cover the catch-up. These are this package's configured read widths. Alchemy free eth_getLogs (10 blocks) is not this path. The 2026-10-14 review recorded Base dRPC accepting 100 blocks and rejecting 1000 with ranges over. base-logs-drpc stays disabled. That review was not re-run for this file. The Tenderly docs URL below returned 404 on 2026-10-14.",
+      "retrieved": "2026-10-14",
       "source_url": "https://docs.tenderly.co/node/rpc",
       "tenderly_base_range_limit": 1000,
-      "base_1rpc_range_limit": 50
+      "base_1rpc_range_limit": 50,
+      "base_logs_drpc_range_limit": 100
+    },
+    {
+      "name": "bsc_log_ranges",
+      "notes": "2026-10-14 review appendix A, not re-run here. dataseed, defibit, ninicoin, and public bsc.nodereal.io returned -32005 limit exceeded for topic-only eth_getLogs at 0, 5, 100, and 1000 blocks. publicnode returned -32701. Those hosts are not topic-only log sources. 48club returned HTTP 200 at 100 blocks and at 1000 blocks. 5000 also returned HTTP 200. examples name bsc-logs-48club with endpoint_env RPC_BSC_LOGS_URL and range_limit 1000, and do not set a default URL. No docs, no SLA, and the operator is an MEV builder. bsc-logs-nodereal reuses NODEREAL_BSC_URL on budget_group nodereal-key with range_limit 2000. That keyed width is the configured example width. The keyed URL was not live-probed.",
+      "retrieved": "2026-10-14",
+      "source_url": "https://docs.48.club/privacy-rpc.md",
+      "bsc_logs_48club_range_limit": 1000,
+      "bsc_logs_nodereal_range_limit": 2000
+    },
+    {
+      "name": "bsc_nodereal_getlogs",
+      "notes": "NodeReal documents eth_getLogs for BNB Chain. The 2026-10-14 review's public bsc.nodereal.io probe returned -32005. examples set range_limit 2000 on bsc-logs-nodereal. That number is the configured width, not a new live measurement of a keyed URL. Keyed ranges of 2000 and 10000 remain unverified.",
+      "retrieved": "2026-10-14",
+      "source_url": "https://docs.nodereal.io/reference/eth-getlogs-bnb-chain",
+      "bsc_logs_nodereal_range_limit": 2000
+    },
+    {
+      "name": "op_public_getlogs",
+      "notes": "2026-10-14 review appendix A, not re-run here. mainnet.optimism.io accepted eth_getLogs at 1000 and 5000 blocks. 20000 returned HTTP 413 limited to a 10,000 range. examples op-logs-public uses endpoint_env RPC_OPTIMISM_LOGS_URL and range_limit 2000. publicnode returned -32701 and is not this route. The public endpoint is documented as not suitable for production.",
+      "retrieved": "2026-10-14",
+      "source_url": "https://docs.optimism.io/app-developers/reference/rpc-providers",
+      "op_logs_public_range_limit": 2000
+    },
+    {
+      "name": "base_drpc_getlogs",
+      "notes": "2026-10-14 review appendix A, not re-run here. Base dRPC accepted 100 blocks and rejected 1000 with HTTP 400 ranges over. examples base-logs-drpc uses endpoint_env RPC_BASE_DRPC_URL, range_limit 100, and enabled false. No default URL is set. The citation is the public free-plan note.",
+      "retrieved": "2026-10-14",
+      "source_url": "https://blog.drpc.org/upcoming-changes-to-drpcs-free-plan-effective-june-1-2025/",
+      "base_logs_drpc_range_limit": 100
     }
   ],
   "networks": [
@@ -250,7 +280,7 @@
     "blast-mainnet",
     "opbnb-mainnet"
   ],
-  "notes": "只 allowlist 唯讀 JSON-RPC。getLogs 不是原生轉帳 API，eth_getBalance 也不涵蓋代幣歷史或權限。Base 日誌先走 tenderly_base（range_limit 1000），base-1rpc（range_limit 50）只在啟用且剩餘預算夠追趕時才接上。Alchemy 免費 eth_getLogs 一次 10 個區塊，不是這條路徑。沒有 live 驗證。",
+  "notes": "只 allowlist 唯讀 JSON-RPC。getLogs 不是原生轉帳 API，eth_getBalance 也不涵蓋代幣歷史或權限。BSC 的 history.token 與 permissions.standard 走 bsc-logs-nodereal（range_limit 2000，NODEREAL_BSC_URL，預算 nodereal-key）再 bsc-logs-48club（range_limit 1000，只有環境變數 RPC_BSC_LOGS_URL，沒有預設 URL；沒有文件、沒有 SLA，營運方是 MEV builder）。dataseed 與 publicnode 不是 topic-only 日誌來源。OP 走 op-logs-public（range_limit 2000，RPC_OPTIMISM_LOGS_URL）。Base 先走 tenderly_base（range_limit 1000），base-1rpc（range_limit 50）與 base-logs-drpc（range_limit 100）只在啟用且剩餘預算夠追趕時才接上。Alchemy 免費 eth_getLogs 一次 10 個區塊，不是這條路徑。2026-10-14 審查附錄的數字是既有紀錄，這份檔沒有重跑。帶 key 的 NodeReal getLogs 沒有 live 驗證。",
   "probe": "untested",
   "protocol": "jsonrpc"
 }

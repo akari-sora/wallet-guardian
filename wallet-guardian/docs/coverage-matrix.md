@@ -6,7 +6,7 @@ The installable distribution is `wallet-guardian-monitor` (wheel `wallet_guardia
 
 This matrix is the preview claim for chain × capability. It is derived from `config/source-capabilities/*.json`, `config/chains`, `examples/monitor.json`, `src/guardian/sources/`, `src/guardian/protocols/`, `docs/api-keys.md`, `docs/mcm-01/network-tiers.plan.json`, and `docs/coverage.md`. The live probes below are recorded facts. This document does not re-run them. No monitored address, API key, or keyed URL appears here.
 
-**Which profile these cells describe.** Cells describe `examples/monitor.json`. A profile written by `guardian init` routes fewer sources: no keyless or PRO Blockscout, no Alchemy, no Tenderly Base log route, no CoinGecko, so token USD valuation is off in an init profile until you enable a CoinGecko source, no OFAC source, and no Helius route. Adapters that exist but are not called by `run-once` (Helius, GoPlus, Chainabuse) are not a keyed path in this preview, even when a key is set.
+**Which profile these cells describe.** Cells describe `examples/monitor.json`. A profile written by `guardian init` routes fewer sources: no keyless or PRO Blockscout, no Alchemy, no Tenderly Base log route, no `bsc-logs-nodereal`, `bsc-logs-48club`, `op-logs-public`, or `base-logs-drpc`, no CoinGecko, so token USD valuation is off in an init profile until you enable a CoinGecko source, no OFAC source, and no Helius route. Adapters that exist but are not called by `run-once` (Helius, GoPlus, Chainabuse) are not a keyed path in this preview, even when a key is set.
 
 ## How to read
 
@@ -35,6 +35,7 @@ These are the facts this matrix is allowed to treat as live probes. They were no
 - Etherscan V2 free plan: history works for Ethereum, Arbitrum, and Polygon. Base, Optimism, BSC, and Avalanche on that free plan return plan_not_supported, cached as a capability failure.
 - Blockscout PRO free key: Optimism HTTP 200 (about 5 requests/second, about 20 credits a call). Base HTTP 402 plan_not_supported. Keyless optimism.blockscout.com HTTP 200 from the Linux host. Keyless base.blockscout.com HTTP 403 Cloudflare challenge from the Linux host, HTTP 200 from the operator Windows PC. Those Base results are host-specific.
 - Public RPC `eth_getLogs` without an address: publicnode Ethereum, Avalanche, and Polygon return -32701 for any range; publicnode Arbitrum returns 403; arb1.arbitrum.io, api.avax.network, polygon.gateway.tenderly.co, and NodeReal Ethereum and Optimism accept 2000 blocks; Base Tenderly caps at 1000, 1rpc at 50, and mainnet.base.org returns 429.
+- 2026-10-14 review appendix A (not re-run for this file): BSC dataseed and public `bsc.nodereal.io` returned -32005 on topic-only getLogs; BSC publicnode returned -32701; 48club accepted 100 and 1000 blocks; `mainnet.optimism.io` accepted 1000 and 5000 and returned 413 at 20000; Base dRPC accepted 100 and rejected 1000 with ranges over. dataseed and publicnode are not topic-only log sources. 48club has no docs, no SLA, and the operator is an MEV builder. The example names `RPC_BSC_LOGS_URL` only. Keyed NodeReal getLogs was not live-probed. Live Mac probes for this package are NOT_RUN.
 - Alchemy Transfers for Base: `src/guardian/sources/alchemy.py` implements the client. Offline fixtures cover it. No live probe is recorded, so the keyed cell is not_verified. A missing key is credential_missing, then Blockscout.
 - Kinza on BSC runs from offline CLI fixtures. No live verification is claimed. ERC-4626 with no configured vaults is unknown / vaults_not_configured and is not required. Solana is offline fixtures only.
 - Avalanche deep native history is expansion_pending.
@@ -102,8 +103,8 @@ Not added: Bitcoin Core `rss.xml` (593 KB) is refused by the parser's item cap. 
 | bsc-mainnet | balances.native | operator RPC named by RPC_BSC_MAINNET_URL | not_verified | no keyed balance source on this route | not_verified | not_verified |
 | bsc-mainnet | balances.native_delta | operator RPC definite-block read, offline fixtures | not_verified | no keyed balance source on this route | not_verified | not_verified |
 | bsc-mainnet | history.native_internal | no keyless BSC internal-history source | credential_missing | NodeReal nr_getAssetTransfers category internal, offline fixtures only | not_verified | partial |
-| bsc-mainnet | history.token | public RPC eth_getLogs when the endpoint accepts a topic filter | not_verified | no keyed token-log source on this route | not_verified | not_verified |
-| bsc-mainnet | permissions.standard | public RPC approval logs | not_verified | no keyed approval source on this route | not_verified | not_verified |
+| bsc-mainnet | history.token | bsc-logs-48club via RPC_BSC_LOGS_URL, range_limit 1000; 2026-10-14 review recorded 48club accepting 1000 blocks; dataseed and publicnode are not this route | partial | bsc-logs-nodereal via NODEREAL_BSC_URL, range_limit 2000, budget nodereal-key; keyed getLogs width is not a live probe | not_verified | partial |
+| bsc-mainnet | permissions.standard | approval logs on bsc-logs-48club, range_limit 1000; the 2026-10-14 probe was Transfer, not Approval | partial | approval logs on bsc-logs-nodereal; NodeReal transfers do not finish approvals | not_verified | partial |
 | bsc-mainnet | history.native_external | no keyless BSC external-history source | credential_missing | NodeReal nr_getAssetTransfers category external with NODEREAL_API_KEY | ok | partial |
 | bsc-mainnet | history.fungible | public RPC token logs | not_verified | NodeReal nr_getAssetTransfers category erc20 | partial | partial |
 | bsc-mainnet | history.native_external | Etherscan is not the BSC route | credential_missing | Etherscan V2 free plan | blocked | partial |
@@ -112,14 +113,14 @@ Not added: Bitcoin Core `rss.xml` (593 KB) is refused by the parser's item cap. 
 | arbitrum-one | permissions.standard | approval logs on the same RPC route | partial | no keyed approval source on this route | not_verified | partial |
 | arbitrum-one | history.native_external | keyless Blockscout at BLOCKSCOUT_ARBITRUM_URL | not_verified | Etherscan V2 txlist | partial | partial |
 | base-mainnet | balances.native | operator RPC named by RPC_BASE_MAINNET_URL | not_verified | no keyed balance source on this route | not_verified | not_verified |
-| base-mainnet | history.token | tenderly_base range_limit 1000, then base-1rpc range_limit 50 only when that source is enabled and the remaining budget can catch up | partial | Alchemy free eth_getLogs is not this route | not_verified | partial |
+| base-mainnet | history.token | tenderly_base range_limit 1000, then base-1rpc range_limit 50 and base-logs-drpc range_limit 100 only when that source is enabled and the remaining budget can catch up | partial | Alchemy free eth_getLogs is not this route | not_verified | partial |
 | base-mainnet | permissions.standard | the Base log route above | partial | Alchemy Transfers does not scan Approval or ApprovalForAll | not_verified | partial |
 | base-mainnet | history.native_external | keyless base.blockscout.com | partial | Alchemy Transfers when ALCHEMY_API_KEY and ALCHEMY_TRANSFERS_URL are both set | not_verified | partial |
 | base-mainnet | history.native_external | Blockscout PRO without BLOCKSCOUT_API_KEY returns HTTP 402 | credential_missing | Blockscout PRO free plan for chain id 8453 | blocked | partial |
 | base-mainnet | history.native_external | Etherscan is not the configured Base transfer route | credential_missing | Etherscan V2 free plan | blocked | partial |
 | optimism-mainnet | balances.native | operator RPC named by RPC_OPTIMISM_MAINNET_URL | not_verified | no keyed balance source on this route | not_verified | not_verified |
-| optimism-mainnet | history.token | public RPC eth_getLogs; NodeReal opt accepts 2000 blocks | partial | no keyed log source on this route | not_verified | partial |
-| optimism-mainnet | permissions.standard | approval logs on the Optimism RPC route | partial | no keyed approval source on this route | not_verified | partial |
+| optimism-mainnet | history.token | op-logs-public via RPC_OPTIMISM_LOGS_URL, range_limit 2000; mainnet.optimism.io accepted 1000 and 5000 blocks on 2026-10-14 | partial | no keyed log source on this route | not_verified | partial |
+| optimism-mainnet | permissions.standard | approval logs on op-logs-public, range_limit 2000 | partial | no keyed approval source on this route | not_verified | partial |
 | optimism-mainnet | history.native_external | keyless optimism.blockscout.com | partial | Blockscout PRO free key for chain id 10 | partial | partial |
 | optimism-mainnet | history.native_external | Etherscan is not the configured Optimism history route | credential_missing | Etherscan V2 free plan | blocked | partial |
 | polygon-pos | balances.native | operator RPC named by RPC_POLYGON_POS_URL | not_verified | no keyed balance source on this route | not_verified | not_verified |
@@ -190,6 +191,12 @@ These rows are endpoint facts from the list above. They use the same six statuse
 | tenderly-base-getLogs | partial | Base Tenderly log cap is 1000 blocks, matching tenderly_base range_limit. |
 | base-1rpc-getLogs | partial | 1rpc Base cap is 50 blocks. examples/monitor.json leaves base-1rpc disabled. |
 | mainnet.base.org-getLogs | blocked | mainnet.base.org returned HTTP 429. That endpoint is not the configured Base log route. |
+| bsc-dataseed-getLogs | blocked | 2026-10-14 review: BSC dataseed topic-only eth_getLogs returned -32005 limit exceeded. Not a configured log source. |
+| bsc-publicnode-getLogs | blocked | 2026-10-14 review: BSC publicnode topic-only eth_getLogs returned -32701. Not a configured log source. |
+| bsc-nodereal-public-getLogs | blocked | 2026-10-14 review: public bsc.nodereal.io returned -32005. That host is not the keyed NODEREAL_BSC_URL path. |
+| 48club-bsc-getLogs | partial | 2026-10-14 review: 48club accepted 100 and 1000 blocks. No docs, no SLA, operator is an MEV builder. examples name RPC_BSC_LOGS_URL only. Not a finished history. |
+| op-public-getLogs | partial | 2026-10-14 review: mainnet.optimism.io accepted 1000 and 5000 blocks. 20000 returned 413 limited to a 10,000 range. op-logs-public range_limit is 2000. Not a finished history. |
+| base-drpc-getLogs | partial | 2026-10-14 review: Base dRPC accepted 100 blocks and rejected 1000 with ranges over. examples leave base-logs-drpc disabled. |
 
 ## Keyed sources and the no-key column
 
@@ -198,7 +205,7 @@ Each keyed source in `examples/monitor.json` has a no-key entry and an anchor in
 | source | credential env | no-key path | anchor |
 | --- | --- | --- | --- |
 | etherscan | ETHERSCAN_API_KEY | Keyless Blockscout on Ethereum, Arbitrum, Polygon, Base, and Optimism when that endpoint is set. BSC does not use Etherscan. With no key and no keyless instance the row is credential_missing. | docs/api-keys.md#etherscan |
-| nodereal-bsc | NODEREAL_API_KEY | credential_missing. There is no keyless BSC external-history source. BSC token logs stay on public RPC when that endpoint accepts them. | docs/api-keys.md#nodereal |
+| nodereal-bsc | NODEREAL_API_KEY | credential_missing. There is no keyless BSC external-history source. BSC token logs use bsc-logs-48club when RPC_BSC_LOGS_URL is set. bsc-logs-nodereal reuses NODEREAL_BSC_URL. | docs/api-keys.md#nodereal |
 | blockscout-pro | BLOCKSCOUT_API_KEY | HTTP 402 without the key is credential_missing, then the keyless instance for that chain. Optimism is on the free plan. Base on the free plan is plan_not_supported. | docs/api-keys.md#blockscout |
 | blockscout-base | BLOCKSCOUT_BASE_API_KEY | A missing BLOCKSCOUT_BASE_API_KEY does not invent an empty history. The key travels as a bearer header. | docs/api-keys.md#blockscout |
 | blockscout-optimism | BLOCKSCOUT_OPTIMISM_API_KEY | Keyless fallback is BLOCKSCOUT_OPTIMISM_PUBLIC_URL. The Linux host recorded HTTP 200 for optimism.blockscout.com. | docs/api-keys.md#blockscout |
@@ -216,6 +223,9 @@ Keyless sources that the routes still name:
 | blockscout-base-public | Keyless Base instance. Linux host: HTTP 403 bot_challenge. Operator Windows PC: HTTP 200. Host-specific, so the matrix cell is partial. | docs/api-keys.md#blockscout |
 | blockscout-optimism-public | Keyless Optimism instance. The Linux host recorded HTTP 200. The matrix cell stays partial because that 200 is not a finished history. | docs/api-keys.md#blockscout |
 | tenderly-base | No key. TENDERLY_BASE_URL, range_limit 1000. See the Base log row. The anchor documents the Base log endpoints next to Alchemy. | docs/api-keys.md#alchemy |
+| bsc-logs-48club | No key. RPC_BSC_LOGS_URL, range_limit 1000. No default URL. No docs, no SLA, operator is an MEV builder. dataseed and publicnode are not this route. | docs/api-keys.md#logs |
+| op-logs-public | No key. RPC_OPTIMISM_LOGS_URL, range_limit 2000. The 2026-10-14 review recorded mainnet.optimism.io accepting 1000 and 5000 blocks. publicnode is not this route. | docs/api-keys.md#logs |
+| base-logs-drpc | No key. RPC_BASE_DRPC_URL, range_limit 100, disabled in examples/monitor.json. The 2026-10-14 review recorded 100 blocks accepted and 1000 rejected. | docs/api-keys.md#logs |
 
 ## What is not claimed
 
@@ -354,29 +364,29 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "id": "bsc-mainnet/history.token",
       "network": "bsc-mainnet",
       "capability": "history.token",
-      "no_key_path": "public RPC eth_getLogs when the endpoint accepts a topic filter",
-      "no_key_status": "not_verified",
-      "keyed_path": "no keyed token-log source on this route",
+      "no_key_path": "bsc-logs-48club via RPC_BSC_LOGS_URL, range_limit 1000; 2026-10-14 review recorded 48club accepting 1000 blocks; dataseed and publicnode are not this route",
+      "no_key_status": "partial",
+      "keyed_path": "bsc-logs-nodereal via NODEREAL_BSC_URL, range_limit 2000, budget nodereal-key; keyed getLogs width is not a live probe",
       "keyed_status": "not_verified",
-      "status": "not_verified",
+      "status": "partial",
       "capability_files": [
         "config/source-capabilities/evm_rpc.json"
       ],
-      "note": "The 2026-10-09 log probes do not include a BSC eth_getLogs result. A rejected range stays a gap."
+      "note": "48club has no docs and no SLA; the operator is an MEV builder. examples name RPC_BSC_LOGS_URL only and do not set a default URL. Public bsc.nodereal.io returned -32005 on 2026-10-14; that is not the keyed URL. dataseed (-32005) and publicnode (-32701) are not topic-only log sources. Keyed NodeReal getLogs was not live-probed. Live Mac probes for this package are NOT_RUN."
     },
     {
       "id": "bsc-mainnet/permissions.standard",
       "network": "bsc-mainnet",
       "capability": "permissions.standard",
-      "no_key_path": "public RPC approval logs",
-      "no_key_status": "not_verified",
-      "keyed_path": "no keyed approval source on this route",
+      "no_key_path": "approval logs on bsc-logs-48club, range_limit 1000; the 2026-10-14 probe was Transfer, not Approval",
+      "no_key_status": "partial",
+      "keyed_path": "approval logs on bsc-logs-nodereal; NodeReal transfers do not finish approvals",
       "keyed_status": "not_verified",
-      "status": "not_verified",
+      "status": "partial",
       "capability_files": [
         "config/source-capabilities/evm_rpc.json"
       ],
-      "note": "No recorded BSC approval-log probe. NodeReal asset transfers are a different row and do not finish approvals."
+      "note": "The 2026-10-14 probe was a Transfer topic, not Approval. The route is the same log sources as history.token. NodeReal asset transfers are a different row and do not finish approvals."
     },
     {
       "id": "bsc-mainnet/history.native_external",
@@ -495,7 +505,7 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "id": "base-mainnet/history.token",
       "network": "base-mainnet",
       "capability": "history.token",
-      "no_key_path": "tenderly_base range_limit 1000, then base-1rpc range_limit 50 only when that source is enabled and the remaining budget can catch up",
+      "no_key_path": "tenderly_base range_limit 1000, then base-1rpc range_limit 50 and base-logs-drpc range_limit 100 only when that source is enabled and the remaining budget can catch up",
       "no_key_status": "partial",
       "keyed_path": "Alchemy free eth_getLogs is not this route",
       "keyed_status": "not_verified",
@@ -503,7 +513,7 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "capability_files": [
         "config/source-capabilities/evm_rpc.json"
       ],
-      "note": "Recorded probes: Tenderly 1000-block cap, 1rpc 50, mainnet.base.org 429. base-1rpc is disabled in examples/monitor.json until an operator enables it. The 429 endpoint is blocked and is not the configured route."
+      "note": "Recorded probes: Tenderly 1000-block cap, 1rpc 50, mainnet.base.org 429. The 2026-10-14 review recorded Base dRPC accepting 100 blocks and rejecting 1000 with ranges over. base-1rpc and base-logs-drpc are disabled in examples/monitor.json until an operator enables them. The 429 endpoint is blocked and is not the configured route. Live Mac probes for this package are NOT_RUN."
     },
     {
       "id": "base-mainnet/permissions.standard",
@@ -581,7 +591,7 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "id": "optimism-mainnet/history.token",
       "network": "optimism-mainnet",
       "capability": "history.token",
-      "no_key_path": "public RPC eth_getLogs; NodeReal opt accepts 2000 blocks",
+      "no_key_path": "op-logs-public via RPC_OPTIMISM_LOGS_URL, range_limit 2000; mainnet.optimism.io accepted 1000 and 5000 blocks on 2026-10-14",
       "no_key_status": "partial",
       "keyed_path": "no keyed log source on this route",
       "keyed_status": "not_verified",
@@ -589,13 +599,13 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "capability_files": [
         "config/source-capabilities/evm_rpc.json"
       ],
-      "note": "A 2000-block acceptance is the recorded probe. It is not a finished token history."
+      "note": "2026-10-14 review: mainnet.optimism.io accepted 1000 and 5000 blocks. 20000 returned 413 limited to a 10,000 range. publicnode returned -32701 and is not this route. A 2000-block configured width is not a finished token history. Live Mac probes for this package are NOT_RUN."
     },
     {
       "id": "optimism-mainnet/permissions.standard",
       "network": "optimism-mainnet",
       "capability": "permissions.standard",
-      "no_key_path": "approval logs on the Optimism RPC route",
+      "no_key_path": "approval logs on op-logs-public, range_limit 2000",
       "no_key_status": "partial",
       "keyed_path": "no keyed approval source on this route",
       "keyed_status": "not_verified",
@@ -603,7 +613,7 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "capability_files": [
         "config/source-capabilities/evm_rpc.json"
       ],
-      "note": "Same log-width limit as history.token. Older approval history stays unknown."
+      "note": "Same log route and width as history.token. The 2026-10-14 probe was not an Approval topic. Older approval history stays unknown."
     },
     {
       "id": "optimism-mainnet/history.native_external",
@@ -1380,6 +1390,36 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "id": "mainnet.base.org-getLogs",
       "status": "blocked",
       "detail": "mainnet.base.org returned HTTP 429. That endpoint is not the configured Base log route."
+    },
+    {
+      "id": "bsc-dataseed-getLogs",
+      "status": "blocked",
+      "detail": "2026-10-14 review: BSC dataseed topic-only eth_getLogs returned -32005 limit exceeded. Not a configured log source."
+    },
+    {
+      "id": "bsc-publicnode-getLogs",
+      "status": "blocked",
+      "detail": "2026-10-14 review: BSC publicnode topic-only eth_getLogs returned -32701. Not a configured log source."
+    },
+    {
+      "id": "bsc-nodereal-public-getLogs",
+      "status": "blocked",
+      "detail": "2026-10-14 review: public bsc.nodereal.io returned -32005. That host is not the keyed NODEREAL_BSC_URL path."
+    },
+    {
+      "id": "48club-bsc-getLogs",
+      "status": "partial",
+      "detail": "2026-10-14 review: 48club accepted 100 and 1000 blocks. No docs, no SLA, operator is an MEV builder. examples name RPC_BSC_LOGS_URL only. Not a finished history."
+    },
+    {
+      "id": "op-public-getLogs",
+      "status": "partial",
+      "detail": "2026-10-14 review: mainnet.optimism.io accepted 1000 and 5000 blocks. 20000 returned 413 limited to a 10,000 range. op-logs-public range_limit is 2000. Not a finished history."
+    },
+    {
+      "id": "base-drpc-getLogs",
+      "status": "partial",
+      "detail": "2026-10-14 review: Base dRPC accepted 100 blocks and rejected 1000 with ranges over. examples leave base-logs-drpc disabled."
     }
   ]
 }
@@ -1428,7 +1468,7 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "id": "nodereal-bsc",
       "credential_env": "NODEREAL_API_KEY",
       "anchor": "nodereal",
-      "no_key": "credential_missing. There is no keyless BSC external-history source. BSC token logs stay on public RPC when that endpoint accepts them.",
+      "no_key": "credential_missing. There is no keyless BSC external-history source. BSC token logs use bsc-logs-48club when RPC_BSC_LOGS_URL is set. bsc-logs-nodereal reuses NODEREAL_BSC_URL.",
       "capability_file": "config/source-capabilities/nodereal_transfers.json"
     },
     {
@@ -1515,6 +1555,27 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "credential_env": null,
       "anchor": "alchemy",
       "no_key": "No key. TENDERLY_BASE_URL, range_limit 1000. See the Base log row. The anchor documents the Base log endpoints next to Alchemy.",
+      "capability_file": "config/source-capabilities/evm_rpc.json"
+    },
+    {
+      "id": "bsc-logs-48club",
+      "credential_env": null,
+      "anchor": "logs",
+      "no_key": "No key. RPC_BSC_LOGS_URL, range_limit 1000. No default URL. No docs, no SLA, operator is an MEV builder. dataseed and publicnode are not this route.",
+      "capability_file": "config/source-capabilities/evm_rpc.json"
+    },
+    {
+      "id": "op-logs-public",
+      "credential_env": null,
+      "anchor": "logs",
+      "no_key": "No key. RPC_OPTIMISM_LOGS_URL, range_limit 2000. The 2026-10-14 review recorded mainnet.optimism.io accepting 1000 and 5000 blocks. publicnode is not this route.",
+      "capability_file": "config/source-capabilities/evm_rpc.json"
+    },
+    {
+      "id": "base-logs-drpc",
+      "credential_env": null,
+      "anchor": "logs",
+      "no_key": "No key. RPC_BASE_DRPC_URL, range_limit 100, disabled in examples/monitor.json. The 2026-10-14 review recorded 100 blocks accepted and 1000 rejected.",
       "capability_file": "config/source-capabilities/evm_rpc.json"
     }
   ]

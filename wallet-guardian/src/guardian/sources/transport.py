@@ -566,6 +566,8 @@ def _finish(source_id: str, protocol: str, raw: RawResponse, max_bytes: int) -> 
         raise
     classification = classify_response(raw.status, parsed)
     body = parsed if classification.category in {"empty", "error", "ok", "partial"} else None
+    if isinstance(body, dict):
+        body = _redact_error_text(body)
     return _result(source_id, raw.status, body, classification, headers)
 
 
@@ -589,6 +591,26 @@ def _result(
         headers=headers,
         detail=detail,
     )
+
+
+def _redact_error_text(body: dict) -> dict:
+    """Mask a key embedded in an error string. Log rows are left alone."""
+    cleaned = body
+    error = body.get("error")
+    if isinstance(error, dict) and isinstance(error.get("message"), str):
+        message = redact(error["message"])
+        if message != error["message"]:
+            cleaned = dict(cleaned)
+            copied = dict(error)
+            copied["message"] = message
+            cleaned["error"] = copied
+    message = cleaned.get("message")
+    if isinstance(message, str):
+        masked = redact(message)
+        if masked != message:
+            cleaned = dict(cleaned)
+            cleaned["message"] = masked
+    return cleaned
 
 
 def _snippet(body: bytes) -> str:
