@@ -18,7 +18,7 @@ npm run build
 
 ## 部署目標
 
-正式靜態目標是 Cloudflare Pages 專案 `wallet-guardian-action-client`。逐檔雜湊清冊是 `config/deployments/action-client-releases.json`。這份清冊目前的 `releases` 是空的：沒有填入沒有實際雜湊過的檔案，也不把任何 origin 標成這次變更部署過的 active release。
+正式靜態目標是 Cloudflare Pages 專案 `wallet-guardian-action-client`。逐檔雜湊清冊是 `action-client/deploy/releases.json`。它不在 Python 套件或 wheel 裡。這份清冊目前的 `releases` 是空的：沒有填入沒有實際雜湊過的檔案，也不把任何 origin 標成這次變更部署過的 active release。
 
 GitLab Pages 與 Vercel 不是這個固定來源。`action-client/vercel.json` 與根目錄 `.gitlab-ci.yml` 的 `pages` job 仍在 repo 裡，因為刪除它們要等 D-11。不要把那兩個殘留設定當成部署步驟。
 

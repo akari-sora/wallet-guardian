@@ -1,5 +1,5 @@
 /**
- * Structural checks for config/deployments/action-client-releases.json.
+ * Structural checks for action-client/deploy/releases.json.
  * mainnet_send must be false. An origin must be an approved private-task view origin.
  * This module does not deploy and does not fetch.
  */
@@ -8,9 +8,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const RELEASES_PATH = join(ROOT, "config/deployments/action-client-releases.json");
+const RELEASES_PATH = join(ROOT, "action-client/deploy/releases.json");
 const ORIGINS_PATH = join(ROOT, "config/deployments/private-task-origins.json");
-const SCHEMA_PATH = join(ROOT, "schemas/action-client-release.schema.json");
+const SCHEMA_PATH = join(ROOT, "action-client/deploy/release.schema.json");
 
 const RELEASE_FIELDS = [
   "release_id",
