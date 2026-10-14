@@ -1,5 +1,7 @@
 # 通知
 
+> 狀態：Telegram 送出只有 mock 測試，從未對真實 Telegram 驗證過（canary `NOT_RUN`）。預設 `outbox_only` 不送。`install-service` 產生的 systemd／cron 排程一律帶 `--no-send`，所以排程永遠不會送出。要送出，你必須自己設定 delivery profile，並自己排一個不帶 `--no-send` 的 `run-once`。
+
 授權：AGPL-3.0-only（見 `LICENSE`）。
 
 這一包只加一個頻道：Telegram Bot API。預設仍是 `outbox_only`，不會送。沒有 Slack、email 或 webhook 用戶端。也沒有 Grok 用戶端；這裡沒有可呼叫的 Grok API，不能用假的回條假裝送過。
