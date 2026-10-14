@@ -11,6 +11,7 @@ evidence/
 fixtures/private/
 action-client/node_modules/
 action-client/dist/
+action-client/dist-mode-a/
 *.sqlite
 *.sqlite-journal
 .env
