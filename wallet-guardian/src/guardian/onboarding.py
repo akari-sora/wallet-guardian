@@ -72,6 +72,14 @@ _PLUGINS = frozenset({
 })
 _RELATIONSHIPS = frozenset({"owned_user_declared", "watch_only"})
 _FAMILIES = frozenset({"aptos", "bitcoin", "cosmos", "evm", "solana", "sui", "ton", "tron"})
+# Operator-unit floors for non-ETH networks init can enable. Not a USD equivalent.
+_NATIVE_UNIT_FLOORS = {
+    "avalanche-c": "10",
+    "bitcoin-mainnet": "0.01",
+    "bsc-mainnet": "1.0",
+    "polygon-pos": "1000",
+    "solana-mainnet": "10",
+}
 _READ_ADAPTER = {
     "aptos": "aptos_rest",
     "bitcoin": "esplora",
@@ -379,6 +387,15 @@ def _build(answers: Mapping[str, Any], *, recorded_at: str) -> dict[str, Any]:
             "quiet_if_no_change": True,
             "monitor_health_changes": True,
         },
+    }
+    floors = {
+        network: _NATIVE_UNIT_FLOORS[network]
+        for network in enabled
+        if network in _NATIVE_UNIT_FLOORS
+    }
+    if floors:
+        monitor["alerts"]["native_unit_thresholds"] = floors
+    monitor.update({
         "sources": sources,
         "routing": routing,
         "budgets": budgets,
@@ -405,7 +422,7 @@ def _build(answers: Mapping[str, Any], *, recorded_at: str) -> dict[str, Any]:
             "third_party_user_address_lookups": "off",
             "key_mode": answers["key_mode"],
         },
-    }
+    })
     accounts = {
         "schema_version": "guardian.accounts.v1",
         "tenant_id": answers["tenant_id"],

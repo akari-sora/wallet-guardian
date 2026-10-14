@@ -18,7 +18,7 @@ A candidate alerts when either floor is usable and met:
 - `alerts.native_unit_thresholds` may set an explicit decimal amount in that chain's native unit, keyed by the canonical network id. An operator can set `bsc-mainnet` to `1.0` in a private profile. That `1.0` is an example, not a value shipped in the example monitor. It is not applied to any other chain, and 0.5 BNB is not treated as 0.5 ETH. A key that is not a canonical network name is a config error, and the error lists the valid names. The same native-unit floor applies to native-transfer candidates and to balance deltas. Own-wallet pairs are still judged on their net.
 - A fresh USD quote from the existing CoinGecko simple-price path can also meet `asset_usd_threshold` (default 1000). Coin ids come from the pinned catalog. The quote must include `last_updated_at` and be at most 15 minutes old. A missing or stale quote is not zero and is not a hit.
 
-If a native floor is usable and not met, a missing USD quote does not turn the decision into `threshold_unavailable`. That decision is used only when neither a native floor nor a fresh USD quote can be applied. A `threshold_unavailable` observation still advances the baseline and is not an outbox alert. A below-threshold observation also advances the baseline, so later rounds do not add the small moves together.
+If a native floor is usable and not met, a missing USD quote does not turn the decision into `threshold_unavailable`. That decision is used only when neither a native floor nor a fresh USD quote can be applied. A `threshold_unavailable` movement writes one visible unjudged outbox row and does not advance the baseline, so the next round can judge the same change. A below-threshold observation still advances the baseline, so later rounds do not add the small moves together. `guardian init` writes `native_unit_thresholds` for each non-ETH network it enables (`bsc-mainnet` `1.0`, `polygon-pos` `1000`, `avalanche-c` `10`, `solana-mainnet` `10`, `bitcoin-mainnet` `0.01`). Token transfers are still not valued.
 
 ## What a failed read does
 
@@ -36,7 +36,7 @@ A static label such as Lista StakeManager attaches only to a counterparty alread
 
 - The alert is a net change between checkpoints, not the gross flow. Cancelled movements that net to zero are invisible to this alert.
 - It does not claim a cause. Transaction hash, counterparty, and withdrawal text appear only when a separate read supports them.
-- No-key BSC alerts on a native movement when a configured native-unit floor is met, or when a usable USD quote meets the USD floor. With neither, the decision is `threshold_unavailable` and there is no outbox alert. Internal history stays `credential_missing` when the key is absent. A configured `1.0` BNB floor is part of the operator's private profile, not a global default.
+- No-key BSC alerts on a native movement when the init floor (`1.0` BNB) or another configured native-unit floor is met, or when a usable USD quote meets the USD floor. With neither, the decision is `threshold_unavailable`: the outbox gets one unjudged row and the baseline stays. Internal history stays `credential_missing` when the key is absent. The `1.0` BNB floor is an operator unit written by `init` for `bsc-mainnet`, not a claim of USD parity.
 - This document does not claim a live balance probe or a live internal-transfer probe.
 
 ## What this closes, and what the older patrol already did

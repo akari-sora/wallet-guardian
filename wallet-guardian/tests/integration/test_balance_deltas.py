@@ -503,11 +503,18 @@ def test_bal_02_thresholds_boundaries_and_prices(tmp_path: Path, monkeypatch: py
     _run(bare_config, bare_backend, capsys)
     bare_backend.at(11, ONE + (6 * ONE // 10))
     bare_report = _run(bare_config, bare_backend, capsys)
-    assert _deltas(bare) == []
+    bare_rows = _deltas(bare)
+    assert len(bare_rows) == 1
+    assert bare_rows[0]["payload"]["threshold_decision"] == "threshold_unavailable"
+    assert bare_rows[0]["payload"]["alert"] is True
+    assert "unjudged" in bare_rows[0]["payload"]["detail"]
+    bare_baseline = _baseline(bare)
+    assert int(bare_baseline["raw_balance"]) == ONE
+    assert bare_baseline["block_number"] == 10
     unavailable = [item for item in bare_report["decisions"] if item.get("kind") == "balance_delta"]
     assert len(unavailable) == 1
     assert unavailable[0]["threshold_decision"] == "threshold_unavailable"
-    assert unavailable[0]["alert"] is False
+    assert unavailable[0]["alert"] is True
 
     eth = tmp_path / "eth"
     eth_config = _desk(eth, monkeypatch, network="ethereum-mainnet", threshold=None)
@@ -1151,8 +1158,16 @@ def test_e01_usd_only_failure_persists_unavailable(tmp_path: Path, monkeypatch: 
     backend.at(20, NINE)
     _run(config, backend, capsys)
     stored = _baseline(tmp_path)
-    assert stored is not None and stored["block_number"] == 20
-    assert _deltas(tmp_path) == []
+    assert stored is not None and stored["block_number"] == 10
+    assert int(stored["raw_balance"]) == ONE
+    held = _deltas(tmp_path)
+    assert len(held) == 1
+    assert held[0]["payload"]["threshold_decision"] == "threshold_unavailable"
+    assert held[0]["payload"]["alert"] is True
+    backend.at(21, NINE)
+    _run(config, backend, capsys)
+    assert len(_deltas(tmp_path)) == 1
+    assert _baseline(tmp_path)["block_number"] == 10
     database = _db(tmp_path)
     try:
         decisions = database.native_decisions_for(TENANT, WALLET, "bsc-mainnet", ASSET)
