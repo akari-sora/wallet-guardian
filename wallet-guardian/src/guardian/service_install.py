@@ -185,8 +185,8 @@ def render_launchd_agents(
 ) -> dict[str, str]:
     """Three LaunchAgent plists. Printed text only; nothing is loaded.
 
-    ``balance-probe`` is named here and is not implemented in this package.
-    That subcommand lands in a separate package.
+    The probe agent runs ``balance-probe`` with a required absolute
+    ``--probe-state`` under the state directory and with ``--no-send``.
     """
     if version.strip().lower() in _MOVING:
         raise ConfigError("installed version must be fixed")
@@ -195,8 +195,20 @@ def render_launchd_agents(
     config_directory = _launchd_path(config_directory, "config directory")
     state_directory = _launchd_path(state_directory, "state directory")
     mcm_config = _launchd_path(mcm_config, "mcm config")
+    probe_state = _launchd_path(
+        os.fspath(Path(state_directory) / "balance-probe.sqlite"),
+        "probe state",
+    )
     commands = {
-        _LAUNCHD_PROBE: [executable, "balance-probe", "--mcm-config", mcm_config, "--no-send"],
+        _LAUNCHD_PROBE: [
+            executable,
+            "balance-probe",
+            "--mcm-config",
+            mcm_config,
+            "--probe-state",
+            probe_state,
+            "--no-send",
+        ],
         _LAUNCHD_RUN_ONCE: [executable, "run-once", "--mcm-config", mcm_config, "--no-send"],
         _LAUNCHD_WATCHDOG: [executable, "watchdog", "--no-send", "--mcm-config", mcm_config],
     }
@@ -210,7 +222,7 @@ def render_launchd_agents(
         "GUARDIAN_INSTALLED_VERSION": version,
         "GUARDIAN_STATE_DIR": state_directory,
     }
-    _reject_fetch([executable, version, config_directory, state_directory, mcm_config])
+    _reject_fetch([executable, version, config_directory, state_directory, mcm_config, probe_state])
     rendered: dict[str, str] = {}
     for name in (_LAUNCHD_PROBE, _LAUNCHD_RUN_ONCE, _LAUNCHD_WATCHDOG):
         arguments = commands[name]
@@ -512,7 +524,7 @@ def _execute_launchd(
         "persistent_counts_as_on_time": False,
         "planned_units": planned,
         "probe_subcommand": "balance-probe",
-        "probe_subcommand_implemented": False,
+        "probe_subcommand_implemented": True,
         "rendered": rendered,
         "schedule_mode": "launchd_agent",
         "selected_files": list(rendered),

@@ -87,13 +87,13 @@ The files are:
 
 | File | Command | `StartCalendarInterval` |
 |---|---|---|
-| `com.walletguardian.balance-probe.plist` | `balance-probe --mcm-config <monitor.json> --no-send` | `Minute` `0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55`, no `Hour` |
+| `com.walletguardian.balance-probe.plist` | `balance-probe --mcm-config <monitor.json> --probe-state <state>/balance-probe.sqlite --no-send` | `Minute` `0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55`, no `Hour` |
 | `com.walletguardian.run-once.plist` | `run-once --mcm-config <monitor.json> --no-send` | `Hour` `0, 3, 6, 9, 12, 15, 18, 21` and `Minute` `--offset-minutes` (default 5) |
 | `com.walletguardian.watchdog.plist` | `watchdog --no-send --mcm-config <monitor.json>` | `Minute` `0, 15, 30, 45`, no `Hour` |
 
-`balance-probe` is not a subcommand in this package. It lands in a separate package. The probe plist names `guardian balance-probe` with `--no-send` and absolute paths anyway, so the agent text is ready when that command exists. This package does not implement the probe.
+`balance-probe` is a read-only subcommand. The probe plist passes `--probe-state` as an absolute path, `<state directory>/balance-probe.sqlite`, because that flag is required. `--no-send` is required too. This command still does not load the agent.
 
-Each `ProgramArguments` array starts with the absolute `guardian` path. The monitor path is absolute. `run-once` and `watchdog` use the same `--no-send` forms as the systemd and cron units. No argument is `uv sync`. The plists also set `GUARDIAN_CONFIG_DIR`, `GUARDIAN_STATE_DIR`, and `GUARDIAN_INSTALLED_VERSION`. Those are the same facts the systemd units put in `Environment=`. The probe agent uses that state directory. This command does not add a second state flag.
+Each `ProgramArguments` array starts with the absolute `guardian` path. The monitor path and the probe-state path are absolute. `run-once` and `watchdog` use the same `--no-send` forms as the systemd and cron units. No argument is `uv sync`. The plists also set `GUARDIAN_CONFIG_DIR`, `GUARDIAN_STATE_DIR`, and `GUARDIAN_INSTALLED_VERSION`. Those are the same facts the systemd units put in `Environment=`.
 
 Schedules use `StartCalendarInterval`, not `StartInterval`. The man page is [launchd.plist(5)](https://keith.github.io/xcode-man-pages/launchd.plist.5.html). A `Minute` list with no `Hour` repeats every hour at those minutes. The probe list is the 5-minute grid. The watchdog list is the 15-minute grid. The run-once dicts are the same 3-hour grid as `OnCalendar=*-*-* 0/3:05:00` when the offset is 5.
 

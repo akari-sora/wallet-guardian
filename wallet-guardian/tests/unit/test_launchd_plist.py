@@ -1,6 +1,6 @@
 """LaunchAgent plists are printed and never loaded.
 
-``balance-probe`` is named in the probe plist and is not a subcommand here.
+The probe plist names ``balance-probe`` with a required absolute ``--probe-state``.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from guardian import __version__
-from guardian.cli import main
+from guardian.cli import build_parser, main
 from guardian.service_install import (
     START_INTERVAL_SLEEP_WARNING,
     CommandResult,
@@ -103,7 +103,7 @@ def test_launchd_dry_run_prints_three_agents_and_exits_nonzero(
     assert payload["systemctl_called"] is False
     assert payload["sender_started"] is False
     assert payload["schedule_mode"] == "launchd_agent"
-    assert payload["probe_subcommand_implemented"] is False
+    assert payload["probe_subcommand_implemented"] is True
     assert payload["commands"] == []
     assert payload["selected_files"] == [_PROBE, _RUN, _WATCH]
     assert set(payload["rendered"]) == {_PROBE, _RUN, _WATCH}
@@ -121,8 +121,17 @@ def test_launchd_program_arguments_are_absolute_and_omit_uv_sync(tmp_path: Path)
     rendered = _agents(tmp_path, offset=17)
     executable = str((tmp_path / "bin" / "guardian").resolve())
     monitor = str((tmp_path / "config" / "monitor.json").resolve())
+    probe_state = str((tmp_path / "state" / "balance-probe.sqlite").resolve())
     expected = {
-        _PROBE: [executable, "balance-probe", "--mcm-config", monitor, "--no-send"],
+        _PROBE: [
+            executable,
+            "balance-probe",
+            "--mcm-config",
+            monitor,
+            "--probe-state",
+            probe_state,
+            "--no-send",
+        ],
         _RUN: [executable, "run-once", "--mcm-config", monitor, "--no-send"],
         _WATCH: [executable, "watchdog", "--no-send", "--mcm-config", monitor],
     }
@@ -131,6 +140,8 @@ def test_launchd_program_arguments_are_absolute_and_omit_uv_sync(tmp_path: Path)
         assert loaded["ProgramArguments"] == arguments
         assert Path(arguments[0]).is_absolute()
         assert Path(arguments[arguments.index("--mcm-config") + 1]).is_absolute()
+        if name == _PROBE:
+            assert Path(arguments[arguments.index("--probe-state") + 1]).is_absolute()
         assert "--no-send" in arguments
         assert "uv sync" not in "\n".join(arguments)
         assert "uv sync" not in rendered[name]
@@ -197,8 +208,24 @@ def test_launchd_spaces_and_brackets_are_xml_escaped(tmp_path: Path) -> None:
     arguments = _loaded(text)["ProgramArguments"]
     assert arguments[0] == str(executable.resolve())
     assert arguments[3] == str(monitor.resolve())
+    probe_state = arguments[arguments.index("--probe-state") + 1]
+    assert probe_state == str((root / "state" / "balance-probe.sqlite").resolve())
+    assert " " in probe_state and "[" in probe_state
     assert " " in arguments[0] and "[" in arguments[0] and "]" in arguments[0]
     assert "&" in arguments[0] and "<" in arguments[0]
+
+
+def test_rendered_probe_argv_parses_with_the_real_cli(tmp_path: Path) -> None:
+    """The printed probe arguments satisfy the required balance-probe flags."""
+    rendered = _agents(tmp_path)
+    arguments = _loaded(rendered[_PROBE])["ProgramArguments"]
+    parsed = build_parser().parse_args(arguments[1:])
+    assert parsed.command == "balance-probe"
+    assert parsed.no_send is True
+    assert parsed.mcm_config == str((tmp_path / "config" / "monitor.json").resolve())
+    assert parsed.probe_state == str((tmp_path / "state" / "balance-probe.sqlite").resolve())
+    assert Path(parsed.probe_state).is_absolute()
+    assert parsed.trigger == "run-once"
 
 
 def test_start_interval_warns_that_sleep_will_skip_runs(tmp_path: Path) -> None:
