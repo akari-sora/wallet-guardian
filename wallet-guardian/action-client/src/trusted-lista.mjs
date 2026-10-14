@@ -36,6 +36,7 @@ export const TRUSTED_LISTA = Object.freeze({
   approvals: DEPLOYMENT_APPROVALS.entries,
 });
 
+/** Read-only Lista calls and receipt checks. Log queries stay off this list. */
 const READ_METHODS = new Set([
   "eth_chainId",
   "eth_blockNumber",
@@ -43,7 +44,13 @@ const READ_METHODS = new Set([
   "eth_call",
   "eth_getCode",
   "eth_getStorageAt",
+  "eth_getTransactionReceipt",
+  "eth_getTransactionByHash",
+  "eth_getBalance",
+  "eth_getTransactionCount",
 ]);
+
+const TRANSACTION_COUNT_TAGS = new Set(["latest", "pending"]);
 
 function bytesToHex(bytes) {
   let hex = "0x";
@@ -99,6 +106,21 @@ export function isAddress(value) {
   return typeof value === "string" && /^0x[0-9a-fA-F]{40}$/.test(value);
 }
 
+/** Method allowlist plus the parameter limits for receipt reads. `eth_getBlockByNumber` may set full=true. */
+export function assertReadCall(method, params) {
+  assertReadMethod(method);
+  if (method === "eth_getTransactionCount") {
+    if (!Array.isArray(params) || params.length !== 2 || !TRANSACTION_COUNT_TAGS.has(params[1])) {
+      throw new Error("eth_getTransactionCount accepts only latest or pending");
+    }
+  }
+  if (method === "eth_getBlockByNumber") {
+    if (!Array.isArray(params) || params.length !== 2 || typeof params[1] !== "boolean") {
+      throw new Error("eth_getBlockByNumber full flag must be boolean");
+    }
+  }
+}
+
 export function sameAddress(left, right) {
   return typeof right === "string" && isAddress(left) && left.toLowerCase() === right.toLowerCase();
 }
@@ -106,7 +128,7 @@ export function sameAddress(left, right) {
 const RPC_REQUEST_ID = 1;
 
 export async function fetchTrustedRpc(method, params, { fetchImpl, signal } = {}) {
-  assertReadMethod(method);
+  assertReadCall(method, params);
   const response = await (fetchImpl ?? globalThis.fetch)(TRUSTED_LISTA.rpcUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },
