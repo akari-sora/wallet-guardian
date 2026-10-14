@@ -149,6 +149,7 @@ def _token_walk(scan: ScanContext, wallets: list, stored: int | None, capability
         rows: list[dict[str, Any]] = []
         for wallet_id, address in wallets:
             rows.extend(scan.movement_rows(account_logs(logs, address), wallet_id, scan.network, source_id))
+        _stamp_token_decimals(scan, rows)
         if rows:
             had_rows = True
         _note_logs(scan, logs)
@@ -1597,6 +1598,17 @@ def _pending_snapshots(candidates) -> list[dict[str, Any]]:
     from guardian.pending_alerts import snapshots_for
 
     return snapshots_for(list(candidates))
+
+
+def _stamp_token_decimals(scan: ScanContext, rows: list[dict[str, Any]]) -> None:
+    """One decimals() call per contract for this round. A failure is not zero."""
+    from guardian.pricing.token_decimals import fill_row_decimals
+
+    cache = getattr(scan, "token_decimals", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        scan.token_decimals = cache
+    fill_row_decimals(rows, scan.transport, scan.source_id, cache)
 
 
 def _log_transport(scan):

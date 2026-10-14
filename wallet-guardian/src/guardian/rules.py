@@ -65,6 +65,7 @@ class Candidate:
     asset: str | None = None
     decimals: int | None = None
     unvalued_large: bool = False
+    valuation_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ class AlertDecision:
     execution_evidence: str | None = None
     raw_amount: str | None = None
     transfer_origin: str | None = None
+    reason: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Public fields only. No address and no price treated as zero."""
@@ -110,7 +112,7 @@ class AlertDecision:
             payload["net"] = self.net
         if self.tx_id:
             payload["tx_id"] = self.tx_id
-        for key in ("asset", "attribution", "block_number", "direction", "execution_evidence", "raw_amount", "transfer_origin"):
+        for key in ("asset", "attribution", "block_number", "direction", "execution_evidence", "raw_amount", "transfer_origin", "reason"):
             value = getattr(self, key)
             if value is not None:
                 payload[key] = value
@@ -352,6 +354,7 @@ class AlertPolicy:
             execution_evidence=_text_or_none(extra.get("execution_evidence")),
             raw_amount=_text_or_none(extra.get("raw_amount")),
             transfer_origin=_text_or_none(extra.get("transfer_origin")),
+            reason=_text_or_none(candidate.valuation_reason) if kind == "unvalued_large_move" else None,
         )
 
 

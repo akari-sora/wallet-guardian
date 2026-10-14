@@ -19,6 +19,7 @@ import pytest
 from eth_utils import to_checksum_address
 
 from guardian.balances.labels import lookup
+from guardian.chains.evm.accounting import TRANSFER_TOPIC, hex_word, pad_address
 from guardian.cli import main
 from guardian.sources.fixtures import RawResponse
 from guardian.storage import Database
@@ -78,6 +79,9 @@ class ScriptBackend:
         self.token_price: dict | None = None
         self.fail_token_price = False
         self.token_price_urls: list[str] = []
+        self.token_logs: list[dict] = []
+        self.decimals_word: int | None = None
+        self.fail_decimals = False
         self.calls: list[dict] = []
         self.barrier: threading.Barrier | None = None
         self._owners: dict[int, int] = {}
@@ -100,6 +104,34 @@ class ScriptBackend:
         self.clock_jump: list[object] | None = None
         self.price_retry = False
         self._price_attempts = 0
+
+    def _token_logs(self, params: list) -> list[dict]:
+        filt = params[0] if params and isinstance(params[0], dict) else {}
+        topics = filt.get("topics")
+        topic0 = topics[0] if isinstance(topics, list) and topics else None
+        if not isinstance(topic0, str):
+            return []
+        try:
+            start = int(str(filt.get("fromBlock", "0x0")), 16)
+            end = int(str(filt.get("toBlock", "0x0")), 16)
+        except ValueError:
+            return []
+        found = []
+        for log in self.token_logs:
+            block = int(str(log.get("blockNumber", "0x0")), 16)
+            if start <= block <= end and str(log["topics"][0]).lower() == topic0.lower():
+                found.append(log)
+        return found
+
+    def _eth_call(self, params: list) -> RawResponse:
+        call = params[0] if params and isinstance(params[0], dict) else {}
+        data = str(call.get("data") or "")
+        if data.lower().startswith("0x313ce567"):
+            if self.fail_decimals:
+                return _err("decimals down")
+            if isinstance(self.decimals_word, int) and not isinstance(self.decimals_word, bool):
+                return _ok("0x" + self.decimals_word.to_bytes(32, "big").hex())
+        return _ok([])
 
     def at(self, block: int, balance: int, *, nonce: int = 7) -> None:
         self.block_number = block
@@ -174,7 +206,9 @@ class ScriptBackend:
                 self.clock_box[0] = CLOCK + 100
             return _ok(hex(self.nonce))
         if method == "eth_getLogs":
-            return _ok([])
+            return _ok(self._token_logs(params))
+        if method == "eth_call":
+            return self._eth_call(params)
         if method == "nr_getAssetTransfers":
             return self._nodereal(params)
         return _ok([])
@@ -2203,4 +2237,85 @@ def test_token_contract_price_and_unvalued_stable_move(tmp_path: Path, monkeypat
     assert missed_decisions[0]["valuation_unknown"] is True
     blob = json.dumps(quiet)
     assert '"quote_usd": 0' not in blob and '"quote_usd": "0"' not in blob
+    assert ADDRESS.lower() not in blob.lower()
+
+
+def _erc20_log(tx: str, block: int, index: int, amount: int) -> dict:
+    return {
+        "address": TOKEN,
+        "blockNumber": hex(block),
+        "data": hex_word(amount),
+        "logIndex": hex(index),
+        "topics": [TRANSFER_TOPIC, pad_address(LISTA), pad_address(ADDRESS)],
+        "transactionHash": tx,
+    }
+
+
+def _decimals_calls(backend: ScriptBackend) -> list[dict]:
+    found = []
+    for call in backend.calls:
+        if call["method"] != "eth_call":
+            continue
+        params = call["params"]
+        data = ""
+        if params and isinstance(params[0], dict):
+            data = str(params[0].get("data") or "")
+        if data.lower().startswith("0x313ce567"):
+            found.append(call)
+    return found
+
+
+def test_rpc_log_decimals_are_cached_and_a_failed_read_stays_visible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """RPC Transfer logs share one decimals() call. A failed read is not a silent below_threshold."""
+    raw = 1_000 * 10**6
+    priced = tmp_path / "rpc-priced"
+    config = _desk(priced, monkeypatch, prices=True, nodereal_key=False)
+    backend = ScriptBackend()
+    backend.price = {"binancecoin": {"usd": 300, "last_updated_at": int(CLOCK)}}
+    backend.token_price = {TOKEN.lower(): {"usd": 2, "last_updated_at": int(CLOCK)}}
+    backend.decimals_word = 6
+    backend.at(10, ONE)
+    _run(config, backend, capsys)
+    assert _decimals_calls(backend) == []
+    first = "0x" + "71" * 32
+    second_tx = "0x" + "72" * 32
+    backend.token_logs = [_erc20_log(first, 15, 1, raw), _erc20_log(second_tx, 15, 2, raw)]
+    backend.at(20, ONE)
+    second = _run(config, backend, capsys)
+    calls = _decimals_calls(backend)
+    assert len(calls) == 1
+    assert calls[0]["params"][0]["data"] == "0x313ce567"
+    assert calls[0]["params"][0]["to"] == TOKEN.lower()
+    assert "asset_usd" in _kinds(priced)
+    decisions = [item for item in second["decisions"] if item.get("tx_id") in {first, second_tx}]
+    assert {item["tx_id"] for item in decisions} == {first, second_tx}
+    assert {item["kind"] for item in decisions} == {"asset_usd"}
+    assert all(item["alert"] is True for item in decisions)
+    assert '"quote_usd": 0' not in json.dumps(second) and '"quote_usd": "0"' not in json.dumps(second)
+
+    missed = tmp_path / "rpc-unvalued"
+    missed_config = _desk(missed, monkeypatch, prices=True, nodereal_key=False)
+    missed_backend = ScriptBackend()
+    missed_backend.price = {"binancecoin": {"usd": 300, "last_updated_at": int(CLOCK)}}
+    missed_backend.token_price = {TOKEN.lower(): {"usd": 2, "last_updated_at": int(CLOCK)}}
+    missed_backend.fail_decimals = True
+    missed_backend.at(10, ONE)
+    _run(missed_config, missed_backend, capsys)
+    missed_tx = "0x" + "73" * 32
+    missed_backend.token_logs = [_erc20_log(missed_tx, 15, 1, raw)]
+    missed_backend.at(20, ONE)
+    quiet = _run(missed_config, missed_backend, capsys)
+    assert len(_decimals_calls(missed_backend)) == 1
+    assert "unvalued_large_move" in _kinds(missed)
+    missed_decisions = [item for item in quiet["decisions"] if item.get("tx_id") == missed_tx]
+    assert missed_decisions
+    assert missed_decisions[0]["kind"] == "unvalued_large_move"
+    assert missed_decisions[0]["alert"] is True
+    assert missed_decisions[0]["valuation_unknown"] is True
+    assert missed_decisions[0]["reason"] == "decimals_unreadable"
+    blob = json.dumps(quiet)
+    assert '"quote_usd": 0' not in blob and '"quote_usd": "0"' not in blob
+    assert "below_threshold" not in {item["kind"] for item in missed_decisions}
     assert ADDRESS.lower() not in blob.lower()

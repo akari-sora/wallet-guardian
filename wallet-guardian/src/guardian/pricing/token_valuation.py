@@ -52,21 +52,39 @@ def _one(
     if decimals is None:
         decimals = stable_decimals(item.network, contract)
     price = quote.get("price") if isinstance(quote, Mapping) else None
-    if (
+    fresh = (
         isinstance(quote, Mapping)
         and quote.get("quality") == "available"
         and isinstance(price, Decimal)
         and price > 0
-        and decimals is not None
-    ):
+    )
+    if fresh and decimals is not None:
         try:
             amount = value_usd(raw, decimals, price)
         except ValueError:
             amount = None
         if isinstance(amount, Decimal):
-            return _replace(item, quote_usd=amount, quote_valuation="valued", quote_quality="available", unvalued_large=False, decimals=decimals)
+            return _replace(
+                item,
+                quote_usd=amount,
+                quote_valuation="valued",
+                quote_quality="available",
+                unvalued_large=False,
+                decimals=decimals,
+                valuation_reason=None,
+            )
     if _stable_large(item.network, contract, raw, usd) or _raw_hit(item.network, contract, raw, raw_thresholds):
         return _replace(item, unvalued_large=True, decimals=decimals if decimals is not None else item.decimals)
+    if fresh and decimals is None:
+        reason = item.valuation_reason if isinstance(item.valuation_reason, str) and item.valuation_reason else "decimals_unknown"
+        return _replace(
+            item,
+            unvalued_large=True,
+            valuation_reason=reason,
+            quote_usd=None,
+            quote_valuation=None,
+            quote_quality=None,
+        )
     return item
 
 

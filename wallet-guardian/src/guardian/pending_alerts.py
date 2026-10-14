@@ -42,6 +42,8 @@ _FIELDS = (
     "counterparty",
     "block_number",
     "asset",
+    "decimals",
+    "unvalued_large",
 )
 
 
@@ -72,8 +74,21 @@ def candidate_from_snapshot(payload: dict[str, Any]) -> Candidate:
     data: dict[str, Any] = {}
     for name in _FIELDS:
         if name not in payload:
+            if name == "decimals":
+                data[name] = None
+                continue
+            if name == "unvalued_large":
+                data[name] = False
+                continue
             raise ValueError("pending alert candidate field")
         data[name] = payload[name]
+    decimals = data.get("decimals")
+    if decimals is None:
+        data["decimals"] = None
+    elif isinstance(decimals, bool) or not isinstance(decimals, int):
+        raise ValueError("pending alert candidate field")
+    if not isinstance(data.get("unvalued_large"), bool):
+        raise ValueError("pending alert candidate field")
     quote = data.get("quote_usd")
     if isinstance(quote, str) and quote:
         data["quote_usd"] = Decimal(quote)

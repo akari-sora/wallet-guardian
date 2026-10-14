@@ -109,7 +109,7 @@ Outbox kinds the policy marks as alerts:
 | `native_unit` | Native amount on a network with `native_unit_thresholds` is at least that floor. Own-wallet pairs still use the net |
 | `balance_delta` | Net native balance changed by at least a configured native-unit floor or a fresh USD floor. See [balance-deltas.md](balance-deltas.md) |
 | `asset_usd` | A valued USD quote is at least `asset_usd_threshold`. Native coins use `simple/price`. Token contracts use `simple/token_price` when a CoinGecko source is enabled |
-| `unvalued_large_move` | No fresh token quote, and either the contract is a pinned stablecoin at least as large as the USD floor or `token_raw_thresholds` is met. Not a USD value |
+| `unvalued_large_move` | No fresh token quote, and either the contract is a pinned stablecoin at least as large as the USD floor or `token_raw_thresholds` is met. Also a priced token whose `decimals()` read is missing: `reason` is `decimals_unknown` or `decimals_unreadable`, and the amount is not stored as zero. Not a USD value |
 | `internal_transfer` | A paired transfer between your own watched addresses, when the net meets a threshold |
 | `position_change` | A position candidate |
 | `first_observed` | A permission (or the same kind of change) with no prior observation |

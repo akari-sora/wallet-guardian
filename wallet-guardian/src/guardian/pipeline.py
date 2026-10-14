@@ -2226,6 +2226,7 @@ def _emit_transfers(rows, candidates, events, seen_transfers, tenant, chain_id, 
             block_number=block if isinstance(block, int) else None,
             asset=asset,
             decimals=row.get("decimals") if isinstance(row.get("decimals"), int) and not isinstance(row.get("decimals"), bool) else None,
+            valuation_reason=row.get("valuation_reason") if isinstance(row.get("valuation_reason"), str) else None,
         ))
         _remember_event(
             events,

@@ -10,6 +10,8 @@ import pytest
 from guardian.errors import ConfigError
 from guardian.pricing.catalog import load_risk_sources
 from guardian.pricing.coingecko import CoinGeckoClient
+from guardian.pending_alerts import candidate_from_snapshot, snapshot_candidate
+from guardian.pricing.token_decimals import fill_row_decimals
 from guardian.pricing.token_valuation import apply_token_valuation
 from guardian.rules import AlertPolicy, Candidate, validate_token_raw_thresholds
 from guardian.sources.transport import TransportError
@@ -39,7 +41,14 @@ def _client(transport: _Transport) -> CoinGeckoClient:
     return CoinGeckoClient(transport, "prices", load_risk_sources(), {}, clock=lambda: NOW)
 
 
-def _token(asset: str, raw: int, *, decimals: int | None = None, network: str = "ethereum-mainnet") -> Candidate:
+def _token(
+    asset: str,
+    raw: int,
+    *,
+    decimals: int | None = None,
+    network: str = "ethereum-mainnet",
+    valuation_reason: str | None = None,
+) -> Candidate:
     return Candidate(
         tenant_id="local",
         wallet_id="desk",
@@ -53,6 +62,7 @@ def _token(asset: str, raw: int, *, decimals: int | None = None, network: str = 
         decimals=decimals,
         direction="in",
         tx_id="0x" + "11" * 32,
+        valuation_reason=valuation_reason,
     )
 
 
@@ -155,6 +165,94 @@ def test_fresh_contract_price_reaches_asset_usd() -> None:
     assert decision.valuation_unknown is False
     assert rows[0].quote_usd == Decimal("2000")
     assert rows[0].quote_usd != 0
+
+
+def test_priced_token_without_decimals_is_a_visible_unvalued_alert() -> None:
+    class _Endpoints:
+        def get(self, name: str) -> SimpleNamespace:
+            return SimpleNamespace(endpoint="https://prices.example.invalid")
+
+    class _Priced(_Transport):
+        endpoints = _Endpoints()
+
+    transport = _Priced({OTHER: {"usd": 2, "last_updated_at": NOW}})
+    public = SimpleNamespace(document={
+        "alerts": {"asset_usd_threshold": "1000"},
+        "sources": {"prices": {"adapter": "coingecko", "enabled": True}},
+    })
+    rows = [_token(OTHER, 10**18, valuation_reason="decimals_unreadable")]
+    apply_token_valuation(rows, public, transport, lambda: NOW)
+    decision = AlertPolicy(Decimal("0.5"), Decimal("1000")).apply(rows)[0]
+    assert decision.kind == "unvalued_large_move"
+    assert decision.alert is True
+    assert decision.valuation_unknown is True
+    assert decision.reason == "decimals_unreadable"
+    assert rows[0].quote_usd is None
+    assert rows[0].decimals is None
+
+
+def test_pending_replay_keeps_decimals_and_unvalued_large() -> None:
+    original = _token(OTHER, 50, decimals=6)
+    original = Candidate(
+        tenant_id=original.tenant_id,
+        wallet_id=original.wallet_id,
+        network=original.network,
+        capability=original.capability,
+        identity=original.identity,
+        kind=original.kind,
+        raw_amount=original.raw_amount,
+        is_native=False,
+        asset=OTHER,
+        decimals=6,
+        unvalued_large=True,
+        direction="in",
+        tx_id=original.tx_id,
+    )
+    restored = candidate_from_snapshot(snapshot_candidate(original))
+    assert restored.decimals == 6
+    assert restored.unvalued_large is True
+    assert restored.quote_usd is None
+    older = snapshot_candidate(_token(OTHER, 1, decimals=None))
+    del older["decimals"]
+    del older["unvalued_large"]
+    legacy = candidate_from_snapshot(older)
+    assert legacy.decimals is None
+    assert legacy.unvalued_large is False
+
+
+def test_rpc_decimals_call_is_cached_per_contract() -> None:
+    class _Rpc:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def request(self, source_id: str, operation) -> SimpleNamespace:
+            self.calls += 1
+            assert operation.method == "eth_call"
+            assert operation.params[0]["data"] == "0x313ce567"
+            return SimpleNamespace(body={"result": "0x" + "0" * 63 + "6"}, ok=True)
+
+    transport = _Rpc()
+    rows = [
+        {"asset": OTHER, "network": "ethereum-mainnet", "is_native": False, "raw_amount": 1},
+        {"asset": "0x" + "AB" * 20, "network": "ethereum-mainnet", "is_native": False, "raw_amount": 2},
+    ]
+    cache: dict = {}
+    fill_row_decimals(rows, transport, "rpc-ethereum-mainnet", cache)
+    fill_row_decimals(rows, transport, "rpc-ethereum-mainnet", cache)
+    assert transport.calls == 1
+    assert rows[0]["decimals"] == 6
+    assert rows[1]["decimals"] == 6
+
+    class _Down(_Rpc):
+        def request(self, source_id: str, operation) -> SimpleNamespace:
+            self.calls += 1
+            return SimpleNamespace(body={"error": {"code": -32000}}, ok=False)
+
+    down = _Down()
+    blank = [{"asset": OTHER, "network": "ethereum-mainnet", "is_native": False}]
+    fill_row_decimals(blank, down, "rpc-ethereum-mainnet", {})
+    assert blank[0].get("decimals") is None
+    assert blank[0]["valuation_reason"] == "decimals_unreadable"
 
 
 def test_token_raw_threshold_rejects_a_bad_key() -> None:
