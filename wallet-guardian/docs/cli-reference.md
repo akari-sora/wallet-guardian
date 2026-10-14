@@ -2,7 +2,7 @@
 
 Package version in this tree: `0.4.0rc4`. Each fenced block is the output of that command's `--help`. JSON is printed for every command. `--json` is accepted and does not turn that off.
 
-The monitor is read-only. `run-once --no-send` still contacts the read endpoints you configured. It does not sign, build a transaction, or broadcast, and it does not hand the outbox to a sender. Setup steps are in [guide-cli.md](guide-cli.md).
+The monitor is read-only. `run-once --no-send` still contacts the read endpoints you configured. It does not sign, build a transaction, or broadcast, and it does not hand the outbox to a sender. `balance-probe` is the same kind of read: `--no-send` is required, and it does not start a sender. Setup steps are in [guide-cli.md](guide-cli.md).
 
 A nested command (`config validate`, `alerts test`, `action plan`) has its own section. `{formal,preview}` and `{system,doh}` on `egress-doctor` are flag choices, not commands.
 
@@ -10,14 +10,13 @@ A nested command (`config validate`, `alerts test`, `action plan`) has its own s
 
 ```text
 usage: guardian [-h]
-                {doctor,run-once,snapshot,reconcile,claims,providers,wallets,approvals,explain,coverage,replay,alerts,self-check,diagnose,actions,action,rescue,operation-coverage,workbench,config,sources,export,compare-legacy,news,legacy-capture,outbox,watchdog,monitor,egress-doctor,init,install-service}
+                {doctor,run-once,balance-probe,snapshot,reconcile,claims,providers,wallets,approvals,explain,coverage,replay,alerts,self-check,diagnose,actions,action,rescue,operation-coverage,workbench,config,sources,export,compare-legacy,news,legacy-capture,outbox,watchdog,monitor,egress-doctor,init,install-service}
                 ...
 
 positional arguments:
-  {doctor,run-once,snapshot,reconcile,claims,providers,wallets,approvals,explain,coverage,replay,alerts,self-check,diagnose,actions,action,rescue,operation-coverage,workbench,config,sources,export,compare-legacy,news,legacy-capture,outbox,watchdog,monitor,egress-doctor,init,install-service}
+  {doctor,run-once,balance-probe,snapshot,reconcile,claims,providers,wallets,approvals,explain,coverage,replay,alerts,self-check,diagnose,actions,action,rescue,operation-coverage,workbench,config,sources,export,compare-legacy,news,legacy-capture,outbox,watchdog,monitor,egress-doctor,init,install-service}
     init                write a read-only monitor profile
-    install-service     print a dry-run install plan; units stay disabled
-                        without --apply
+    install-service     print a dry-run install plan; units stay disabled without --apply
 
 options:
   -h, --help            show this help message and exit
@@ -58,6 +57,24 @@ options:
   --price-input PRICE_INPUT
                         caller-supplied price quotes; not fetched
 ```
+
+## `guardian balance-probe`
+
+```text
+usage: guardian balance-probe [-h] [--db DB] [--tenant TENANT] [--json] --mcm-config MCM_CONFIG --probe-state PROBE_STATE [--no-send] [--trigger {run-once,none}]
+
+options:
+  -h, --help            show this help message and exit
+  --db DB               sqlite path
+  --tenant TENANT       local tenant scope (required when ambiguous)
+  --json                print JSON (this is always on)
+  --mcm-config MCM_CONFIG
+  --probe-state PROBE_STATE
+  --no-send
+  --trigger {run-once,none}
+```
+
+`--no-send` is the only delivery mode. Omitting it exits 2. The probe reads one head, checks Multicall3 code, then reads native balances and two topic-OR `eth_getLogs` filters. It writes no alerts and does not advance `history.*` cursors. `--trigger none` records a change and does not start `run-once`. The default `run-once` starts at most one `run-once --no-send` when a new change is still outstanding. A second probe, or a `run-once` that already holds its own lock, is skipped and recorded. This command does not change the three-hour `run-once` interval or the shadow lock.
 
 ## `guardian snapshot`
 

@@ -25,7 +25,7 @@ from guardian.legacy_capture import (
 )
 from guardian.configuration import load_public_config, resolve_private_inputs, safe_export
 from guardian.domain import format_alert
-from guardian.errors import GuardianError
+from guardian.errors import ConfigError, GuardianError
 from guardian.pipeline import default_backend, probe_sources, run_capability_pipeline, stored_coverage
 from guardian.scheduler import Watchdog, monitor_plan
 from guardian.security.redact import redact
@@ -68,6 +68,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-send", action="store_true")
     run.add_argument("--news-input", default=None, help="caller-supplied RSS, Atom, or structured news; not fetched")
     run.add_argument("--price-input", default=None, help="caller-supplied price quotes; not fetched")
+
+    balance_probe = sub.add_parser("balance-probe", parents=[common])
+    balance_probe.add_argument("--mcm-config", required=True)
+    balance_probe.add_argument("--probe-state", required=True)
+    balance_probe.add_argument("--no-send", action="store_true")
+    balance_probe.add_argument("--trigger", choices=("run-once", "none"), default="run-once")
 
     sub.add_parser("snapshot", parents=[common])
     sub.add_parser("reconcile", parents=[common])
@@ -251,6 +257,8 @@ def dispatch(
             return _mcm_run(args, backend, sender, clock, notification_backend, notification_resolve)
         result = run_once(Path(args.config), Path(args.db) if args.db else None)
         return result, 0 if result["status"] != "degraded" else 3
+    if args.command == "balance-probe":
+        return _balance_probe(args, backend, clock)
     if args.command == "self-check":
         result = self_check(Path(args.db) if args.db else None)
         return result, 0 if result["status"] == "pass" else 1
@@ -590,6 +598,35 @@ def _mcm_probe(args: argparse.Namespace, backend: Any) -> tuple[dict, int]:
         return probe_sources(public, private, backend=_chosen_backend(backend), clock=time.time), 0
     finally:
         database.close()
+
+
+def _balance_probe(
+    args: argparse.Namespace,
+    backend: Any,
+    clock: Callable[[], float] | None,
+) -> tuple[dict, int]:
+    """Read-only probe. ``--no-send`` is the only delivery mode."""
+    if not args.no_send:
+        raise ConfigError("balance-probe requires --no-send")
+    trigger = getattr(args, "trigger", "run-once")
+    if trigger not in {"run-once", "none"}:
+        raise ConfigError("balance-probe trigger must be run-once or none")
+    from guardian.scan.probe import run_balance_probe
+
+    public, private, database = _open_mcm(args.mcm_config)
+    try:
+        payload = run_balance_probe(
+            public,
+            private,
+            database,
+            probe_state=Path(args.probe_state),
+            backend=_chosen_backend(backend),
+            clock=time.time if clock is None else clock,
+            trigger=trigger,
+        )
+    finally:
+        database.close()
+    return payload, 0
 
 
 def _mcm_run(

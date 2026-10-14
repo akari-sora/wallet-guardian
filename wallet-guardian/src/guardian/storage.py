@@ -885,6 +885,116 @@ class Database:
         rows = self.conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
         return [row["name"] for row in rows]
 
+    def probe_cursor(self, tenant_id: str, network: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT block_number, block_hash, updated_at FROM probe_cursors
+            WHERE tenant_id=? AND network=?
+            """,
+            (tenant_id, network),
+        ).fetchone()
+        if row is None:
+            return None
+        return {key: row[key] for key in row.keys()}
+
+    def upsert_probe_cursor(
+        self,
+        tenant_id: str,
+        network: str,
+        block_number: int,
+        block_hash: str,
+        updated_at: str,
+    ) -> None:
+        """Move the probe cursor only. History capability cursors are a different table."""
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO probe_cursors(tenant_id, network, block_number, block_hash, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(tenant_id, network) DO UPDATE SET
+                  block_number=excluded.block_number,
+                  block_hash=excluded.block_hash,
+                  updated_at=excluded.updated_at
+                """,
+                (tenant_id, network, int(block_number), block_hash, updated_at),
+            )
+
+    def has_probe_trigger(self, tenant_id: str, network: str, fingerprint: str) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT 1 FROM probe_trigger_records
+            WHERE tenant_id=? AND network=? AND fingerprint=? AND status='triggered'
+            """,
+            (tenant_id, network, fingerprint),
+        ).fetchone()
+        return row is not None
+
+    def probe_handoff_outstanding(self, tenant_id: str) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT 1 FROM probe_trigger_records
+            WHERE tenant_id=? AND status='triggered' AND handoff IN ('pending', 'locked')
+            LIMIT 1
+            """,
+            (tenant_id,),
+        ).fetchone()
+        return row is not None
+
+    def insert_probe_trigger(
+        self,
+        tenant_id: str,
+        *,
+        network: str | None,
+        block_number: int | None,
+        block_hash: str | None,
+        reason: str,
+        fingerprint: str,
+        status: str,
+        handoff: str | None,
+        created_at: str,
+    ) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO probe_trigger_records(
+                  tenant_id, network, block_number, block_hash, reason, fingerprint, status, handoff, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tenant_id, network, block_number, block_hash, reason, fingerprint, status, handoff, created_at,
+                ),
+            )
+
+    def mark_probe_handoff_called(self, tenant_id: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE probe_trigger_records SET handoff='called'
+                WHERE tenant_id=? AND status='triggered' AND handoff IN ('pending', 'locked')
+                """,
+                (tenant_id,),
+            )
+
+    def mark_probe_handoff_locked(self, tenant_id: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE probe_trigger_records SET handoff='locked'
+                WHERE tenant_id=? AND status='triggered' AND handoff='pending'
+                """,
+                (tenant_id,),
+            )
+
+    def probe_trigger_rows(self, tenant_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT network, block_number, block_hash, reason, fingerprint, status, handoff, created_at
+            FROM probe_trigger_records WHERE tenant_id=? ORDER BY record_id
+            """,
+            (tenant_id,),
+        ).fetchall()
+        return [{key: row[key] for key in row.keys()} for row in rows]
+
     def _refuse_newer_mcm_schema(self) -> None:
         """A migration this build does not ship is a newer schema. Do not rewrite it."""
         known = {path.stem for path in mcm_migration_directory().glob("*.sql") if path.is_file()}

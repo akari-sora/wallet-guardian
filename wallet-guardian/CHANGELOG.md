@@ -10,6 +10,10 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 
 ## [Unreleased]
 
+### Added
+
+- `guardian balance-probe --mcm-config --probe-state --no-send` reads Multicall3 native balances and topic-OR logs, and starts `run-once` only when a balance or a Transfer or approval log changed. It writes no alerts and does not advance `history.*` cursors. `--no-send` is required. The three-hour `run-once` and the shadow lock are unchanged. Live latency measurement was not run.
+
 ### Changed
 
 - A degraded `guardian run-once` exits 3. `failed` stays 1. A misconfigured delivery still exits 2.
