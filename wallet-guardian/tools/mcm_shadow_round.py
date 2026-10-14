@@ -9,6 +9,10 @@ fetch_error, never ok.
 
 The incremental window is the configured polling interval ending at the round
 clock (3h ± 30min). See guardian.cutover.
+
+Each round records detection-latency percentiles for the slot and a check that
+outbox rows match chain events above the threshold. A missing input stays null
+and does not pass that check. The 24-window qualification rules are unchanged.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ import hashlib
 import io
 import json
 import os
+import sqlite3
 import stat
 import sys
 import time
@@ -45,6 +50,7 @@ from guardian.legacy_state import (
 )
 from guardian.legacy_state import archive_freeform_cursors
 from guardian.protocols.pins import KINZA_POOLS, KINZA_PROVIDERS
+from guardian.shadow_recorder import attach_slot_metrics, detection_latency_summary, outbox_threshold_check
 from guardian.sources.fixtures import PreparedCall
 from guardian.storage import Database
 
@@ -123,6 +129,7 @@ def run_round(
     evidence = prepare_evidence_dir(Path(evidence_dir))
     moment = datetime.fromtimestamp(clock(), timezone.utc)
     taken_at = _iso(moment)
+    before_inventory = _inventory(mcm_config)
     snapshot = snapshot_legacy_readonly(legacy_state, evidence, taken_at=taken_at)
     legacy = json.loads(Path(snapshot["snapshot_path"]).read_text(encoding="utf-8"))
     if not isinstance(legacy, dict):
@@ -199,6 +206,13 @@ def run_round(
     if drill == "source_failure" and "fetch_error" not in record["required_gaps"]:
         record["required_gaps"].append("fetch_error")
         record["required_fresh"] = False
+    events, outbox_rows = _round_scope(mcm_config, before_inventory)
+    metrics = detection_latency_summary(events)
+    record["trigger_count"] = metrics["trigger_count"]
+    record["detect_latency_p50_seconds"] = metrics["detect_latency_p50_seconds"]
+    record["detect_latency_p95_seconds"] = metrics["detect_latency_p95_seconds"]
+    record["outbox_threshold"] = outbox_threshold_check(outbox_rows, events)
+    attach_slot_metrics(evidence, taken_at, metrics)
     saved = _append_round(evidence, record)
     decision = evaluate_cutover(saved)
     _write_json(evidence / "cutover.json", decision)
@@ -557,6 +571,101 @@ def _append_round(evidence: Path, record: dict[str, Any]) -> list[dict[str, Any]
     lines = "".join(json.dumps(item, ensure_ascii=False, sort_keys=True) + "\n" for item in rounds)
     _write_text(evidence / "rounds.jsonl", lines)
     return rounds
+
+
+def _inventory(mcm_config: str) -> dict[str, set[str] | set[int]] | None:
+    """Ids already stored before this round. A missing database is an empty set."""
+    try:
+        public = load_public_config(mcm_config)
+        private = resolve_private_inputs(public, os.environ)
+        path = private.state_dir / "monitor.sqlite"
+        tenant = private.accounts.tenant_id
+    except ConfigError:
+        raise
+    except (OSError, sqlite3.Error, UnicodeError, json.JSONDecodeError, ValueError):
+        return None
+    if not path.is_file():
+        return {"events": set(), "outbox": set()}
+    database = Database(path)
+    try:
+        event_ids = {
+            str(row["identity"])
+            for row in database.conn.execute(
+                "SELECT identity FROM chain_events WHERE tenant_id=?",
+                (tenant,),
+            )
+            if isinstance(row["identity"], str) and row["identity"]
+        }
+        outbox_ids = {
+            int(row["id"])
+            for row in database.conn.execute(
+                "SELECT id FROM outbox WHERE tenant_id=?",
+                (tenant,),
+            )
+        }
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return None
+    finally:
+        database.close()
+    return {"events": event_ids, "outbox": outbox_ids}
+
+
+def _round_scope(
+    mcm_config: str,
+    before: Mapping[str, Any] | None,
+) -> tuple[list[dict[str, Any]] | None, list[dict[str, Any]] | None]:
+    """Chain events and outbox rows written during this round.
+
+    If the prior inventory is missing, both results are null. They are not
+    reported as zero.
+    """
+    if before is None:
+        return None, None
+    prior_events = before.get("events")
+    prior_outbox = before.get("outbox")
+    if not isinstance(prior_events, set) or not isinstance(prior_outbox, set):
+        return None, None
+    try:
+        public = load_public_config(mcm_config)
+        private = resolve_private_inputs(public, os.environ)
+        path = private.state_dir / "monitor.sqlite"
+        tenant = private.accounts.tenant_id
+    except ConfigError:
+        raise
+    except (OSError, sqlite3.Error, UnicodeError, json.JSONDecodeError, ValueError):
+        return None, None
+    if not path.is_file():
+        return [], []
+    database = Database(path)
+    try:
+        events: list[dict[str, Any]] = []
+        for row in database.conn.execute(
+            "SELECT identity, payload FROM chain_events WHERE tenant_id=?",
+            (tenant,),
+        ):
+            identity = row["identity"]
+            if not isinstance(identity, str) or not identity:
+                return None, None
+            if identity in prior_events:
+                continue
+            try:
+                payload = json.loads(row["payload"])
+            except json.JSONDecodeError:
+                return None, None
+            if not isinstance(payload, dict):
+                return None, None
+            item = dict(payload)
+            item["identity"] = identity
+            events.append(item)
+        outbox_rows = [
+            row for row in database.outbox_for(tenant)
+            if isinstance(row.get("id"), int) and row["id"] not in prior_outbox
+        ]
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return None, None
+    finally:
+        database.close()
+    return events, outbox_rows
 
 
 def _load_rounds(evidence: Path) -> list[dict[str, Any]]:

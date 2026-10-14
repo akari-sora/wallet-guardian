@@ -95,6 +95,9 @@ def test_mcm_live_l3_01_legacy_backup_readonly(tmp_path: Path, monkeypatch: pyte
     assert counts["mcm_only"] >= 1
     matched = compared["matched_tx_level"]
     assert any(row["wallet_id"] == WALLET and row["kind"] == "approval" and row["position"] == "" for row in matched)
+    for row in compared["matched"] + compared["legacy_only"] + compared["mcm_only"] + compared["matched_tx_level"]:
+        assert "latency_delta_seconds" in row
+        assert row["latency_delta_seconds"] is None or isinstance(row["latency_delta_seconds"], int | float)
     assert any(row["kind"] == "transfer_out" and row["position"] == "" for row in compared["legacy_only"])
     assert any(row["seen_on"] == "2026-10-08" and row["wallet_id"] == WALLET for row in compared["legacy_coverage_windows"])
     blob = json.dumps(compared)
@@ -517,7 +520,25 @@ def test_mcm_live_l3_07_baseline_fixture_do_not_count_live(tmp_path: Path, monke
     live = json.loads((desk.evidence / "cutover.json").read_text(encoding="utf-8"))
     recorded = json.loads((desk.evidence / "round.json").read_text(encoding="utf-8"))
     assert live["qualified"] is False
+    assert live["qualifying_windows"] == 0
     assert live["baseline_counted"] is False
+    ledger = json.loads((desk.evidence / "shadow-slots.json").read_text(encoding="utf-8"))
+    assert ledger["schema"] == "guardian.shadow-slots.v1"
+    slot = next(iter(ledger["slots"].values()))
+    assert slot["detect_latency_p95_seconds"] is None
+    assert slot["detect_latency_p50_seconds"] is None
+    assert slot["detect_latency_p95_seconds"] != 0
+    assert recorded["detect_latency_p95_seconds"] is None
+    assert recorded["detect_latency_p50_seconds"] is None
+    check = recorded["outbox_threshold"]
+    assert check["matches"] is (
+        isinstance(check["outbox_count"], int)
+        and isinstance(check["above_threshold_count"], int)
+        and check["outbox_count"] == check["above_threshold_count"]
+    )
+    if check["outbox_count"] is None or check["above_threshold_count"] is None:
+        assert check["matches"] is False
+        assert check["status"] == "missing"
     assert recorded["baseline"] is True
     assert recorded["index"] == 0
     assert recorded["live_pass"] is False
