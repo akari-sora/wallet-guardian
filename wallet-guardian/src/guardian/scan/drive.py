@@ -15,6 +15,7 @@ from guardian.chains.evm.adapter import LOG_RANGE_MAX, evm_rpc
 from guardian.chains.evm.permissions import APPROVAL_LOG_TOPICS, approval_log_operation, scan_approvals
 from guardian.chains.evm.permits import PERMIT2_PERMIT_TOPIC
 from guardian.coverage import CoverageObservation
+from guardian.errors import SecurityError
 from guardian.scan.window import (
     LOG_SOURCE_REFUSALS,
     log_source_refusal,
@@ -118,7 +119,7 @@ def read_token_logs(scan: ScanContext, stored: int | None, log_done: set[str]) -
         return
     try:
         _quick_token_window(scan, wallets, stored)
-    except (BootstrapStop, BudgetExhausted):
+    except (BootstrapStop, BudgetExhausted, SecurityError):
         walk()
         return
     scan.deferred_token = walk
@@ -177,6 +178,10 @@ def _token_walk(scan: ScanContext, wallets: list, stored: int | None, capability
                 break
             except BootstrapStop as exc:
                 stopped = exc.reason
+                failed = True
+                break
+            except SecurityError as exc:
+                hard = exc.reason or "security_error"
                 failed = True
                 break
             if not read.ok:
@@ -302,7 +307,7 @@ def read_approvals(
         advance["on"] = False
         try:
             _quick_approval_window(scan, stored, owners, on_leaf, chosen)
-        except (BootstrapStop, BudgetExhausted, _LeafError):
+        except (BootstrapStop, BudgetExhausted, _LeafError, SecurityError):
             pass
         finally:
             advance["on"] = True
@@ -348,6 +353,10 @@ def _approval_walk(scan, wallet_id, address, stored, candidates, chosen, owners,
                 break
             except BootstrapStop as exc:
                 stopped = exc.reason
+                failed = True
+                break
+            except SecurityError as exc:
+                hard = exc.reason or "security_error"
                 failed = True
                 break
             except _LeafError as exc:

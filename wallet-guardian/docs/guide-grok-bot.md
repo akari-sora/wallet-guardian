@@ -22,7 +22,7 @@ Then:
 - Start from examples/answers.example.json (synthetic address). Write answers only where the owner told you to.
 - Run `guardian init` so it prints the data-sharing summary. Do not pass --yes until the owner has read that summary and agreed.
 - Run `guardian config validate --mcm-config <the monitor.json init wrote>`.
-- Run `guardian run-once --mcm-config <that file> --no-send`.
+- Run `guardian run-once --mcm-config <that file> --no-send`. A missing or unreadable `--news-input` file is an `exposure_news` gap (`news_unreadable`). The chain reads still run. Do not treat that gap as "no news" or as a finished round.
 - Run `guardian coverage --mcm-config <that file>`.
 - Summarize coverage gaps and any outbox rows in plain language.
 

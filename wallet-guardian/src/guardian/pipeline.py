@@ -146,6 +146,7 @@ class RunReport:
     provider_message_ids: tuple[str, ...] = ()
     news_health: list[dict[str, Any]] | None = None
     pending_gaps: list[dict[str, Any]] | None = None
+    input_gaps: list[str] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         body = {
@@ -179,6 +180,8 @@ class RunReport:
         }
         if self.pending_gaps:
             body["pending_gaps"] = self.pending_gaps
+        if self.input_gaps:
+            body["input_gaps"] = list(self.input_gaps)
         return body
 
 
@@ -194,6 +197,8 @@ def run_capability_pipeline(
     sender: Any = None,
     news_input: bytes | None = None,
     price_input: bytes | None = None,
+    news_gap: str | None = None,
+    price_gap: str | None = None,
     notification_backend: Any = None,
     notification_resolve: Any = None,
     report_ready: Callable[[dict[str, Any]], None] | None = None,
@@ -215,6 +220,8 @@ def run_capability_pipeline(
             sender=sender,
             news_input=news_input,
             price_input=price_input,
+            news_gap=news_gap,
+            price_gap=price_gap,
             notification_backend=notification_backend,
             notification_resolve=notification_resolve,
             report_ready=report_ready,
@@ -233,6 +240,8 @@ def _execute_capability_pipeline(
     sender: Any = None,
     news_input: bytes | None = None,
     price_input: bytes | None = None,
+    news_gap: str | None = None,
+    price_gap: str | None = None,
     notification_backend: Any = None,
     notification_resolve: Any = None,
     report_ready: Callable[[dict[str, Any]], None] | None = None,
@@ -287,15 +296,19 @@ def _execute_capability_pipeline(
     position_rows: list[Any] = []
     position_labels: dict[str, list[dict[str, Any]]] = {}
     news_book = None
-    news_reason = "news_not_supplied"
-    if news_input is not None:
+    news_reason = news_gap or "news_not_supplied"
+    if news_input is not None and not news_gap:
         news_book, news_reason = load_caller_incidents(news_input)
     fetched = None
     if _news_fetch_enabled(public_config):
         fetched = fetch_allowlisted_news(
             database, tenant, backend, resolve=_resolve, now=started, clock=clock,
         )
-    quotes = _price_quotes(price_input)
+    quotes, parsed_price_gap = _price_quotes(price_input)
+    if price_gap:
+        quotes = ()
+        parsed_price_gap = price_gap
+    input_gaps = [item for item in (news_gap, parsed_price_gap) if item]
     news_coverage = _news_observation(news_input is not None, news_reason)
     peers: dict[str, list[tuple[str, str]]] = {}
     for account, network in enabled:
@@ -327,63 +340,69 @@ def _execute_capability_pipeline(
         deadline=deadline,
     )
     for account, network in enabled:
-        entry = registry[network]
-        family = entry.get("family")
-        if family == "evm":
-            _read_evm(
-                public_config, private_inputs, transport, account, network, entry,
-                observations, native_reads, seen, baseline, candidates, tenant,
-                stored_cursors=stored_cursors,
-                events=events,
-                balance_prime=balance_prime,
-                seen_transfers=seen_transfers,
-                explicit_cursors=explicit_cursors,
-                held_cursors=held_cursors,
-                started=started,
-                active_approvals=approval_state,
-                database=database,
-                clock=clock,
-                started_at=started_at,
-                peers=peers.get(network, []),
-                log_done=log_done,
-                plan_cache=plan_cache,
-                checkpoints=checkpoints,
-                log_evidence=log_evidence,
-                permission_notes=permission_notes,
-                bootstrap_origin=bootstrap_origin,
-                deadline=deadline,
-                counterparties=counterparties,
+        try:
+            entry = registry[network]
+            family = entry.get("family")
+            if family == "evm":
+                _read_evm(
+                    public_config, private_inputs, transport, account, network, entry,
+                    observations, native_reads, seen, baseline, candidates, tenant,
+                    stored_cursors=stored_cursors,
+                    events=events,
+                    balance_prime=balance_prime,
+                    seen_transfers=seen_transfers,
+                    explicit_cursors=explicit_cursors,
+                    held_cursors=held_cursors,
+                    started=started,
+                    active_approvals=approval_state,
+                    database=database,
+                    clock=clock,
+                    started_at=started_at,
+                    peers=peers.get(network, []),
+                    log_done=log_done,
+                    plan_cache=plan_cache,
+                    checkpoints=checkpoints,
+                    log_evidence=log_evidence,
+                    permission_notes=permission_notes,
+                    bootstrap_origin=bootstrap_origin,
+                    deadline=deadline,
+                    counterparties=counterparties,
+                )
+            elif family == "solana":
+                _read_solana(
+                    public_config, private_inputs, transport, account, network, entry,
+                    observations, native_reads, seen, baseline, candidates, tenant, started,
+                )
+            elif family == "bitcoin":
+                _read_bitcoin(
+                    public_config, private_inputs, transport, account, network, entry,
+                    observations, native_reads, seen, baseline, candidates, tenant, started,
+                    events, explicit_cursors, held_cursors,
+                )
+            elif family == "tron":
+                _read_tron(
+                    public_config, private_inputs, transport, account, network, entry,
+                    observations, native_reads, seen, baseline, candidates, tenant, started,
+                    events, explicit_cursors, held_cursors, stored_cursors,
+                    clock=clock, started_at=started_at, deadline=deadline,
+                )
+            else:
+                _block_family(account.wallet_id, network, observations, "unsupported_family")
+            _read_positions(
+                public_config, private_inputs, transport, account, network, entry, clock,
+                observations, candidates, position_prior, position_state, position_summaries, tenant, started,
+                position_rows=position_rows,
+                position_labels=position_labels,
+                quotes=quotes,
+                kinza_cache=kinza_cache,
             )
-        elif family == "solana":
-            _read_solana(
-                public_config, private_inputs, transport, account, network, entry,
-                observations, native_reads, seen, baseline, candidates, tenant, started,
-            )
-        elif family == "bitcoin":
-            _read_bitcoin(
-                public_config, private_inputs, transport, account, network, entry,
-                observations, native_reads, seen, baseline, candidates, tenant, started,
-                events, explicit_cursors, held_cursors,
-            )
-        elif family == "tron":
-            _read_tron(
-                public_config, private_inputs, transport, account, network, entry,
-                observations, native_reads, seen, baseline, candidates, tenant, started,
-                events, explicit_cursors, held_cursors, stored_cursors,
-                clock=clock, started_at=started_at, deadline=deadline,
-            )
-        else:
-            _block_family(account.wallet_id, network, observations, "unsupported_family")
-        _read_positions(
-            public_config, private_inputs, transport, account, network, entry, clock,
-            observations, candidates, position_prior, position_state, position_summaries, tenant, started,
-            position_rows=position_rows,
-            position_labels=position_labels,
-            quotes=quotes,
-            kinza_cache=kinza_cache,
-        )
-        observations[(account.wallet_id, network, "exposure_news")] = news_coverage
-        _fill_gaps(public_config, private_inputs, catalog, account.wallet_id, network, observations, transport)
+            observations[(account.wallet_id, network, "exposure_news")] = news_coverage
+            _fill_gaps(public_config, private_inputs, catalog, account.wallet_id, network, observations, transport)
+        except Exception as exc:
+            reason = getattr(exc, "reason", None)
+            code = reason if isinstance(reason, str) and reason else "read_error"
+            _note_isolated_read(account.wallet_id, network, observations, code)
+            observations[(account.wallet_id, network, "exposure_news")] = news_coverage
     from guardian.balances.reconcile import reconcile_native, refresh_balance_decisions, stamp_native_quotes
 
     pending_gaps = _replay_pending_candidates(database, tenant, candidates)
@@ -526,6 +545,7 @@ def _execute_capability_pipeline(
         provider_message_ids=delivery.message_ids,
         news_health=news_health,
         pending_gaps=pending_gaps,
+        input_gaps=input_gaps or None,
     )
     database.save_run(tenant, run_id, {
         "baseline": report.baseline,
@@ -756,13 +776,14 @@ def _judged_identities(candidates: list[Candidate]) -> list[str]:
     return found
 
 
-def _price_quotes(price_input: bytes | None) -> tuple[CallerQuote, ...]:
+def _price_quotes(price_input: bytes | None) -> tuple[tuple[CallerQuote, ...], str | None]:
+    """Parse caller prices. A bad file is a gap, not a stopped round."""
     if price_input is None:
-        return ()
+        return (), None
     try:
-        return parse_price_input(price_input)
-    except AssetManifestError as exc:
-        raise GuardianError("price input is not readable") from exc
+        return parse_price_input(price_input), None
+    except AssetManifestError:
+        return (), "price_unparseable"
 
 
 def _news_fetch_enabled(public_config: PublicConfig) -> bool:
@@ -910,15 +931,31 @@ def _fetched_alert(tenant, notice, position_rows, approvals, fetched: FetchRepor
     )
 
 
+def _note_isolated_read(wallet_id: str, network: str, observations: dict, reason: str) -> None:
+    """One account/network failed. Other networks keep the observations they already stored."""
+    for capability in (
+        "balances.native",
+        "history.fungible",
+        "history.native_external",
+        "history.token",
+        "permissions.erc20",
+        "permissions.standard",
+    ):
+        key = (wallet_id, network, capability)
+        if key not in observations:
+            observations[key] = _blocked(reason)
+
+
 def _news_observation(supplied: bool, reason: str) -> CoverageObservation:
-    """Caller news is a partial input. A missing file stays an explicit gap."""
+    """Caller news is a partial input. A missing or unreadable file stays an explicit gap."""
     if not supplied:
+        code = reason if reason and reason != "news_not_supplied" else "news_not_supplied"
         return CoverageObservation(
             category="partial",
             pagination_complete=False,
             gap_detection_complete=False,
             declared="not_supplied",
-            reason_codes=("news_not_supplied",),
+            reason_codes=(code,),
             trust="unverified",
             price_quality="unknown",
         )
