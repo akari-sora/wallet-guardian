@@ -1,8 +1,8 @@
 # 固定 HTTPS 任務頁
 
-狀態：**VERIFIED_ORIGIN（2026-10-07）**。公開固定來源已上線：https://wallet-guardian-action-client.pages.dev/（Cloudflare Pages Direct Upload，HTTP 200 已回讀）。套件內 `workbench` 預設 `fixed_https_origin` 仍是程式常數 `False`，要發行任務連結還需把 origin 接進設定／環境（見下方「已驗證固定 HTTPS」）。主網送出預設關閉。
+狀態：**VERIFIED_ORIGIN（2026-10-07）**。公開固定來源是 https://wallet-guardian-action-client.pages.dev/（Cloudflare Pages 專案 `wallet-guardian-action-client`，Direct Upload）。套件內 `workbench` 的 `fixed_https_origin` 仍是程式常數 `False`。view origin 寫在 `config/deployments/private-task-origins.json`，那不是執行授權，也不會把 `fixed_https_origin` 改成 true。主網送出預設關閉。
 
-固定客戶端是 `action-client@0.3.0`。D1 綁定、AUTH 設定與私人任務上線程序見 `docs/d1-private-task-live.md`。它只接受 `guardian.task.v1`。私人任務頁是 `/t/<ref>`，資料來自 Pages Function `/api/tasks/<ref>`，不是公開的 `/tasks/<ref>.json`。網址不放地址、金額或金鑰。`fixed_https_origin` 仍是 false。API 與負例見 `docs/p1-private-task-api.md`。這份路由變更尚未部署。
+固定客戶端是 `action-client@0.3.0`。D1 綁定、AUTH 設定與私人任務上線程序見 `docs/d1-private-task-live.md`。它只接受 `guardian.task.v1`。私人任務頁是 `/t/<ref>`，資料來自 Pages Function `/api/tasks/<ref>`，不是公開的 `/tasks/<ref>.json`。網址不放地址、金額或金鑰。`fixed_https_origin` 仍是 false。API 與負例見 `docs/p1-private-task-api.md`。2026-10-14 的 GET-only 紀錄裡，這個 origin 的 `/t/<ref>` 回 HTML、`/api/session` 回 JSON。那次紀錄不是這次變更做的部署，也不是主網送出授權。
 
 建置不會設定 `VITE_GUARDIAN_MAINNET_SEND`。預設主網送出是關閉的。
 
@@ -16,13 +16,13 @@ npm run build
 
 產出在 `action-client/dist/`。這個目錄已在 gitignore。
 
-## 擁有者的下一步（擇一）
+## 部署目標
 
-1. GitLab Pages。把 `main` 推到 `https://gitlab.com/aa22396584/wallet-guardian`。根目錄 `.gitlab-ci.yml` 的 `pages` job 會發布靜態檔。預期網址是 `https://aa22396584.gitlab.io/wallet-guardian/`。在該網址回傳 200、而且頁面橫幅仍寫主網送出關閉之前，不能把這個網址當成已上線的固定來源。
-2. Vercel。在 `wallet-guardian/action-client` 執行 `npx vercel login`，然後 `npx vercel --prod`。設定已寫在 `vercel.json`。不要在專案環境變數打開 `VITE_GUARDIAN_MAINNET_SEND`，除非另外授權主網送出。
-3. Cloudflare Pages。`npx wrangler login` 之後，在 `action-client` 執行 `npx wrangler pages deploy dist --project-name wallet-guardian`。
+正式靜態目標是 Cloudflare Pages 專案 `wallet-guardian-action-client`。逐檔雜湊清冊是 `config/deployments/action-client-releases.json`。這份清冊目前的 `releases` 是空的：沒有填入沒有實際雜湊過的檔案，也不把任何 origin 標成這次變更部署過的 active release。
 
-完成後把實際 HTTPS origin 寫進部署紀錄，再讓 `issue_task_link` 使用那個 origin。localhost 與未經驗證的預覽網址都不能發行公開任務連結。
+GitLab Pages 與 Vercel 不是這個固定來源。`action-client/vercel.json` 與根目錄 `.gitlab-ci.yml` 的 `pages` job 仍在 repo 裡，因為刪除它們要等 D-11。不要把那兩個殘留設定當成部署步驟。
+
+部署與刪除既有預覽由擁有者在 Cloudflare 執行。這份文件變更沒有執行部署，也沒有刪除任何預覽。
 
 ## 部署現況（2026-10-07，本機核對）
 
@@ -37,6 +37,5 @@ npm run build
 - 主機：Cloudflare Pages Direct Upload（非 Git 整合）
 - 專案：`wallet-guardian-action-client`
 - 正式網址：https://wallet-guardian-action-client.pages.dev/
-- 本次部署預覽：https://5a09b4e6.wallet-guardian-action-client.pages.dev/
-- `fixed_https_origin` 可用此 origin（HTTPS、非 localhost）。主網送出仍預設關閉。
-
+- 歷史預覽：https://5a09b4e6.wallet-guardian-action-client.pages.dev/ 。2026-10-14 的 GET-only 紀錄仍看到它回 200，而且沒有 CSP。這份變更沒有刪除它，也不把它當成核准來源。
+- `fixed_https_origin` 仍是 false。這個 HTTPS origin 不是主網執行授權。主網送出仍預設關閉。

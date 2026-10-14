@@ -123,7 +123,7 @@ export async function harness({ onFetch, onWallet, initialSession = session(), p
   const transpiled = ts.transpileModule(
     // Build-time env (Vite replaces import.meta.env.VITE_*). MAINNET_SEND defaults to 'true' here so
     // tests prove requestUserSend() still refuses even with the flag on. WalletConnect defaults off.
-    source.replace(/import\.meta\.env\.(VITE_[A-Z_]+)/g, (_m, key) => {
+    source.replace(/import\.meta\.env\.PROD/g, env.PROD === true ? "true" : "false").replace(/import\.meta\.env\.(VITE_[A-Z_]+)/g, (_m, key) => {
       const values = { VITE_GUARDIAN_MAINNET_SEND: 'true', ...env };
       return values[key] === undefined ? 'undefined' : JSON.stringify(values[key]);
     }) + append,

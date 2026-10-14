@@ -1,3 +1,4 @@
+import { originIsApproved } from "./approved-origins.mjs";
 import { digestBody } from "./canonical.mjs";
 import {
   CANCEL_PENDING_CONFIRMATION,
@@ -134,6 +135,20 @@ type Task = {
 const view = document.querySelector<HTMLElement>("#view")!;
 const banner = document.querySelector<HTMLElement>("#banner")!;
 const MAINNET_SEND = import.meta.env.VITE_GUARDIAN_MAINNET_SEND === "true";
+const PRODUCTION_BUILD = import.meta.env.PROD === true;
+const UNAPPROVED_ORIGIN = "此網址不是核准來源。";
+
+function originApproved(): boolean {
+  return originIsApproved(window.location.origin, { production: PRODUCTION_BUILD });
+}
+
+function showUnapprovedOrigin(): void {
+  banner.textContent = UNAPPROVED_ORIGIN;
+  view.className = "error";
+  view.textContent = UNAPPROVED_ORIGIN;
+  const loginButton = document.querySelector<HTMLButtonElement>("#login");
+  if (loginButton) loginButton.disabled = true;
+}
 let loadGeneration = 0;
 let observedCapability = "unknown";
 let lastPlan: Plan | null = null;
@@ -425,6 +440,7 @@ function ethereumProvider(): EthereumProvider | null {
 }
 
 function walletCall(connection: WalletCandidate, method: string, params?: unknown[], context: WalletContext = {}): Promise<unknown> {
+  if (!originApproved()) return Promise.reject(new Error(UNAPPROVED_ORIGIN));
   return guardedRequest(connection, method, params, context, connectionAbandon) as Promise<unknown>;
 }
 
@@ -1298,6 +1314,10 @@ async function revokeOrphanSession(body: unknown): Promise<void> {
 }
 
 async function login(): Promise<void> {
+  if (!originApproved()) {
+    showUnapprovedOrigin();
+    return;
+  }
   if (authBusy) return;
   const connection = connectionForLogin();
   if (!connection) {
@@ -1738,22 +1758,28 @@ document.querySelector("#clear")!.addEventListener("click", () => {
   banner.textContent = BANNER;
 });
 
-installTypographyEnhancements();
-registry.start();
-watchWallet();
-renderWalletPicker();
-bindResumeListeners();
 // Some wallets inject window.ethereum / binancew3w after load without an EIP-6963 announcement.
 // Re-read once shortly after load and on the legacy initialized event. Not a switch by itself.
 function refreshInjectedWallets(): void {
+  if (!originApproved()) return;
   if (registry.refresh()) {
     renderWalletPicker();
     watchWallet();
   }
 }
-if (typeof window.addEventListener === "function") window.addEventListener("ethereum#initialized", refreshInjectedWallets);
-{
-  const timer = setTimeout(refreshInjectedWallets, 1500) as unknown as { unref?: () => void };
-  if (typeof timer.unref === "function") timer.unref();
+
+if (!originApproved()) {
+  showUnapprovedOrigin();
+} else {
+  installTypographyEnhancements();
+  registry.start();
+  watchWallet();
+  renderWalletPicker();
+  bindResumeListeners();
+  if (typeof window.addEventListener === "function") window.addEventListener("ethereum#initialized", refreshInjectedWallets);
+  {
+    const timer = setTimeout(refreshInjectedWallets, 1500) as unknown as { unref?: () => void };
+    if (typeof timer.unref === "function") timer.unref();
+  }
+  void restoreSession().then((current) => { if (current) inspectLocation(); });
 }
-void restoreSession().then((current) => { if (current) inspectLocation(); });
