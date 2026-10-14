@@ -84,3 +84,53 @@ def test_error_text_and_budget_providers_omit_the_nodereal_url() -> None:
     assert _URL not in error
     assert _KEY not in error
     assert result.body is None or _KEY not in json.dumps(result.body)
+
+
+class _DataEcho:
+    def __init__(self, data: object) -> None:
+        self.data = data
+
+    def send(self, call: object) -> RawResponse:
+        payload = {
+            "error": {"code": -32000, "data": self.data, "message": "fail"},
+            "id": 1,
+            "jsonrpc": "2.0",
+        }
+        return RawResponse(200, {"content-type": "application/json"}, json.dumps(payload).encode())
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        _URL,
+        {"url": _URL, "nested": [_URL, {"inner": _URL}]},
+        [_URL, {"note": _URL}],
+    ],
+)
+def test_error_data_masks_nodereal_urls_in_strings_dicts_and_lists(data: object) -> None:
+    document = {
+        "budgets": {
+            "nodereal-key": {
+                "max_concurrency": 1,
+                "max_requests_per_day": 100,
+                "max_rps": 10,
+                "retry_attempts": 0,
+            },
+        },
+        "sources": {
+            "bsc-logs-nodereal": {
+                "adapter": "evm_rpc",
+                "budget_group": "nodereal-key",
+                "enabled": True,
+                "endpoint_env": "NODEREAL_BSC_URL",
+            },
+        },
+    }
+    endpoints = build_endpoint_registry(document, secrets={"NODEREAL_BSC_URL": _URL})
+    book = BudgetBook.from_document(document["budgets"], clock=lambda: 0.0, sleep=lambda _seconds: None)
+    transport = ReadOnlyTransport(endpoints, book, _DataEcho(data), resolve=lambda _host: ["1.1.1.1"])
+    result = transport.request("bsc-logs-nodereal", evm_rpc("eth_blockNumber", []))
+    blob = json.dumps(result.body)
+    assert _URL not in blob
+    assert _KEY not in blob
+    assert "https://bsc-mainnet.nodereal.io/v1/***" in blob
