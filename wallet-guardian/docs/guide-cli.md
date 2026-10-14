@@ -13,7 +13,7 @@ uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc4
 guardian --help
 ```
 
-Before the first `run-once`, export an endpoint for each chain you enabled, for example `export RPC_ETHEREUM_MAINNET_URL="https://ethereum-rpc.publicnode.com"` (any public JSON-RPC URL you choose). Without it `run-once` stops with `endpoint_missing`. See [faq-troubleshooting.md](faq-troubleshooting.md).
+Before the first `run-once`, export an endpoint for each chain you enabled, for example `export RPC_ETHEREUM_MAINNET_URL="https://ethereum-rpc.publicnode.com"` (any public JSON-RPC URL you choose). Without it `run-once` stops with `endpoint_missing`. `ethereum-rpc.publicnode.com` answers balance reads but refuses address-less `eth_getLogs` (-32701, recorded in [coverage-matrix.md](coverage-matrix.md)). With only that endpoint, `permissions.standard` and `history.token` stay gaps. For approval monitoring, use an endpoint that accepts topic-only `eth_getLogs` over a 2000-block range; the matrix lists the ones that did on the recorded probe. See [faq-troubleshooting.md](faq-troubleshooting.md).
 
 The wheel name in this tree is `wallet_guardian_monitor-0.4.0rc4-py3-none-any.whl`. A later release uses that release's own wheel and constraints file.
 

@@ -1013,7 +1013,7 @@ def _read_evm(
         public_config, transport, database, tenant, clock, started_at, source_id, network, chain_id,
         native_asset, head, checkpoint, origin, deadline, events, seen_transfers, candidates,
         observations, seen, baseline, explicit_cursors, held_cursors, started, log_evidence, peers,
-        counterparties,
+        counterparties, plan_cache,
     )
     fungible_cursor = _cursor_block(stored_cursors, wallet_id, network, "history.fungible")
     _read_token_logs(scan, address, wallet_id, fungible_cursor, log_done)
@@ -1863,7 +1863,7 @@ def _Scan(
     public_config, transport, database, tenant, clock, started_at, source_id, network, chain_id,
     native_asset, head, checkpoint, bootstrap_origin, deadline, events, seen_transfers, candidates,
     observations, seen, baseline, explicit_cursors, held_cursors, started, log_evidence, peers,
-    counterparties,
+    counterparties, plan_cache=None,
 ):
     from guardian.scan.drive import ScanContext
 
@@ -1901,6 +1901,7 @@ def _Scan(
         indexer_rows=_etherscan_transfers,
         remember_approval=_remember_approval,
         overlap=_CURSOR_OVERLAP,
+        plan_cache=plan_cache,
     )
 
 

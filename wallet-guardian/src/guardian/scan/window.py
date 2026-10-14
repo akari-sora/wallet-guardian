@@ -19,16 +19,22 @@ from guardian.sources.retry import read_with_retry
 _RANGE_NEEDLES = (
     "10,000",
     "-32701",
+    "1000 block",
     "block range",
+    "blocks range",
     "exceed maximum block range",
     "exceeds max",
     "log response size exceeded",
     "more than 10000",
     "query returned more than",
     "range is too",
+    "ranges over",
     "response size exceeded",
     "too many results",
 )
+
+# A source that refuses the method. These are not ranges and are not unread blocks.
+LOG_SOURCE_REFUSALS = frozenset({"filter_requires_address", "method_disabled"})
 
 
 @dataclass(frozen=True)
@@ -78,12 +84,15 @@ def plan_chunks(
     return ranges, origin
 
 
-def range_refusal(body: Any, reason: str = "") -> bool:
-    """True when the endpoint rejected the span. A generic read error is not one of these."""
+def _error_text(body: Any, reason: str = "") -> tuple[int | None, str]:
     parts = [reason.lower()]
+    code = None
     if isinstance(body, dict):
         err = body.get("error")
         if isinstance(err, dict):
+            raw = err.get("code")
+            if isinstance(raw, int) and not isinstance(raw, bool):
+                code = raw
             parts.append(str(err.get("code", "")))
             parts.append(str(err.get("message", "")))
         elif isinstance(err, str):
@@ -94,7 +103,28 @@ def range_refusal(body: Any, reason: str = "") -> bool:
         result = body.get("result")
         if isinstance(result, str):
             parts.append(result)
-    text = " ".join(parts).lower()
+    return code, " ".join(parts).lower()
+
+
+def log_source_refusal(body: Any, reason: str, start: int, end: int) -> str | None:
+    """Policy refusals that must not be bisected and must not be stored as an unread block.
+
+    ``-32701`` with "specify an address" is ``filter_requires_address`` at any width.
+    ``-32005`` "limit exceeded" is ``method_disabled`` only for a one-block request.
+    """
+    code, text = _error_text(body, reason)
+    if (code == -32701 or "32701" in text) and "specify an address" in text:
+        return "filter_requires_address"
+    if end <= start and (code == -32005 or "32005" in text) and "limit exceeded" in text:
+        return "method_disabled"
+    return None
+
+
+def range_refusal(body: Any, reason: str = "") -> bool:
+    """True when the endpoint rejected the span. A generic read error is not one of these."""
+    code, text = _error_text(body, reason)
+    if (code == -32701 or "32701" in text) and "specify an address" in text:
+        return False
     if "32701" in text:
         return True
     return any(needle in text for needle in _RANGE_NEEDLES)
@@ -156,6 +186,9 @@ def read_log_leaf(
         return LogRead(True, "", None, end), logs
     body = getattr(result, "body", None)
     reason = str(getattr(result, "reason", "") or "read_error")
+    policy = log_source_refusal(body, reason, start, end)
+    if policy:
+        return LogRead(False, policy, None, None), []
     if start == end:
         return LogRead(False, reason, f"single_block_unreadable:{start}", None), []
     if range_refusal(body, reason) and end > start:

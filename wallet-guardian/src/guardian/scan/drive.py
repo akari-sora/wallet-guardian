@@ -15,7 +15,15 @@ from guardian.chains.evm.adapter import LOG_RANGE_MAX, evm_rpc
 from guardian.chains.evm.permissions import APPROVAL_LOG_TOPICS, approval_log_operation, scan_approvals
 from guardian.chains.evm.permits import PERMIT2_PERMIT_TOPIC
 from guardian.coverage import CoverageObservation
-from guardian.scan.window import plan_chunks, read_log_leaf, read_logs, reject_wallet_emitter, window_covers
+from guardian.scan.window import (
+    LOG_SOURCE_REFUSALS,
+    log_source_refusal,
+    plan_chunks,
+    read_log_leaf,
+    read_logs,
+    reject_wallet_emitter,
+    window_covers,
+)
 from guardian.security.transport_policy import Operation
 from guardian.sources.alchemy import AlchemyClient
 from guardian.sources.blockscout import BlockscoutClient
@@ -81,6 +89,7 @@ class ScanContext:
     indexer_rows: Callable[..., list[dict[str, Any]]]
     remember_approval: Callable[..., None]
     overlap: int = 2
+    plan_cache: Any = None
 
 
 @dataclass
@@ -117,6 +126,12 @@ def read_token_logs(scan: ScanContext, stored: int | None, log_done: set[str]) -
 
 def _token_walk(scan: ScanContext, wallets: list, stored: int | None, capability: str) -> None:
     candidates = _log_plan(scan)
+    if not candidates:
+        _finish(
+            scan, capability, wallets, 0, scan.head, [], [], _refused_log_reason(scan), None,
+            "empty", scan.source_id,
+        )
+        return
     wallet_set = {address.lower() for _wallet, address in wallets}
     leaves: list[tuple[int, int]] = []
     gaps: list[str] = []
@@ -178,7 +193,9 @@ def _token_walk(scan: ScanContext, wallets: list, stored: int | None, capability
             gaps = []
             stopped = None
             break
-        if any(str(item).startswith("single_block_unreadable:") for item in gaps):
+        if hard in LOG_SOURCE_REFUSALS:
+            _remember_log_refusal(scan, candidate, hard)
+        elif any(str(item).startswith("single_block_unreadable:") for item in gaps):
             break
     _finish(
         scan, capability, wallets, origin, scan.head, leaves, gaps, hard, stopped,
@@ -199,6 +216,13 @@ def read_approvals(
         _block_caps(scan, wallet_id, "head_unreadable")
         return
     candidates = _log_plan(scan)
+    if not candidates:
+        targets = scan.peers if len(scan.peers) > 1 else [(wallet_id, address)]
+        _finish(
+            scan, "permissions.erc20", targets, 0, scan.head, [], [], _refused_log_reason(scan), None,
+            "empty", scan.source_id, permission=True,
+        )
+        return
     wallets = {(item[1].lower(), item[0]) for item in scan.peers}
     wallet_for = {addr: wid for addr, wid in wallets}
     leaves: list[tuple[int, int]] = []
@@ -344,7 +368,9 @@ def _approval_walk(scan, wallet_id, address, stored, candidates, chosen, owners,
             gaps = []
             stopped = None
             break
-        if any(str(item).startswith("single_block_unreadable:") for item in gaps):
+        if hard in LOG_SOURCE_REFUSALS:
+            _remember_log_refusal(scan, candidate, hard)
+        elif any(str(item).startswith("single_block_unreadable:") for item in gaps):
             break
     targets = scan.peers if len(scan.peers) > 1 else [(wallet_id, address)]
     _finish(
@@ -445,6 +471,11 @@ def _transfer_span(scan, wallets, start, end, contract, batch, on_leaf, source_i
             on_leaf(start, end, logs)
             from guardian.scan.window import LogRead
             return LogRead(True, "", None, end)
+        body = getattr(result, "body", None) if result is not None else None
+        policy = log_source_refusal(body, str(getattr(result, "reason", "") or ""), start, end)
+        if policy:
+            from guardian.scan.window import LogRead
+            return LogRead(False, policy, None, None)
     return _paired_transfers(
         scan, transport, source_id, addresses, start, end, contract, wallet_set, on_leaf,
     )
@@ -457,7 +488,11 @@ def _paired_transfers(scan, transport, source_id, addresses, start, end, contrac
     if end < start:
         return LogRead(False, "bad_range", None, None)
     incoming = _one_direction(scan, transport, source_id, addresses, start, end, 2, contract, wallet_set)
+    if incoming[0].reason in LOG_SOURCE_REFUSALS:
+        return LogRead(False, incoming[0].reason, None, None)
     outgoing = _one_direction(scan, transport, source_id, addresses, start, end, 1, contract, wallet_set)
+    if outgoing[0].reason in LOG_SOURCE_REFUSALS:
+        return LogRead(False, outgoing[0].reason, None, None)
     if incoming[0].ok and outgoing[0].ok:
         on_leaf(start, end, _dedupe_logs([*incoming[1], *outgoing[1]]))
         return LogRead(True, "", None, end)
@@ -1376,6 +1411,7 @@ def _log_contract(scan, wallets: set[str], source_id: str | None = None) -> str 
 def _log_plan(scan) -> list[str]:
     """Enabled log routes with a ready endpoint. Otherwise the family RPC."""
     found: list[str] = []
+    saw_cached = False
     for capability in _LOG_CAPABILITIES:
         for source_id in _route_ids(scan.public_config, scan.network, capability):
             if source_id in found:
@@ -1383,11 +1419,16 @@ def _log_plan(scan) -> list[str]:
             source = scan.public_config.document["sources"].get(source_id, {})
             if source.get("enabled") is not True or source.get("adapter") != "evm_rpc":
                 continue
+            if _cached_log_refusal(scan, source_id):
+                saw_cached = True
+                continue
             if not _endpoint_ready(scan, source_id):
                 continue
             found.append(source_id)
     if found:
         return found
+    if saw_cached or _cached_log_refusal(scan, scan.source_id):
+        return []
     return [scan.source_id]
 
 
@@ -1460,7 +1501,10 @@ def _split_backfill(scan, stored: int | None) -> bool:
 
 
 def _first_plan(scan, stored: int | None):
-    candidate = _log_plan(scan)[0]
+    plan = _log_plan(scan)
+    if not plan:
+        return [], 0, scan.source_id
+    candidate = plan[0]
     limit = min(_source_int(scan, "log_range_max", LOG_RANGE_MAX, source_id=candidate), LOG_RANGE_MAX)
     chunks, origin = plan_chunks(
         stored,
@@ -1668,6 +1712,33 @@ def _declared_span(source) -> int | None:
 
 def _indexer_stopped(outcome: _Outcome) -> bool:
     return outcome.stopped in {"bootstrap_request_cap", "deadline"}
+
+
+def _cached_log_refusal(scan, source_id: str) -> str | None:
+    cache = getattr(scan, "plan_cache", None)
+    if cache is None:
+        return None
+    found = cache.reason(source_id, scan.network)
+    if found in LOG_SOURCE_REFUSALS or found == "plan_not_supported":
+        return found
+    return None
+
+
+def _remember_log_refusal(scan, source_id: str, reason: str) -> None:
+    cache = getattr(scan, "plan_cache", None)
+    if cache is None or reason not in LOG_SOURCE_REFUSALS:
+        return
+    cache.remember(source_id, scan.network, reason)
+
+
+def _refused_log_reason(scan) -> str:
+    for capability in _LOG_CAPABILITIES:
+        for source_id in _route_ids(scan.public_config, scan.network, capability):
+            found = _cached_log_refusal(scan, source_id)
+            if found:
+                return found
+    found = _cached_log_refusal(scan, scan.source_id)
+    return found or "filter_requires_address"
 
 
 def _plan_cached(plan_cache, source_id: str, network: str) -> bool:
