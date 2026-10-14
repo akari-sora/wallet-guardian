@@ -550,7 +550,6 @@ def plan_transition(
             str(item["asset"]),
             str(old_block),
             old_hash.lower(),
-            str(new_raw),
             "threshold_unavailable",
         ))
         held["identity"] = hashlib.sha256(material.encode("utf-8")).hexdigest()

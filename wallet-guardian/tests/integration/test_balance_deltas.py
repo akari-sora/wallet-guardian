@@ -1168,6 +1168,11 @@ def test_e01_usd_only_failure_persists_unavailable(tmp_path: Path, monkeypatch: 
     _run(config, backend, capsys)
     assert len(_deltas(tmp_path)) == 1
     assert _baseline(tmp_path)["block_number"] == 10
+    backend.at(22, NINE + 1)
+    _run(config, backend, capsys)
+    assert len(_deltas(tmp_path)) == 1
+    assert _baseline(tmp_path)["block_number"] == 10
+    assert int(_baseline(tmp_path)["raw_balance"]) == ONE
     database = _db(tmp_path)
     try:
         decisions = database.native_decisions_for(TENANT, WALLET, "bsc-mainnet", ASSET)
