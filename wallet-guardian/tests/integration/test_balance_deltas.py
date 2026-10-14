@@ -75,6 +75,9 @@ class ScriptBackend:
         self.nodereal = "empty"
         self.by_category: dict[str, list[dict]] = {"internal": [], "external": [], "20": []}
         self.price: dict | None = None
+        self.token_price: dict | None = None
+        self.fail_token_price = False
+        self.token_price_urls: list[str] = []
         self.calls: list[dict] = []
         self.barrier: threading.Barrier | None = None
         self._owners: dict[int, int] = {}
@@ -137,6 +140,13 @@ class ScriptBackend:
                 return RawResponse(429, {"retry-after": "1"}, b"")
             if isinstance(self.price, dict):
                 return RawResponse(200, {}, json.dumps(self.price).encode())
+        if "token_price" in url:
+            self.token_price_urls.append(url)
+            if self.fail_token_price:
+                raise RuntimeError("token price down")
+            if isinstance(self.token_price, dict):
+                return RawResponse(200, {}, json.dumps(self.token_price).encode())
+            return RawResponse(200, {}, b"{}")
         return RawResponse(200, {}, b"{}")
 
     def _rpc(self, method: str, params: list) -> RawResponse:
@@ -2144,3 +2154,53 @@ def test_unknown_native_unit_key_is_a_config_error(tmp_path: Path, monkeypatch: 
     assert "not-a-network" in payload["error"]
     assert "bsc-mainnet" in payload["error"]
     assert ADDRESS.lower() not in json.dumps(payload).lower()
+
+
+_USDC_BSC = "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"
+
+
+def test_token_contract_price_and_unvalued_stable_move(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A fresh CoinGecko contract price alerts asset_usd. A failed quote is not zero."""
+    priced = tmp_path / "priced"
+    config = _desk(priced, monkeypatch, prices=True, nodereal_key=True)
+    backend = ScriptBackend()
+    backend.price = {"binancecoin": {"usd": 300, "last_updated_at": int(CLOCK)}}
+    backend.token_price = {_USDC_BSC: {"usd": 1, "last_updated_at": int(CLOCK)}}
+    backend.at(10, ONE)
+    _run(config, backend, capsys)
+    tx = "0x" + "77" * 32
+    row = _internal(tx, 2_000 * 10**18, 15, "0", token=True)
+    row["contractAddress"] = _USDC_BSC
+    row["tokenDecimal"] = "18"
+    backend.by_category["20"] = [row]
+    backend.at(20, ONE)
+    second = _run(config, backend, capsys)
+    assert any("token_price" in url and "contract_addresses=" in url for url in backend.token_price_urls)
+    assert "asset_usd" in _kinds(priced)
+    token_decisions = [item for item in second["decisions"] if item.get("tx_id") == tx]
+    assert token_decisions
+    assert token_decisions[0]["kind"] == "asset_usd"
+    assert token_decisions[0]["alert"] is True
+    assert '"usd": 0' not in json.dumps(second)
+
+    missed = tmp_path / "missed"
+    missed_config = _desk(missed, monkeypatch, prices=True, nodereal_key=True)
+    missed_backend = ScriptBackend()
+    missed_backend.price = {"binancecoin": {"usd": 300, "last_updated_at": int(CLOCK)}}
+    missed_backend.fail_token_price = True
+    missed_backend.at(10, ONE)
+    _run(missed_config, missed_backend, capsys)
+    missed_tx = "0x" + "88" * 32
+    missed_row = _internal(missed_tx, 2_000 * 10**18, 15, "0", token=True)
+    missed_row["contractAddress"] = _USDC_BSC
+    missed_row["tokenDecimal"] = "18"
+    missed_backend.by_category["20"] = [missed_row]
+    missed_backend.at(20, ONE)
+    quiet = _run(missed_config, missed_backend, capsys)
+    assert "unvalued_large_move" in _kinds(missed)
+    missed_decisions = [item for item in quiet["decisions"] if item.get("tx_id") == missed_tx]
+    assert missed_decisions[0]["kind"] == "unvalued_large_move"
+    assert missed_decisions[0]["valuation_unknown"] is True
+    blob = json.dumps(quiet)
+    assert '"quote_usd": 0' not in blob and '"quote_usd": "0"' not in blob
+    assert ADDRESS.lower() not in blob.lower()

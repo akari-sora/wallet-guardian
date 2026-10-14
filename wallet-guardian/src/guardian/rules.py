@@ -63,6 +63,8 @@ class Candidate:
     counterparty: str | None = None
     block_number: int | None = None
     asset: str | None = None
+    decimals: int | None = None
+    unvalued_large: bool = False
 
 
 @dataclass(frozen=True)
@@ -177,20 +179,23 @@ class AlertPolicy:
         eth_hit = self._native_eth_hit(candidate)
         unit_hit = self._native_unit_hit(candidate)
         usd_hit, unknown = self._usd_hit(candidate)
+        unvalued_hit = bool(candidate.unvalued_large) and not candidate.is_native and not (eth_hit or unit_hit or usd_hit)
         if eth_hit:
             kind = "native_eth"
         elif usd_hit:
             kind = "asset_usd"
         elif unit_hit:
             kind = "native_unit"
+        elif unvalued_hit:
+            kind = "unvalued_large_move"
         else:
             kind = "below_threshold"
         movement = _native_movement(candidate) if kind in {"native_eth", "asset_usd", "native_unit"} else None
         return self._decision(
             candidate,
-            alert=eth_hit or unit_hit or usd_hit,
+            alert=eth_hit or unit_hit or usd_hit or unvalued_hit,
             kind=kind,
-            valuation_unknown=unknown,
+            valuation_unknown=unknown or unvalued_hit,
             identity=candidate.identity,
             movement=movement,
         )
@@ -388,6 +393,50 @@ def validate_native_unit_thresholds(value: Any) -> dict[str, Decimal]:
     for network, raw in value.items():
         found[str(network)] = _decimal(raw, "native_unit_thresholds")
     return found
+
+
+def validate_token_raw_thresholds(value: Any) -> dict[tuple[str, str], int]:
+    """Map ``network:0xcontract`` to a positive raw amount. A bad key is refused."""
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ConfigError("token_raw_thresholds must be an object")
+    known = canonical_native_decimals()
+    found: dict[tuple[str, str], int] = {}
+    for key, raw in value.items():
+        parsed = _token_threshold_key(key, known)
+        amount = _raw_threshold(raw)
+        if parsed is None or amount is None:
+            raise ConfigError("token_raw_thresholds key must be network:0xcontract and the value a positive integer")
+        found[parsed] = amount
+    return found
+
+
+def _token_threshold_key(key: Any, known: Mapping[str, int]) -> tuple[str, str] | None:
+    if not isinstance(key, str):
+        return None
+    network, sep, contract = key.partition(":")
+    if not sep or network not in known or contract != contract.lower():
+        return None
+    if not contract.startswith("0x") or len(contract) != 42:
+        return None
+    try:
+        int(contract[2:], 16)
+    except ValueError:
+        return None
+    return network, contract
+
+
+def _raw_threshold(value: Any) -> int | None:
+    if not isinstance(value, str) or not value.isdigit() or value.startswith("0"):
+        return None
+    try:
+        amount = int(value)
+    except ValueError:
+        return None
+    if amount <= 0 or amount > 10**78:
+        return None
+    return amount
 
 
 def _native_movement(candidate: Candidate) -> dict[str, str] | None:

@@ -143,7 +143,7 @@ Free tier: check current terms on the GoPlus dashboard.
 
 Signup: <https://www.coingecko.com/en/api>.
 
-What it unlocks: native-coin USD quotes for native transfers and balance deltas (`simple/price`). Token transfers are not valued in rc.4. `init` does not add a CoinGecko source. A missing quote is `valuation_unknown`. It is never stored as 0 and never stored as 1.
+What it unlocks: native-coin USD quotes for native transfers and balance deltas (`simple/price`), and, when the source is enabled, free contract quotes for token transfers (`simple/token_price`, `contract_addresses`). A fresh token quote can meet `asset_usd_threshold`. `init` does not add a CoinGecko source. A missing, stale, or failed quote is `valuation_unknown`. It is never stored as 0 and never stored as 1. Without a quote, a pinned stablecoin whose raw size meets that USD floor, or a hit on `alerts.token_raw_thresholds` (`network:0xcontract` to a positive raw integer), writes an `unvalued_large_move` alert. That alert is not a USD valuation.
 
 The adapter already calls the public keyless tier when `COINGECKO_API_KEY` is absent. That tier has a lower rate limit than a demo key. Check current terms; the public tier is commonly on the order of tens of calls per minute, and a demo key raises the monthly cap.
 
