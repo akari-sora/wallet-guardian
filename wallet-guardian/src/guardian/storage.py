@@ -182,6 +182,7 @@ class Database:
             self._migrate(version)
             # MCM tables are additive. user_version stays 1 so older builds can open the file.
             self._apply_mcm_migrations()
+            self._ensure_capability_baselined_column()
         except Exception:
             self.conn.close()
             raise
@@ -1012,6 +1013,35 @@ class Database:
         if extra:
             raise ConfigError("database schema is newer than this build: " + ", ".join(sorted(extra)))
 
+    def _ensure_capability_baselined_column(self) -> None:
+        """Sticky first-success flag. A missing column is added; user_version stays 1.
+
+        Older builds keep opening the file: they do not select this column, and
+        this build does not record a new migration id. An error row with no
+        previous success stays unbaselined. A row that already recorded a
+        success is marked so the next round does not treat that history as new.
+        """
+        present = {
+            row["name"]
+            for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if "capability_state" not in present:
+            return
+        columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(capability_state)")}
+        if "baselined" in columns:
+            return
+        self.conn.execute(
+            "ALTER TABLE capability_state ADD COLUMN baselined INTEGER NOT NULL DEFAULT 0"
+        )
+        self.conn.execute(
+            """
+            UPDATE capability_state
+            SET baselined=1
+            WHERE last_success_at IS NOT NULL AND last_success_at != ''
+            """
+        )
+        self.conn.commit()
+
     def _apply_mcm_migrations(self) -> None:
         files = sorted(path for path in mcm_migration_directory().glob("*.sql") if path.is_file())
         if not files:
@@ -1310,7 +1340,7 @@ class Database:
     def _upsert_capability_state(self, tenant_id: str, row: dict[str, Any]) -> None:
         existing = self.conn.execute(
             """
-            SELECT last_success_at, cursor FROM capability_state
+            SELECT last_success_at, cursor, baselined FROM capability_state
             WHERE tenant_id=? AND wallet_id=? AND network=? AND capability=?
             """,
             (tenant_id, row["wallet_id"], row["network"], row["capability"]),
@@ -1329,21 +1359,26 @@ class Database:
         cursor_value = row["cursor"]
         if cursor_value is None and existing is not None:
             cursor_value = existing["cursor"]
+        # A failed read does not become the first success. A success already stored stays set.
+        already = existing is not None and int(existing["baselined"] or 0) == 1
+        establish = row.get("baselined") is True and row["quality"] != "error"
+        baselined = 1 if already or establish else 0
         self.conn.execute(
             """
             INSERT INTO capability_state(
-                tenant_id, wallet_id, network, capability, quality, last_success_at, valid_until, cursor, payload
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                tenant_id, wallet_id, network, capability, quality, last_success_at, valid_until, cursor, payload, baselined
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(tenant_id, wallet_id, network, capability) DO UPDATE SET
               quality=excluded.quality,
               last_success_at=excluded.last_success_at,
               valid_until=excluded.valid_until,
               cursor=excluded.cursor,
-              payload=excluded.payload
+              payload=excluded.payload,
+              baselined=excluded.baselined
             """,
             (
                 tenant_id, row["wallet_id"], row["network"], row["capability"], row["quality"],
-                last_success, row["valid_until"], cursor_value, _json(payload),
+                last_success, row["valid_until"], cursor_value, _json(payload), baselined,
             ),
         )
 
@@ -1381,7 +1416,7 @@ class Database:
         self, tenant_id: str, *, wallet_id: str | None = None, network: str | None = None,
     ) -> list[dict[str, Any]]:
         sql = (
-            "SELECT wallet_id, network, capability, quality, last_success_at, valid_until, cursor, payload "
+            "SELECT wallet_id, network, capability, quality, last_success_at, valid_until, cursor, payload, baselined "
             "FROM capability_state WHERE tenant_id=?"
         )
         args: list[Any] = [tenant_id]
@@ -1402,6 +1437,7 @@ class Database:
                 "last_success_at": row["last_success_at"],
                 "valid_until": row["valid_until"],
                 "cursor": row["cursor"],
+                "baselined": bool(row["baselined"]),
                 "payload": json.loads(row["payload"]),
             })
         return found
@@ -1631,6 +1667,7 @@ def _capability_row(row: dict[str, Any]) -> dict[str, Any]:
             "last_success_at": payload.get("last_success_at"),
             "valid_until": payload.get("valid_until"),
             "cursor": scope.get("cursor"),
+            "baselined": row.get("baselined") is True,
             "payload": {"coverage": payload},
         }
     for key in ("wallet_id", "network", "capability", "quality"):
@@ -1647,6 +1684,7 @@ def _capability_row(row: dict[str, Any]) -> dict[str, Any]:
         "last_success_at": row.get("last_success_at"),
         "valid_until": row.get("valid_until"),
         "cursor": row.get("cursor"),
+        "baselined": row.get("baselined") is True,
         "payload": dict(payload),
     }
 

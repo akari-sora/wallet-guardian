@@ -438,6 +438,7 @@ def _execute_capability_pipeline(
     capability_rows = _storage_rows(rows, position_state, approval_state)
     incoming = _incoming(native_reads, registry)
     chain_results = _result_map(native_reads, registry)
+    _mark_established_baselines(capability_rows, baseline)
     finished_cycle = cycle.finish(
         incoming=incoming,
         results=chain_results,
@@ -1927,11 +1928,25 @@ def _baseline(wallet_id, network, capability, seen, baseline, candidates, tenant
     ))
 
 
+def _mark_established_baselines(rows: list[dict[str, Any]], baseline: list[tuple[str, str, str]]) -> None:
+    """Remember scopes whose first successful read is this round's quiet baseline."""
+    established = set(baseline)
+    for row in rows:
+        key = (row.get("wallet_id"), row.get("network"), row.get("capability"))
+        if key in established:
+            row["baselined"] = True
+
+
 def _seen(database: Database, tenant: str) -> set[tuple[str, str, str]]:
-    """A stored capability row means that scope already had its quiet baseline."""
+    """Seen means the first successful read already baselined this scope.
+
+    A capability_state row for a blocked or failed read is not enough. That
+    row stays, with its error, and the next successful read still summarizes.
+    """
     found = set()
     for row in database.capability_state_for(tenant):
-        found.add((row["wallet_id"], row["network"], row["capability"]))
+        if row.get("baselined"):
+            found.add((row["wallet_id"], row["network"], row["capability"]))
     return found
 
 
