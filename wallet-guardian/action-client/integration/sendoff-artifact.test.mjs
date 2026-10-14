@@ -1,5 +1,5 @@
 /**
- * send_off artifact checks. Requires `npm run build` for the dist scan.
+ * send_off artifact checks. Builds action-client/dist when index.html is missing.
  * The negative build uses a temp copy of src and does not deploy.
  */
 import assert from "node:assert/strict";
@@ -96,8 +96,20 @@ test("scanner does not skip walletconnect-sdk files by name", () => {
   assert.deepEqual(scanText("personal_sign"), []);
 });
 
-test("built dist application chunks have no send markers", () => {
-  assert.equal(existsSync(join(DIST, "index.html")), true, "run npm run build first");
+async function ensureDist() {
+  if (existsSync(join(DIST, "index.html"))) return;
+  const result = await run(CLIENT, "npm", ["run", "build"]);
+  if (result.status !== 0 || !existsSync(join(DIST, "index.html"))) {
+    const detail = `${result.stdout}\n${result.stderr}`.trim();
+    throw new Error(
+      `send-off artifact tests need action-client/dist/index.html. `
+      + `npm run build exited ${result.status}. From action-client, run npm install and npm run build.\n${detail}`,
+    );
+  }
+}
+
+test("built dist application chunks have no send markers", async () => {
+  await ensureDist();
   assert.deepEqual(scanSendMarkers(DIST), []);
 });
 
@@ -127,7 +139,7 @@ function chromePath() {
 }
 
 test("headless chrome on an unapproved origin calls no wallet methods", async () => {
-  assert.equal(existsSync(join(DIST, "index.html")), true, "run npm run build first");
+  await ensureDist();
   const chrome = chromePath();
   assert.ok(chrome, "needs Chrome/Chromium");
   const server = createServer((request, response) => {
