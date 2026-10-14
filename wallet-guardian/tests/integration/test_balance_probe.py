@@ -36,6 +36,8 @@ ASSETS = {BSC: "evm-native:56", BASE: "evm-native:8453"}
 HOSTS = {
     "bsc.example.invalid": BSC,
     "base.example.invalid": BASE,
+    "nodereal.example.invalid": BSC,
+    "bsc-logs.example.invalid": BSC,
 }
 
 
@@ -64,6 +66,7 @@ class Backend:
         self.fail_multicall: set[str] = set()
         self.fail_logs: set[str] = set()
         self.fail_item: set[str] = set()
+        self.refuse_logs_hosts: set[str] = set()
 
     def send(self, call: object) -> RawResponse:
         url = str(getattr(call, "url", ""))
@@ -89,6 +92,8 @@ class Backend:
         if method == "eth_getBalance":
             return _ok(hex(self.balance[network]))
         if method == "eth_getLogs":
+            if any(host in url for host in self.refuse_logs_hosts):
+                return _refuse()
             if network in self.fail_logs:
                 return _err()
             topics = params[0].get("topics") if params and isinstance(params[0], dict) else None
@@ -134,6 +139,8 @@ def test_quiet_round_stays_within_budget_and_does_not_trigger(
     logged = [call for call in backend.calls if call["method"] == "eth_getLogs"]
     assert logged
     assert all("address" not in call["params"][0] for call in logged)
+    assert all("bsc.example.invalid" not in call["url"] for call in logged if "bsc" in call["url"] or "nodereal" in call["url"])
+    assert any("nodereal.example.invalid" in call["url"] for call in logged)
     called = next(call for call in backend.calls if call["method"] == "eth_call")
     assert called["params"][0]["to"] == "0xcA11bde05977b3631167028862bE2a173976CA11"
     _assert_history_unchanged(tmp_path)
@@ -355,7 +362,9 @@ def _desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "NODEREAL_BSC_URL": "https://nodereal.example.invalid/bsc",
         "OFAC_SLS_FEED": "https://ofac.example.invalid/feed",
         "RPC_BASE_MAINNET_URL": "https://base.example.invalid/rpc",
+        "RPC_BSC_LOGS_URL": "https://bsc-logs.example.invalid/rpc",
         "RPC_BSC_MAINNET_URL": "https://bsc.example.invalid/rpc",
+        "TENDERLY_BASE_URL": "https://base.example.invalid/rpc",
     }
     accounts = tmp_path / "accounts.json"
     secret_path = tmp_path / "secrets.json"
@@ -546,6 +555,73 @@ def _ok(result: object) -> RawResponse:
 def _err() -> RawResponse:
     body = json.dumps({"error": {"code": -32000, "message": "down"}, "id": 1, "jsonrpc": "2.0"}).encode()
     return RawResponse(200, {"content-type": "application/json"}, body)
+
+
+def _refuse() -> RawResponse:
+    body = json.dumps({
+        "error": {"code": -32701, "message": "please specify an address"},
+        "id": 1,
+        "jsonrpc": "2.0",
+    }).encode()
+    return RawResponse(200, {"content-type": "application/json"}, body)
+
+
+def test_policy_refusal_moves_logs_to_the_next_dedicated_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """-32701 on the first log source is one request. The same chunk uses the next source."""
+    config = _desk(tmp_path, monkeypatch)
+    _seed(tmp_path)
+    backend = Backend()
+    backend.refuse_logs_hosts.add("nodereal.example.invalid")
+    backend.transfer_logs[BSC] = [_log(TRANSFER_TOPIC, 7)]
+    payload = _run(config, tmp_path, backend, capsys, trigger="none")
+    bsc = next(chain for chain in payload["chains"] if chain["network"] == BSC)
+    assert bsc["failure"] is None
+    assert bsc["triggered"] is True
+    assert bsc["reasons"]
+    nodereal = [
+        call for call in backend.calls
+        if call["method"] == "eth_getLogs" and "nodereal.example.invalid" in call["url"]
+    ]
+    nxt = [
+        call for call in backend.calls
+        if call["method"] == "eth_getLogs" and "bsc-logs.example.invalid" in call["url"]
+    ]
+    family = [
+        call for call in backend.calls
+        if call["method"] == "eth_getLogs" and "bsc.example.invalid" in call["url"]
+    ]
+    assert len(nodereal) == 1
+    assert len(nxt) == 2
+    assert family == []
+    _assert_no_zero_and_no_alert(tmp_path)
+
+
+def test_every_log_source_refusal_is_a_gap_not_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = _desk(tmp_path, monkeypatch)
+    _seed(tmp_path)
+    backend = Backend()
+    backend.refuse_logs_hosts.update({"nodereal.example.invalid", "bsc-logs.example.invalid"})
+    payload = _run(config, tmp_path, backend, capsys, trigger="none")
+    bsc = next(chain for chain in payload["chains"] if chain["network"] == BSC)
+    assert bsc["failure"] == "logs"
+    assert bsc["triggered"] is False
+    assert bsc["cursor_advanced"] is False
+    probe = Database(tmp_path / "probe.sqlite")
+    try:
+        assert probe.probe_cursor(TENANT, BSC) is None
+    finally:
+        probe.close()
+    assert _baseline(tmp_path, BSC)["raw_balance"] == str(ONE)
+    _assert_no_zero_and_no_alert(tmp_path)
+    family = [
+        call for call in backend.calls
+        if call["method"] == "eth_getLogs" and "bsc.example.invalid" in call["url"]
+    ]
+    assert family == []
 
 
 def _write_private(path: Path, text: str) -> None:

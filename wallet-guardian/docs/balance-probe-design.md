@@ -20,6 +20,8 @@ For each enabled EVM network that has a watched wallet and an `evm_rpc` source:
 4. `eth_getLogs` for incoming `Transfer` logs: topic0 is Transfer, topic2 is the watched addresses OR-ed. The wallet is not placed in the `address` filter.
 5. `eth_getLogs` for outgoing transfers and approvals: topic0 is Transfer, Approval, ApprovalForAll, and the Permit2 events, OR-ed, and topic1 is the watched addresses OR-ed.
 
+Log calls use the ready `evm_rpc` sources on the `history.token` route for that network. If that route has none, the probe uses `permissions.standard`. A policy refusal (`filter_requires_address` or `method_disabled`) tries the next source in that route. Any other log failure stops the chain for this round. The family balance RPC is not used as a hidden log fallback: publicnode answers BSC and OP `eth_getLogs` with JSON-RPC `-32701`. A missing log source, a refusal from every source, or a failed read is a gap. It does not become an empty log list, a zero balance, a trigger, or a cursor advance.
+
 A quiet native balance is committed with the same versioned baseline as `run-once`. The first valid observation is version 1 and does not alert. A changed raw balance is not written by the probe, so the triggered `run-once` still sees the delta. A failed read does not write zero and does not bump the version.
 
 A Transfer log, an approval-family log, or a changed raw balance records a trigger for that chain only. The same fingerprint is not recorded again when the head hash changes; the next round still reads. `--trigger run-once` then starts at most one `run-once --no-send` for outstanding triggers. `--trigger none` does not start it.

@@ -38,6 +38,7 @@ from guardian.chains.evm.multicall import (
     encode_aggregate3,
 )
 from guardian.chains.evm.permissions import APPROVAL_FOR_ALL_TOPIC, ERC20_APPROVAL_TOPIC
+from guardian.scan.window import LOG_SOURCE_REFUSALS, log_source_refusal
 from guardian.chains.evm.permits import PERMIT2_LOG_TOPICS
 from guardian.errors import ConfigError
 from guardian.network_registry import load_registry
@@ -229,15 +230,10 @@ def _probe_chain(
         return _chain_row(network, meter, wallets, failure=balance_failure or "balance", balance_source=balance_source)
     cursor = probe_db.probe_cursor(tenant, network)
     start, end = _window(cursor, number, block_hash)
-    incoming, in_failure = _logs(transport, source_id, _incoming_topics(addresses), start, end, meter)
-    if in_failure or incoming is None:
-        return _chain_row(network, meter, wallets, failure="logs", balance_source=balance_source)
-    outgoing, out_failure = _logs(transport, source_id, _outgoing_topics(addresses), start, end, meter)
-    if out_failure or outgoing is None:
-        return _chain_row(network, meter, wallets, failure="logs", balance_source=balance_source)
-    watched = {"0x" + address[2:].lower() for address in addresses}
-    log_changes = _log_changes(incoming + outgoing, watched)
-    if log_changes is None:
+    log_changes, log_failure = _probe_logs(
+        public_config, private_inputs, transport, network, addresses, start, end, meter,
+    )
+    if log_failure or log_changes is None:
         return _chain_row(network, meter, wallets, failure="logs", balance_source=balance_source)
     policy = confirmation_policy(network, entry)
     asset, decimals, symbol = _asset(entry, network)
@@ -478,6 +474,74 @@ def _balances(
     return found, None, "eth_getBalance"
 
 
+def _probe_logs(
+    public_config: Any,
+    private_inputs: Any,
+    transport: Any,
+    network: str,
+    addresses: Sequence[str],
+    start: int,
+    end: int,
+    meter: _Meter,
+) -> tuple[list[tuple[str, str]] | None, str | None]:
+    """Topic-OR logs on the dedicated log route. A failure is a gap, not an empty log list.
+
+    ``history.token`` supplies the source order. ``permissions.standard`` is used
+    only when that route has no ready source. A policy refusal tries the next
+    source. Any other read error stops. The family RPC is not a hidden fallback,
+    because public endpoints refuse topic-only ``eth_getLogs`` on BSC and OP.
+    """
+    sources = _log_sources(public_config, private_inputs, network)
+    if not sources:
+        return None, "logs"
+    watched = {"0x" + address[2:].lower() for address in addresses}
+    incoming_topics = _incoming_topics(addresses)
+    outgoing_topics = _outgoing_topics(addresses)
+    for source_id in sources:
+        incoming, failure = _logs(transport, source_id, incoming_topics, start, end, meter)
+        if failure in LOG_SOURCE_REFUSALS:
+            continue
+        if failure or incoming is None:
+            return None, "logs"
+        outgoing, failure = _logs(transport, source_id, outgoing_topics, start, end, meter)
+        if failure in LOG_SOURCE_REFUSALS:
+            continue
+        if failure or outgoing is None:
+            return None, "logs"
+        changes = _log_changes(incoming + outgoing, watched)
+        if changes is None:
+            return None, "logs"
+        return changes, None
+    return None, "logs"
+
+
+def _log_sources(public_config: Any, private_inputs: Any, network: str) -> list[str]:
+    """Ready evm_rpc ids from the log route. Disabled and unconfigured sources are skipped."""
+    document = public_config.document
+    sources = document.get("sources") if isinstance(document.get("sources"), dict) else {}
+    routing = document.get("routing") if isinstance(document.get("routing"), list) else []
+    for capability in ("history.token", "permissions.standard"):
+        ready: list[str] = []
+        for route in routing:
+            if route.get("network") != network or route.get("capability") != capability:
+                continue
+            for item in route.get("source_ids") or []:
+                if not isinstance(item, str) or item in ready:
+                    continue
+                source = sources.get(item)
+                if not isinstance(source, dict) or source.get("enabled") is not True:
+                    continue
+                if source.get("adapter") != "evm_rpc":
+                    continue
+                status = private_inputs.source_status.get(item)
+                if status is not None and status.blocked_reason:
+                    continue
+                ready.append(item)
+        if ready:
+            return ready
+    return []
+
+
 def _logs(
     transport: Any,
     source_id: str,
@@ -486,16 +550,29 @@ def _logs(
     end: int,
     meter: _Meter,
 ) -> tuple[list[Any] | None, str | None]:
-    result, failure = _call(
-        transport,
-        source_id,
-        "eth_getLogs",
-        [{"fromBlock": hex(start), "toBlock": hex(end), "topics": topics}],
-        meter,
-    )
-    if failure or not isinstance(result, list):
+    meter.http += 1
+    meter.methods += 1
+    try:
+        result = transport.request(
+            source_id,
+            evm_rpc("eth_getLogs", [{"fromBlock": hex(start), "toBlock": hex(end), "topics": topics}]),
+            priority="high",
+        )
+    except Exception as exc:
+        reason = getattr(exc, "reason", None)
+        return None, reason if isinstance(reason, str) and reason else "read_error"
+    body = getattr(result, "body", None)
+    refusal = log_source_refusal(body, str(getattr(result, "reason", "") or ""), start, end)
+    if refusal:
+        return None, refusal
+    if getattr(result, "ok", False) is not True:
+        return None, "read_error"
+    if not isinstance(body, dict) or body.get("error") is not None or "result" not in body:
+        return None, "read_error"
+    rows = body.get("result")
+    if not isinstance(rows, list):
         return None, "logs"
-    return result, None
+    return rows, None
 
 
 def _call(
