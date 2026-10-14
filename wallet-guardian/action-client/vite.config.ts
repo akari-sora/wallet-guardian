@@ -3,7 +3,11 @@ import { defineConfig, loadEnv, type Plugin } from "vite";
 import { pagesHeaders } from "./src/csp.mjs";
 import { walletConnectConfig } from "./src/wallets/walletconnect-config.mjs";
 
-const SEND_VARIANT = "off";
+// Default builds stay send_off. build:send-variant.mjs sets both variables only after
+// WG_SEND_VARIANT, WG_RELEASE_AUTH_ID, and an approved_by_user mode_a inventory entry
+// all pass. This package does not add that entry, and npm run build does not set them.
+const sendVariantBuild = process.env.WG_SEND_VARIANT === "mode_a" && process.env.WG_SEND_VARIANT_BUILD === "mode_a";
+const SEND_VARIANT = sendVariantBuild ? "mode_a" : "off";
 
 // WALLET-CONNECT-01 W-B5: dist/_headers (CSP) follows the actual build. WalletConnect endpoints are
 // only allowed when this build offers WalletConnect (both public settings present).
@@ -54,5 +58,17 @@ export default defineConfig(({ mode }) => {
       __WG_SEND_VARIANT__: JSON.stringify(SEND_VARIANT),
     },
     plugins: [pagesHeadersPlugin(wc.enabled), forbidSendModules(SEND_VARIANT)],
+    ...(sendVariantBuild
+      ? {
+          build: {
+            rollupOptions: {
+              input: {
+                main: fileURLToPath(new URL("./index.html", import.meta.url)),
+                sendVariant: fileURLToPath(new URL("./src/send/send-variant-entry.mjs", import.meta.url)),
+              },
+            },
+          },
+        }
+      : {}),
   };
 });

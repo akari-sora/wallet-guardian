@@ -1,7 +1,9 @@
 /**
- * Test-only claim request construction. The production send_off bundle must not
- * import this module. It does not broadcast: a recorder has to mark itself and
- * the caller has to pass the test-only flag. Real sending is not implemented here.
+ * Claim request construction. The production send_off bundle must not import this
+ * module. exactClaimRequest and recordNoBroadcastClaim stay test-only and do not
+ * broadcast. requestModeAClaim is the send-variant request: one policy-checked
+ * eth_sendTransaction forwarded to the connection the caller supplies. Tests pass
+ * a recorder that counts the call and does not broadcast.
  */
 import {
   applyWalletEvent,
@@ -11,6 +13,7 @@ import {
   interpretWalletReturn,
   sendAuthorizedByReread,
 } from "../mode-a.mjs";
+import { modeAClaimDecision } from "./request-policy-allow.mjs";
 import { isAddress } from "../trusted-lista.mjs";
 
 const DENIED_BATCH_METHOD = "wallet_sendCalls";
@@ -123,5 +126,26 @@ export async function guideListaModeA(input) {
   return guideReadOnly({
     ...input,
     recordClaim: recordNoBroadcastClaim(input),
+  });
+}
+
+/**
+ * Send-variant claim request. Does not use the test-only no-broadcast flag.
+ * The allow policy must accept the capability and the exact params before
+ * connection.request is called. A test recorder counts that call and does not broadcast.
+ */
+export async function requestModeAClaim(connection, preparedClaim, capability) {
+  const decision = modeAClaimDecision("eth_sendTransaction", [preparedClaim], { modeAClaim: capability });
+  if (!decision.allowed) {
+    const error = new Error(`mode A claim refused: ${decision.reason}`);
+    error.reason = decision.reason;
+    throw error;
+  }
+  if (!connection || typeof connection.request !== "function") {
+    throw new Error("wallet connection required");
+  }
+  return connection.request({
+    method: "eth_sendTransaction",
+    params: [preparedClaim],
   });
 }

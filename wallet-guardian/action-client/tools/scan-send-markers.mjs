@@ -8,7 +8,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const SEND_MARKER = /eth_sendTransaction|eth_sendRawTransaction|eth_signTransaction|wallet_sendCalls|testOnlyAllowWalletRequest|noBroadcast/g;
+export const SEND_MARKER = /eth_sendTransaction|eth_sendRawTransaction|eth_signTransaction|wallet_sendCalls|testOnlyAllowWalletRequest|noBroadcast|request-policy-allow/g;
 
 const ALLOWLIST_PATH = join(dirname(fileURLToPath(import.meta.url)), "send-marker-allowlist.json");
 
