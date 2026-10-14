@@ -24,6 +24,7 @@ import pytest
 
 from guardian.cli import main
 from guardian.configuration import file_permission_bits
+from guardian.delivery import deliver as real_deliver
 from guardian.identities import parse_address
 from guardian.legacy_capture import address_hash, capture_writer_lock, scope_identity_hash
 from guardian.legacy_state import convert_legacy_document
@@ -338,6 +339,7 @@ def test_mcm_share_s2_05_single_writer_report_only(tmp_path: Path, monkeypatch: 
     assert held_payload["error"] == "capture_locked"
     assert calls["delivery"] == 0
     assert list(runs.glob("s2lock.tmp-*")) == []
+    monkeypatch.setattr("guardian.delivery.deliver", real_deliver)
 
     published = tmp_path / "runs-read"
     before_source = source.read_bytes()
@@ -347,6 +349,10 @@ def test_mcm_share_s2_05_single_writer_report_only(tmp_path: Path, monkeypatch: 
     desk = _desk(tmp_path, monkeypatch, with_transfer=False)
     result = _shadow(desk, source, published, evidence=tmp_path / "evidence-read")
     assert result["code"] == 0
+    assert result["round"].get("sender_calls") == 0
+    assert result["round"].get("no_send") is True
+    watchdog_out = (tmp_path / "evidence-read" / "commands" / "watchdog.stdout").read_text(encoding="utf-8")
+    assert json.loads(watchdog_out)["delivery_status"] == "send_disabled"
     assert _tree(published) == before_tree
     assert source.read_bytes() == before_source
     assert source.stat().st_mtime_ns == before_ns

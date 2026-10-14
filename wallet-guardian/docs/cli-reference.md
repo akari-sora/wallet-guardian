@@ -10,11 +10,11 @@ A nested command (`config validate`, `alerts test`, `action plan`) has its own s
 
 ```text
 usage: guardian [-h]
-                {doctor,run-once,snapshot,reconcile,claims,providers,wallets,approvals,explain,coverage,replay,alerts,self-check,diagnose,actions,action,rescue,operation-coverage,workbench,config,sources,export,compare-legacy,news,legacy-capture,watchdog,monitor,egress-doctor,init,install-service}
+                {doctor,run-once,snapshot,reconcile,claims,providers,wallets,approvals,explain,coverage,replay,alerts,self-check,diagnose,actions,action,rescue,operation-coverage,workbench,config,sources,export,compare-legacy,news,legacy-capture,outbox,watchdog,monitor,egress-doctor,init,install-service}
                 ...
 
 positional arguments:
-  {doctor,run-once,snapshot,reconcile,claims,providers,wallets,approvals,explain,coverage,replay,alerts,self-check,diagnose,actions,action,rescue,operation-coverage,workbench,config,sources,export,compare-legacy,news,legacy-capture,watchdog,monitor,egress-doctor,init,install-service}
+  {doctor,run-once,snapshot,reconcile,claims,providers,wallets,approvals,explain,coverage,replay,alerts,self-check,diagnose,actions,action,rescue,operation-coverage,workbench,config,sources,export,compare-legacy,news,legacy-capture,outbox,watchdog,monitor,egress-doctor,init,install-service}
     init                write a read-only monitor profile
     install-service     print a dry-run install plan; units stay disabled
                         without --apply
@@ -576,6 +576,47 @@ options:
   --legacy-state LEGACY_STATE
   --exit-code EXIT_CODE
   --finished-at FINISHED_AT
+```
+
+## `guardian outbox`
+
+```text
+usage: guardian outbox [-h] {pending,ack} ...
+
+positional arguments:
+  {pending,ack}
+
+options:
+  -h, --help     show this help message and exit
+```
+
+## `guardian outbox pending`
+
+```text
+usage: guardian outbox pending [-h] [--db DB] [--tenant TENANT] [--json]
+                               --mcm-config MCM_CONFIG
+
+options:
+  -h, --help            show this help message and exit
+  --db DB               sqlite path
+  --tenant TENANT       local tenant scope (required when ambiguous)
+  --json                print JSON (this is always on)
+  --mcm-config MCM_CONFIG
+```
+
+## `guardian outbox ack`
+
+```text
+usage: guardian outbox ack [-h] [--db DB] [--tenant TENANT] [--json]
+                           --mcm-config MCM_CONFIG --id ID
+
+options:
+  -h, --help            show this help message and exit
+  --db DB               sqlite path
+  --tenant TENANT       local tenant scope (required when ambiguous)
+  --json                print JSON (this is always on)
+  --mcm-config MCM_CONFIG
+  --id ID
 ```
 
 ## `guardian watchdog`

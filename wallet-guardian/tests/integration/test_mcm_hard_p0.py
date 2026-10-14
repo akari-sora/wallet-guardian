@@ -186,7 +186,8 @@ def _run(
         clock=clock or (lambda: 1_700_000_000.0),
     )
     payload = json.loads(capsys.readouterr().out)
-    assert code == 0, payload
+    expected = 3 if payload.get("status") == "degraded" else 0
+    assert code == expected, payload
     blob = json.dumps(payload)
     for secret in (KEY, NODEREAL_KEY, BLOCKSCOUT_KEY, *forbidden):
         assert secret not in blob

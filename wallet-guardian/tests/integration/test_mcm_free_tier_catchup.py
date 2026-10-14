@@ -511,7 +511,8 @@ def _cli(
         sender=sender,
     )
     payload = json.loads(capsys.readouterr().out)
-    assert code == 0, payload
+    expected = 3 if payload.get("status") == "degraded" else 0
+    assert code == expected, payload
     blob = json.dumps(payload)
     assert KEY not in blob
     assert NODEREAL_KEY not in blob

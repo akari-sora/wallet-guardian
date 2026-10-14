@@ -264,8 +264,8 @@ def test_pending_alert_from_one_chain_survives_another_chain_failing(
     document = json.loads(accounts.read_text(encoding="utf-8"))
     document["accounts"][0]["networks"] = ["ethereum-mainnet", "arbitrum-one"]
     accounts.write_text(json.dumps(document) + "\n", encoding="utf-8")
-    code, _report = _run(capsys, desk)
-    assert code == 0
+    code, report = _run(capsys, desk)
+    assert code == (3 if report.get("status") == "degraded" else 0)
     desk.backend.show_material()
     import guardian.pipeline as pipeline
 
@@ -299,6 +299,6 @@ def test_pending_alert_from_one_chain_survives_another_chain_failing(
     desk.backend.token_rows = []
     desk.backend.logs = []
     code, recovered = _run(capsys, desk)
-    assert code == 0
+    assert code == (3 if recovered.get("status") == "degraded" else 0)
     assert recovered["status"] != "failed"
     assert "native_eth" in {row["payload"].get("kind") for row in _outbox(desk)}

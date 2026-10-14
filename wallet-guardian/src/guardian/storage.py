@@ -1330,6 +1330,23 @@ class Database:
                 items.extend(item for item in found if isinstance(item, dict))
         return items
 
+    def acknowledge_outbox(self, tenant_id: str, outbox_id: int) -> str:
+        """Mark one pending row acknowledged. Does not send and does not rewrite sent rows."""
+        with self.conn:
+            row = self.conn.execute(
+                "SELECT status FROM outbox WHERE id=? AND tenant_id=?",
+                (outbox_id, tenant_id),
+            ).fetchone()
+            if row is None:
+                return "missing"
+            if row["status"] != "pending":
+                return str(row["status"])
+            self.conn.execute(
+                "UPDATE outbox SET status='acknowledged' WHERE id=? AND tenant_id=? AND status='pending'",
+                (outbox_id, tenant_id),
+            )
+        return "acknowledged"
+
     def outbox_for(self, tenant_id: str) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             "SELECT id, status, payload FROM outbox WHERE tenant_id=? ORDER BY id",

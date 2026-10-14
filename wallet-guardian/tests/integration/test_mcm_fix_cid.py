@@ -228,7 +228,7 @@ def test_mcm_fix_cid_02_persistent_429_names_rate_limited_and_stays_bounded(
     sleeper = Sleeper(clock)
     backend.sleeper = sleeper
     code, report = _run(capsys, desk, clock=lambda: clock["now"])
-    assert code == 0, report
+    assert code == (3 if report.get("status") == "degraded" else 0), report
     eth_calls = _chain_rows(backend, ETH_HOST)
     assert len(eth_calls) == 2
     assert sleeper.calls == [1.0]
@@ -260,7 +260,7 @@ def test_mcm_fix_cid_02_persistent_429_names_rate_limited_and_stays_bounded(
     late_sleeper = Sleeper(late_clock)
     late_backend.sleeper = late_sleeper
     late_code, late_report = _run(capsys, late, clock=lambda: late_clock["now"])
-    assert late_code == 0, late_report
+    assert late_code == (3 if late_report.get("status") == "degraded" else 0), late_report
     assert late_sleeper.calls == []
     assert len(_chain_rows(late_backend, ETH_HOST)) == 1
     late_native = _coverage(late_report, WALLET_A, ETH, "balances.native")

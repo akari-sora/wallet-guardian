@@ -118,6 +118,7 @@ Outbox kinds the policy marks as alerts:
 | `revocation` | Decreased allowance or a revocation. Informational |
 | `exposure`, `exposure_unknown`, `exposure_update` | A news incident linked to a watched position or approval. `loss_alert` is false |
 | `monitor_blind`, `monitor_recovered` | From `guardian watchdog`, one row per blind episode |
+| `monitor_new_gap` | A required key newly `error` or `blocked` during an episode that already knew the older gaps |
 
 `below_threshold` is a decision that is not written. The older Lista path can also write `claimable` and `claim_missing`. Those are claim observations, not a broadcast.
 
@@ -125,7 +126,9 @@ A repeated `dedup_key` does not insert a second outbox row.
 
 ## Outbox
 
-New alerts are inserted into the `outbox` table of `monitor.sqlite` with status `pending`. There is no `guardian outbox` command. `run-once` reports `outbox_written` (rows newly inserted after dedup) and `sent`. With `--no-send`, `sent` is 0 even when rows were written. Default delivery mode is `outbox_only`. An opt-in Telegram sender exists in the package and stays off until you configure it; its canary is `NOT_RUN`. See [notifications.md](notifications.md).
+New alerts are inserted into the `outbox` table of `monitor.sqlite` with status `pending`. `guardian outbox pending --mcm-config <monitor.json>` lists those rows (`id`, `kind`, `dedup_key`, `network`, `identity`) and does not print a wallet address. `guardian outbox ack --id <id>` marks one pending row `acknowledged`. That is a relay receipt, not a send. A sent row is left sent. `run-once` reports `outbox_written` (rows newly inserted after dedup) and `sent`. With `--no-send`, `sent` is 0 even when rows were written. A `degraded` run exits 3. `failed` stays 1 and a misconfigured delivery exits 2. `guardian watchdog` calls the same delivery path as `run-once`. With the default `outbox_only` that leaves rows pending. A configured sender can send them, including when `run-once` itself is not running. Default delivery mode is `outbox_only`. An opt-in Telegram sender exists in the package and stays off until you configure it; its canary is `NOT_RUN`. See [notifications.md](notifications.md).
+
+A required capability that is already `error` or `blocked` stays a known gap. Watchdog emits `monitor_blind` when that set first gets worse, and `monitor_new_gap` if a further required key gets worse during the episode. The same known gap does not start a new episode. `monitor_recovered` is emitted when the episode's gaps are no longer worse.
 
 An empty outbox is not all clear. It means no new alert row was committed. Coverage can still be `partial`, `credential_missing`, `unknown`, or `error`. A movement under the threshold does not become a row. A repeated event is deduped. Unread history is still unread.
 

@@ -181,7 +181,7 @@ def test_mcm_share_s5_01_no_key_init(tmp_path: Path, monkeypatch: pytest.MonkeyP
         ["run-once", "--mcm-config", str(monitor_path), "--no-send"],
         backend=backend,
     )
-    assert code == 0, report
+    assert code == (3 if report.get("status") == "degraded" else 0), report
     assert report["status"] in {"ok", "degraded"}
     assert report["status"] != "error"
     assert report["sent"] == 0

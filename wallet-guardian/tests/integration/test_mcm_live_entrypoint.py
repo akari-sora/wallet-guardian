@@ -495,7 +495,8 @@ def _three_rounds(desk: _Desk, capsys: pytest.CaptureFixture[str]) -> tuple[dict
 def _cli(capsys: pytest.CaptureFixture[str], desk: _Desk, argv: list[str], clock: _Clock | None = None) -> dict:
     code = main(argv, backend=desk.backend, clock=None if clock is None else clock)
     payload = json.loads(capsys.readouterr().out)
-    assert code == 0, payload
+    expected = 3 if payload.get("status") == "degraded" else 0
+    assert code == expected, payload
     assert payload.get("status") != "error"
     blob = json.dumps(payload)
     assert KEY not in blob
