@@ -11,8 +11,10 @@ import { randomHex, sha256Hex } from "./http.mjs";
 import { acceptLoginChallenge } from "../siwe-gate.mjs";
 import { checksumAddress } from "./siwe.mjs";
 import { createPrimaryDatabase, privateTaskSchema } from "./test-db.mjs";
+import { productionViewOrigin } from "../view-origin.mjs";
 
-const ORIGIN = "https://wallet-guardian-action-client.pages.dev";
+const ORIGIN = productionViewOrigin();
+const HOST = new URL(ORIGIN).host;
 const schema = privateTaskSchema();
 const sample = JSON.parse(readFileSync(new URL("../../public/sample-task.json", import.meta.url), "utf8"));
 const staticSample = readFileSync(new URL("../../public/sample-task.json", import.meta.url), "utf8");
@@ -52,7 +54,7 @@ function openEnv(extra = {}) {
         return database.withSession(mode);
       },
     },
-    AUTH_DOMAIN: "wallet-guardian-action-client.pages.dev",
+    AUTH_DOMAIN: HOST,
     AUTH_URI: ORIGIN,
     AUTH_CHAIN_ID: "56",
     ...extra,
@@ -496,7 +498,7 @@ test("function errors and unknown api paths are no-store json, never static task
     request: new Request(`${ORIGIN}/api/session`),
     env: {
       DB: { withSession() { throw new Error("primary down"); } },
-      AUTH_DOMAIN: "wallet-guardian-action-client.pages.dev",
+      AUTH_DOMAIN: HOST,
       AUTH_URI: ORIGIN,
       AUTH_CHAIN_ID: "56",
     },
@@ -615,7 +617,7 @@ test("expired challenges are removed before the global quota is applied", async 
     randomHex(32),
     randomHex(32),
     `0x${"11".repeat(20)}`,
-    "wallet-guardian-action-client.pages.dev",
+    HOST,
     ORIGIN,
     56,
     "expired",
@@ -640,7 +642,7 @@ test("expired challenges are removed before the global quota is applied", async 
 });
 
 test("preview without D1 or AUTH vars answers private_api_unavailable as no-store json", async () => {
-  for (const env of [{}, { AUTH_DOMAIN: "wallet-guardian-action-client.pages.dev", AUTH_URI: ORIGIN, AUTH_CHAIN_ID: "56" }]) {
+  for (const env of [{}, { AUTH_DOMAIN: HOST, AUTH_URI: ORIGIN, AUTH_CHAIN_ID: "56" }]) {
     for (const path of ["/api/session", "/api/tasks/ref_" + "0".repeat(32)]) {
       const response = await onRequest({ request: new Request(`${ORIGIN}${path}`), env });
       assert.equal(response.status, 503);

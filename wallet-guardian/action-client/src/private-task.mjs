@@ -9,6 +9,16 @@ export function parsePrivateTaskRef(pathname) {
   return match[1];
 }
 
+export const PRIVATE_TASK_FORMAT_ERROR =
+  "任務參考碼格式不對。頁面不會向其他路徑索取資料，連結也不是執行授權。";
+
+/** A /t/ path that is not exactly one lowercase ref is a format error, not a fetch. */
+export function privateTaskPathFormatError(pathname) {
+  if (parsePrivateTaskRef(pathname)) return null;
+  if (typeof pathname !== "string" || !pathname.startsWith("/t/")) return null;
+  return PRIVATE_TASK_FORMAT_ERROR;
+}
+
 /** Task JSON, including preflight_ok, is not send authority. A chain re-read is not send authority either. */
 export function privateTaskSendAllowed(task, mainnetSend = false) {
   const decision = clientConfirmDecision({

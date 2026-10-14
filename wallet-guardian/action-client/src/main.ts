@@ -19,7 +19,7 @@ import { emptyRereadView, REASON_TEXT, reverifyListaClaim, settleReread, statusL
 import { createModeAFlow, guideListaModeA, outcomeAfterReread, OUTCOME_TEXT, POISON_NOTE } from "./mode-a.mjs";
 import { validateLoginChallenge } from "./login-challenge.mjs";
 import { assertInertPayload, assertTaskRef, boundedJson, units, validatePlan } from "./plan-validation.mjs";
-import { parsePrivateTaskRef, privateTaskSendAllowed, readBoundedJson } from "./private-task.mjs";
+import { parsePrivateTaskRef, privateTaskPathFormatError, privateTaskSendAllowed, readBoundedJson } from "./private-task.mjs";
 import { acceptLoginChallenge } from "./siwe-gate.mjs";
 import { fetchTrustedRpc, TRUSTED_LISTA } from "./trusted-lista.mjs";
 import { createAbandonSignal, encodePersonalSignMessage, guardedRequest, signEncodingFor } from "./wallets/injected.mjs";
@@ -1688,8 +1688,9 @@ function inspectLocation(): void {
     void openPrivateTask(pathRef);
     return;
   }
-  if (window.location.pathname.startsWith("/t/")) {
-    renderError("任務參考碼格式不對。頁面不會向其他路徑索取資料，連結也不是執行授權。");
+  const formatError = privateTaskPathFormatError(window.location.pathname);
+  if (formatError) {
+    renderError(formatError);
     return;
   }
   const params = new URLSearchParams(window.location.search);

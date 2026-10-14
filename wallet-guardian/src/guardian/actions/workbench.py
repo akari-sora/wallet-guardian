@@ -73,16 +73,20 @@ def assert_opaque_ref(ref: str) -> str:
     return ref
 
 
-def issue_task_link(ref: str, origin: str | None) -> dict[str, Any]:
-    """A link never authorizes execution and is not issued without a fixed HTTPS origin."""
+def issue_task_link(ref: str, origin: str | None = None) -> dict[str, Any]:
+    """Reject a caller-supplied origin. This function does not issue a view link.
+
+    Approved view links come only from ``issue_private_task_link``, which reads the
+    versioned policy. A caller cannot pass an origin into that issuer, including an
+    arbitrary https URL. ``fixed_https_origin`` stays false.
+    """
     assert_opaque_ref(ref)
-    if origin and ("0x" in origin or "amount=" in origin or "address=" in origin):
+    if isinstance(origin, str) and ("0x" in origin or "amount=" in origin or "address=" in origin):
         raise SecurityError("task link must not carry private wallet state")
-    fixed = bool(origin) and origin.startswith("https://") and "localhost" not in origin and "127.0.0.1" not in origin
     return {
-        "issued": False if not fixed else True,
-        "reason": None if fixed else "no_fixed_https_origin",
-        "url": f"{origin.rstrip('/')}/t/{ref}" if fixed else None,
+        "issued": False,
+        "reason": "caller_origin_rejected" if origin else "no_fixed_https_origin",
+        "url": None,
         "ref": ref,
         "execution_authorized": False,
         "contains_private_state": False,
@@ -455,7 +459,8 @@ def apply_task_event(task: dict[str, Any], event: str, **details: Any) -> dict[s
     raise PolicyError("unknown task event")
 
 
-def build_lista_task(plan: dict[str, Any], *, ref: str, origin: str | None = None) -> dict[str, Any]:
+def build_lista_task(plan: dict[str, Any], *, ref: str) -> dict[str, Any]:
+    """Build a typed Lista task. The view link comes from the origin policy, not the caller."""
     mode = choose_mode(
         capability="unknown",
         same_chain=True,
@@ -473,7 +478,7 @@ def build_lista_task(plan: dict[str, Any], *, ref: str, origin: str | None = Non
         "mode_reason": mode["reason"],
         "wallet_request_allowed": False,
         "steps": lista_claim_steps(),
-        "link": issue_task_link(ref, origin),
+        "link": issue_private_task_link(ref),
         "plan": plan,
         "evidence": evidence_status(),
         "requests_7702": False,

@@ -121,7 +121,7 @@ export async function realBackend() {
   const database = createPrimaryDatabase(schema);
   const env = {
     DB: { prepare() { throw new Error('direct d1 prepare'); }, withSession: (mode) => database.withSession(mode) },
-    AUTH_DOMAIN: 'wallet-guardian-action-client.pages.dev',
+    AUTH_DOMAIN: new URL(ORIGIN).host,
     AUTH_URI: ORIGIN,
     AUTH_CHAIN_ID: '56',
   };

@@ -21,8 +21,9 @@ import { REFUSED_METHODS } from '../src/wallets/request-policy.mjs';
 import { buildSiweMessage, checksumAddress } from '../src/siwe-message.mjs';
 import { LOGIN_DOMAIN, LOGIN_URI } from '../src/siwe-gate.mjs';
 import { recoverAddress } from '../src/server/siwe.mjs';
+import { productionViewOrigin } from '../src/view-origin.mjs';
 
-const ORIGIN = 'https://wallet-guardian-action-client.pages.dev';
+const ORIGIN = productionViewOrigin();
 const RPC = 'https://bsc-dataseed.bnbchain.org';
 const loadSdk = () => import('../src/wallets/walletconnect-sdk.mjs');
 const cleanups = [];

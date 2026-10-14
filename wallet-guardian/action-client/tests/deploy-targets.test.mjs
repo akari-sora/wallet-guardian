@@ -84,7 +84,7 @@ test("a structurally valid send_off record with the approved origin passes", () 
 });
 
 test("dev origin is approved only outside production builds", () => {
-  assert.equal(policyOrigins().includes("https://wallet-guardian-action-client.pages.dev"), true);
+  for (const entry of origins.deployments) assert.equal(policyOrigins().includes(entry.origin), true);
   assert.equal(originIsApproved("http://127.0.0.1:43127", { production: false }), true);
   assert.equal(originIsApproved("http://127.0.0.1:43127", { production: true }), false);
   assert.equal(originIsApproved("https://evil.example", { production: false }), false);
