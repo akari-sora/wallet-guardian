@@ -20,6 +20,8 @@ For each enabled EVM network that has a watched wallet and an `evm_rpc` source:
 4. `eth_getLogs` for incoming `Transfer` logs: topic0 is Transfer, topic2 is the watched addresses OR-ed. The wallet is not placed in the `address` filter.
 5. `eth_getLogs` for outgoing transfers and approvals: topic0 is Transfer, Approval, ApprovalForAll, and the Permit2 events, OR-ed, and topic1 is the watched addresses OR-ed.
 
+Log calls use the ready `evm_rpc` sources on the `history.token` route for that network. If that route has none, the probe uses `permissions.standard`. A policy refusal (`filter_requires_address` or `method_disabled`) tries the next source in that route. Any other log failure stops the chain for this round. The family balance RPC is not used as a hidden log fallback: publicnode answers BSC and OP `eth_getLogs` with JSON-RPC `-32701`. A missing log source, a refusal from every source, or a failed read is a gap. It does not become an empty log list, a zero balance, a trigger, or a cursor advance.
+
 A quiet native balance is committed with the same versioned baseline as `run-once`. The first valid observation is version 1 and does not alert. A changed raw balance is not written by the probe, so the triggered `run-once` still sees the delta. A failed read does not write zero and does not bump the version.
 
 A Transfer log, an approval-family log, or a changed raw balance records a trigger for that chain only. The same fingerprint is not recorded again when the head hash changes; the next round still reads. `--trigger run-once` then starts at most one `run-once --no-send` for outstanding triggers. `--trigger none` does not start it.
@@ -37,6 +39,8 @@ One observation is fetched outside the database transaction. The commit then tak
 This is an engineering estimate, not a provider quota and not a promise. The nonce batch from the earlier design is not part of this command.
 
 A quiet Multicall3 round is 5 HTTP calls and 5 methods per chain: head, `eth_getCode`, one `aggregate3`, and two `eth_getLogs`. That is within 5 HTTP and within `4 + N` methods for one or more wallets. The method count does not grow with N on this path. An empty-code fallback adds one `eth_getBalance` per wallet instead of the single `eth_call`.
+
+A policy refusal of the first log source is outside that quiet ceiling. The refused source is asked once for the chunk, then both log directions move to the next source: one refused `eth_getLogs` plus the two queries on the next source, so the round is 6 HTTP (3 family calls plus 3 log calls). The ≤5 figure is the quiet-success ceiling. Capping the refusal path at 5 would drop one log direction or skip the failover that makes detection possible on publicnode BSC and OP, so the fall-through is not capped. A second refusal, or any non-policy failure, stops the chain: gap, no empty logs, no zero, no trigger, no cursor advance. Head, code, and balance stay on the family source and are not repeated for the log failover.
 
 Count the existing three-hour `run-once` monitor as well. Every endpoint that shares the provider account shares the budget. This command does not add a scheduler and does not change the monitor interval.
 
