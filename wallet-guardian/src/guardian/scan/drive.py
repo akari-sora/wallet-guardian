@@ -223,6 +223,7 @@ def read_approvals(
                 grouped[owners[0].lower()].append(log)
         new_events: list[Any] = []
         before = len(scan.events)
+        before_candidates = len(scan.candidates)
         for owner in owners:
             wid = wallet_for.get(owner.lower(), wallet_id)
             # Allowance and balance stay on the family RPC. Only the log span moves.
@@ -254,7 +255,12 @@ def read_approvals(
                 ):
                     cursors.extend(_advancing_cursors(scan, [wid], capability, end))
         scan.database.commit_capability_cycle(
-            scan.tenant, events=scan.events[before:], capability_rows=[], cursors=cursors, alerts=[],
+            scan.tenant,
+            events=scan.events[before:],
+            capability_rows=[],
+            cursors=cursors,
+            alerts=[],
+            pending=_pending_snapshots(scan.candidates[before_candidates:]),
         )
         if advance["on"]:
             leaves.append((start, end))
@@ -762,10 +768,16 @@ def _walk_pages(scan, chunks, origin, wallet_id, capability, source_id, native, 
             _commit_leaf(scan, built, capability, end, [wallet_id])
         else:
             before = len(scan.events)
+            before_candidates = len(scan.candidates)
             scan.emit(built, scan.candidates, scan.events, scan.seen_transfers, scan.tenant, scan.chain_id, scan.started, scan.head, source_id)
-            if scan.events[before:]:
+            if scan.events[before:] or scan.candidates[before_candidates:]:
                 scan.database.commit_capability_cycle(
-                    scan.tenant, events=scan.events[before:], capability_rows=[], cursors=[], alerts=[],
+                    scan.tenant,
+                    events=scan.events[before:],
+                    capability_rows=[],
+                    cursors=[],
+                    alerts=[],
+                    pending=_pending_snapshots(scan.candidates[before_candidates:]),
                 )
         leaves.append((start, end))
     if cursor:
@@ -1015,10 +1027,16 @@ def _window(category, origin, target, source_id, complete, checkpoint, gaps: tup
 
 def _commit_leaf(scan, rows, capability, end, wallet_ids) -> None:
     before = len(scan.events)
+    before_candidates = len(scan.candidates)
     scan.emit(rows, scan.candidates, scan.events, scan.seen_transfers, scan.tenant, scan.chain_id, scan.started, scan.head, scan.source_id)
     cursors = _advancing_cursors(scan, wallet_ids, capability, end)
     scan.database.commit_capability_cycle(
-        scan.tenant, events=scan.events[before:], capability_rows=[], cursors=cursors, alerts=[],
+        scan.tenant,
+        events=scan.events[before:],
+        capability_rows=[],
+        cursors=cursors,
+        alerts=[],
+        pending=_pending_snapshots(scan.candidates[before_candidates:]),
     )
 
 
@@ -1504,15 +1522,28 @@ def _flush_deferred_token(scan) -> None:
 
 def _commit_events_only(scan, rows) -> None:
     before = len(scan.events)
+    before_candidates = len(scan.candidates)
     scan.emit(
         rows, scan.candidates, scan.events, scan.seen_transfers, scan.tenant, scan.chain_id,
         scan.started, scan.head, scan.source_id,
     )
-    if not scan.events[before:]:
+    pending = _pending_snapshots(scan.candidates[before_candidates:])
+    if not scan.events[before:] and not pending:
         return
     scan.database.commit_capability_cycle(
-        scan.tenant, events=scan.events[before:], capability_rows=[], cursors=[], alerts=[],
+        scan.tenant,
+        events=scan.events[before:],
+        capability_rows=[],
+        cursors=[],
+        alerts=[],
+        pending=pending,
     )
+
+
+def _pending_snapshots(candidates) -> list[dict[str, Any]]:
+    from guardian.pending_alerts import snapshots_for
+
+    return snapshots_for(list(candidates))
 
 
 def _log_transport(scan):

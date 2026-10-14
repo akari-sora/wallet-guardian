@@ -842,7 +842,7 @@ def test_bal_06_atomic_concurrent_and_no_sender(tmp_path: Path, monkeypatch: pyt
     race_backend = ScriptBackend()
     _run(race_config, race_backend, capsys, no_send=True, sender=Sink())
     race_backend.at(30, NINE)
-    race_backend.barrier = threading.Barrier(2)
+    codes: list[int] = []
     errors: list[BaseException] = []
 
     def _once() -> None:
@@ -853,8 +853,7 @@ def test_bal_06_atomic_concurrent_and_no_sender(tmp_path: Path, monkeypatch: pyt
                 sender=Sink(),
                 clock=lambda: CLOCK,
             )
-            if code != 0:
-                errors.append(RuntimeError(f"exit {code}"))
+            codes.append(code)
         except BaseException as exc:  # noqa: BLE001 - the test records the thread failure
             errors.append(exc)
 
@@ -866,6 +865,7 @@ def test_bal_06_atomic_concurrent_and_no_sender(tmp_path: Path, monkeypatch: pyt
     second.join(30)
     assert not errors
     assert not first.is_alive() and not second.is_alive()
+    assert sorted(codes) == [0, 2]
     final = _baseline(race)
     assert final is not None
     assert final["block_number"] == 30

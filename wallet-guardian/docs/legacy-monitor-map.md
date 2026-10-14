@@ -98,6 +98,7 @@
 - `explanation_request_evidence`
 - `explanation_failures`
 - `mcm_schema_migrations`
+- `pending_alert_candidates`
 - `wallet_identities`
 - `wallet_label_aliases`
 - `legacy_imports`
@@ -105,7 +106,7 @@
 
 W1 另外建立上面五張表。`PRAGMA user_version` 仍是 1，所以舊程式還能開這個庫。遷移檔在 `migrations/monitor/`，套用記錄在 `mcm_schema_migrations`（含 sha256）。重開不會再套用，已套用的檔案若 sha256 變了就拒絕。`run-once` 不寫這些表。`wallet_identities` 以 `wallet_id` 為身份；標籤改名會把舊標籤留在 `wallet_label_aliases`，不改 `wallet_id`。
 
-W3 建立 `chain_events`、`capability_state` 與 `capability_cursors`。`PRAGMA user_version` 仍是 1。`run-once` 不寫這三張表。事件、能力狀態、游標與 outbox 在同一個交易裡提交。失敗的讀取不會把舊數量改成 0。
+W3 建立 `chain_events`、`capability_state` 與 `capability_cursors`。`PRAGMA user_version` 仍是 1。`run-once` 不寫這三張表。事件、能力狀態、游標與 outbox 在同一個交易裡提交。失敗的讀取不會把舊數量改成 0。葉提交若先寫了事件與游標、整輪告警還沒提交，候選留在 `pending_alert_candidates`。下一輪重判這些列；判定與刪除在同一筆交易。讀取失敗不會寫成 0，也不會把該列標成完成。
 
 W9 建立 `delivery_leases` 與 `delivery_attempts`。`PRAGMA user_version` 仍是 1。舊的 `run-once` 不寫這兩張表。
 

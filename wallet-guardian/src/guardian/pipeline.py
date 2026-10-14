@@ -32,6 +32,8 @@ from guardian.sources.key_guide import credential_hint, hint_for_source
 from guardian.delivery import CANARY_STATUS, deliver, load_handoff
 from guardian.events import ChainEvent
 from guardian.errors import GuardianError, SecurityError
+from guardian.pending_alerts import candidate_from_snapshot
+from guardian.run_lock import run_once_guard
 from guardian.monitoring import CapabilityCycle
 from guardian.network_registry import load_registry
 from guardian.news.exposure import (
@@ -177,6 +179,45 @@ class RunReport:
 
 
 def run_capability_pipeline(
+    public_config: PublicConfig,
+    accounts: AccountsDocument,
+    private_inputs: PrivateInputs,
+    database: Database,
+    *,
+    backend: Any,
+    clock: Clock,
+    no_send: bool = True,
+    sender: Any = None,
+    news_input: bytes | None = None,
+    price_input: bytes | None = None,
+    notification_backend: Any = None,
+    notification_resolve: Any = None,
+    report_ready: Callable[[dict[str, Any]], None] | None = None,
+) -> RunReport:
+    """Read configured wallets and commit one capability cycle.
+
+    Overlapping runs on the same state file are refused. The refused run does
+    not move a cursor.
+    """
+    with run_once_guard(database):
+        return _execute_capability_pipeline(
+            public_config,
+            accounts,
+            private_inputs,
+            database,
+            backend=backend,
+            clock=clock,
+            no_send=no_send,
+            sender=sender,
+            news_input=news_input,
+            price_input=price_input,
+            notification_backend=notification_backend,
+            notification_resolve=notification_resolve,
+            report_ready=report_ready,
+        )
+
+
+def _execute_capability_pipeline(
     public_config: PublicConfig,
     accounts: AccountsDocument,
     private_inputs: PrivateInputs,
@@ -341,6 +382,7 @@ def run_capability_pipeline(
         _fill_gaps(public_config, private_inputs, catalog, account.wallet_id, network, observations, transport)
     from guardian.balances.reconcile import reconcile_native, refresh_balance_decisions, stamp_native_quotes
 
+    _replay_pending_candidates(database, tenant, candidates)
     stamp_native_quotes(candidates, balance_prime.quotes, balance_prime.decimals)
     reconcile_native(database, tenant, candidates)
     balance_prime.decisions = refresh_balance_decisions(database, tenant, balance_prime.decisions)
@@ -402,6 +444,7 @@ def run_capability_pipeline(
         capability_rows=capability_rows,
         cursors=cursors,
         alerts=alerts,
+        settle_identities=_judged_identities(candidates),
     )
     _queue_explained_alerts(database, tenant, alerts, account_by_wallet)
     emitted = finished_cycle.get("notification_decision", [])
@@ -661,6 +704,31 @@ def _resolve(host: str) -> list[str]:
     from guardian.sources.resolver import HostnameResolver, load_resolver_settings
 
     return HostnameResolver(load_resolver_settings(None, os.environ)).resolve(name)
+
+
+def _replay_pending_candidates(database: Database, tenant: str, candidates: list[Candidate]) -> None:
+    """Judge leaf candidates the previous round stored and did not alert."""
+    known = {item.identity for item in candidates}
+    for payload in database.list_pending_alert_candidates(tenant):
+        candidate = candidate_from_snapshot(payload)
+        if candidate.tenant_id != tenant:
+            raise GuardianError("pending alert candidate tenant")
+        if candidate.identity in known:
+            continue
+        candidates.append(candidate)
+        known.add(candidate.identity)
+
+
+def _judged_identities(candidates: list[Candidate]) -> list[str]:
+    """Identities this round's policy saw. Baseline placeholders are not pending rows."""
+    found = []
+    seen = set()
+    for item in candidates:
+        if item.kind == "baseline" or not item.identity or item.identity in seen:
+            continue
+        seen.add(item.identity)
+        found.append(item.identity)
+    return found
 
 
 def _price_quotes(price_input: bytes | None) -> tuple[CallerQuote, ...]:
