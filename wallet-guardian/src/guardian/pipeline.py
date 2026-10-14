@@ -44,7 +44,12 @@ from guardian.news.exposure import (
     link_exposure,
     load_caller_incidents,
 )
-from guardian.news.fetch import FetchReport, fetch_allowlisted_news, news_state_row
+from guardian.news.fetch import (
+    DEFAULT_NEWS_DEADLINE_SECONDS,
+    FetchReport,
+    fetch_allowlisted_news,
+    news_state_row,
+)
 from guardian.protocols.kinza_cache import KinzaMetadataCache
 from guardian.protocols.models import unknown_position
 from guardian.protocols.registry import PLUGIN_REGISTRY
@@ -117,6 +122,8 @@ _CANON_NEWS = {
     "solana_stake": "solana",
     "uxlink": "uxlink",
 }
+_NEWS_FETCH_FAILED = "news_fetch_failed"
+_NEWS_POSTPROCESS_FAILED = "news_postprocess_failed"
 
 
 @dataclass
@@ -299,11 +306,9 @@ def _execute_capability_pipeline(
     news_reason = news_gap or "news_not_supplied"
     if news_input is not None and not news_gap:
         news_book, news_reason = load_caller_incidents(news_input)
+    # News GETs run after the chain commit. A slow feed must not spend the
+    # on-chain deadline, and a news exception must not roll the chain back.
     fetched = None
-    if _news_fetch_enabled(public_config):
-        fetched = fetch_allowlisted_news(
-            database, tenant, backend, resolve=_resolve, now=started, clock=clock,
-        )
     quotes, parsed_price_gap = _price_quotes(price_input)
     if price_gap:
         quotes = ()
@@ -414,11 +419,6 @@ def _execute_capability_pipeline(
     sanction_alerts = _apply_sanctions(
         public_config, transport, catalog, enabled, counterparties, observations, started, tenant,
     )
-    if fetched is not None:
-        _apply_fetched_coverage(
-            observations, enabled, fetched, public_config, position_rows, approval_state,
-            news_input is not None, news_reason,
-        )
     rows = build_coverage(enabled_pairs(enabled), observations, catalog, registry, started)
     required = _required_map(enabled, rows, observations, position_summaries, public_config, private_inputs, registry)
     decisions = policy.apply(candidates, baseline_scopes=baseline)
@@ -432,39 +432,15 @@ def _execute_capability_pipeline(
         if labels:
             payload["labels"] = labels
         alerts.append(payload)
-    if fetched is not None or news_book is not None:
-        active_approvals = _active_from_state(approval_state, enabled)
-        wallets = _wallet_exposures(position_rows, active_approvals)
-        if fetched is not None:
-            # Only incidents that are new or revised in this fetch can notify; a
-            # feed's first fetch is a quiet baseline apart from recent items.
-            fresh = [item for item in fetched.book.incidents if item.incident_id in fetched.linkable]
-            for notice in link_exposure(fresh, wallets):
-                alerts.append(_with_title(
-                    _fetched_alert(tenant, notice, position_rows, active_approvals, fetched),
-                    fetched.book,
-                    notice,
-                ))
-        if news_book is not None:
-            for notice in link_exposure(news_book.incidents, wallets):
-                alerts.append(_with_title(
-                    exposure_alert(tenant, notice, _notice_network(notice.wallet_id, position_rows, active_approvals)),
-                    news_book,
-                    notice,
-                ))
     alerts.extend(sanction_alerts)
     cursors = _merge_cursors(observations, explicit_cursors, held_cursors)
     cycle = CapabilityCycle(database, tenant)
     capability_rows = _storage_rows(rows, position_state, approval_state)
-    news_health = _news_health(fetched)
-    if fetched is not None:
-        notes = untrusted_notes()
-        if notes:
-            fetched.state["untrusted_text"] = notes
-        capability_rows.append(news_state_row(fetched.state, started))
+    incoming = _incoming(native_reads, registry)
+    chain_results = _result_map(native_reads, registry)
     finished_cycle = cycle.finish(
-        incoming=_incoming(native_reads, registry),
-        results=_result_map(native_reads, registry),
+        incoming=incoming,
+        results=chain_results,
         events=events,
         capability_rows=capability_rows,
         cursors=cursors,
@@ -472,7 +448,57 @@ def _execute_capability_pipeline(
         settle_identities=_judged_identities(candidates),
     )
     _queue_explained_alerts(database, tenant, alerts, account_by_wallet)
-    emitted = finished_cycle.get("notification_decision", [])
+    emitted = list(finished_cycle.get("notification_decision") or [])
+    fetched, news_failure, news_alerts = _collect_news_after_chain(
+        public_config=public_config,
+        database=database,
+        tenant=tenant,
+        backend=backend,
+        clock=clock,
+        started=started,
+        enabled=enabled,
+        observations=observations,
+        news_book=news_book,
+        news_supplied=news_input is not None,
+        news_reason=news_reason,
+        position_rows=position_rows,
+        approval_state=approval_state,
+    )
+    if news_failure is not None or fetched is not None:
+        rows = build_coverage(enabled_pairs(enabled), observations, catalog, registry, started)
+    news_health = _news_health_rows(fetched, news_failure)
+    try:
+        news_emitted = _commit_news_followup(
+            cycle,
+            incoming=incoming,
+            results=chain_results,
+            coverage_rows=rows,
+            news_alerts=news_alerts,
+            fetched=fetched,
+            started=started,
+            rewrite_news_coverage=news_failure is not None or fetched is not None,
+        )
+    except Exception:
+        news_failure = news_failure or _NEWS_POSTPROCESS_FAILED
+        gap = _news_failure_observation(news_failure)
+        for account, network in enabled:
+            observations[(account.wallet_id, network, "exposure_news")] = gap
+        rows = build_coverage(enabled_pairs(enabled), observations, catalog, registry, started)
+        news_health = _news_health_rows(fetched, news_failure)
+        news_emitted = []
+        try:
+            _commit_news_followup(
+                cycle,
+                incoming=incoming,
+                results=chain_results,
+                coverage_rows=rows,
+                news_alerts=[],
+                fetched=None,
+                started=started,
+                rewrite_news_coverage=True,
+            )
+        except Exception:
+            news_emitted = []
     finished = _iso(clock())
     status = "ok"
     if any(value in {"error", "blocked"} for value in required.values()):
@@ -528,7 +554,7 @@ def _execute_capability_pipeline(
         status=status,
         coverage=rows,
         decisions=[item.as_dict() for item in decisions if item.alert or item.valuation_unknown] + balance_decisions,
-        outbox_written=len(emitted) + balance_prime.outbox_written,
+        outbox_written=len(emitted) + len(news_emitted) + balance_prime.outbox_written,
         sent=0 if no_send else delivery.sent,
         valuation_unknown=unknown,
         positions=position_summaries,
@@ -803,6 +829,174 @@ def _news_health(fetched: FetchReport | None) -> list[dict[str, Any]]:
     return build_feed_health(load_news_sources(), {}, None)
 
 
+def _news_health_rows(fetched: FetchReport | None, failure: str | None) -> list[dict[str, Any]]:
+    """Copy feed health. A news exception adds ``reason`` without changing feed fields."""
+    try:
+        rows = [dict(row) for row in _news_health(fetched)]
+    except Exception:
+        rows = []
+    if not failure:
+        return rows
+    if not rows:
+        rows = [{
+            "feed_type": "none",
+            "last_fetch_at": None,
+            "last_item_at": None,
+            "parse_status": "http_error",
+            "quarantined_items": 0,
+            "source_id": "news",
+            "stale_reason": None,
+        }]
+    for row in rows:
+        row["reason"] = failure
+    return rows
+
+
+def _collect_news_after_chain(
+    *,
+    public_config: PublicConfig,
+    database: Database,
+    tenant: str,
+    backend: Any,
+    clock: Clock,
+    started: str,
+    enabled: list[tuple[Any, str]],
+    observations: dict[tuple[str, str, str], CoverageObservation],
+    news_book: Any,
+    news_supplied: bool,
+    news_reason: str,
+    position_rows: list[Any],
+    approval_state: Mapping[tuple[str, str], list[dict[str, Any]]] | None,
+) -> tuple[FetchReport | None, str | None, list[dict[str, Any]]]:
+    """Fetch and link news after the chain commit. Exceptions become one gap.
+
+    Dedup keys are hashes of tenant, wallet, kind, and incident. Commit order
+    does not change them.
+    """
+    fetched: FetchReport | None = None
+    failure: str | None = None
+    if _news_fetch_enabled(public_config):
+        try:
+            fetched = fetch_allowlisted_news(
+                database,
+                tenant,
+                backend,
+                resolve=_resolve,
+                now=started,
+                clock=clock,
+                deadline=DEFAULT_NEWS_DEADLINE_SECONDS,
+            )
+        except Exception:
+            failure = _NEWS_FETCH_FAILED
+            fetched = None
+    alerts: list[dict[str, Any]] = []
+    if failure is None:
+        try:
+            if fetched is not None:
+                _apply_fetched_coverage(
+                    observations, enabled, fetched, public_config, position_rows, approval_state,
+                    news_supplied, news_reason,
+                )
+            alerts = _linked_news_alerts(
+                tenant, fetched, news_book, position_rows, approval_state, enabled,
+            )
+        except Exception:
+            failure = _NEWS_POSTPROCESS_FAILED
+            alerts = []
+    if failure is not None:
+        gap = _news_failure_observation(failure)
+        for account, network in enabled:
+            observations[(account.wallet_id, network, "exposure_news")] = gap
+    return fetched, failure, alerts
+
+
+def _linked_news_alerts(
+    tenant: str,
+    fetched: FetchReport | None,
+    news_book: Any,
+    position_rows: list[Any],
+    approval_state: Mapping[tuple[str, str], list[dict[str, Any]]] | None,
+    enabled: list[tuple[Any, str]],
+) -> list[dict[str, Any]]:
+    """News notices only. Chain alerts are already committed."""
+    if fetched is None and news_book is None:
+        return []
+    active_approvals = _active_from_state(approval_state, enabled)
+    wallets = _wallet_exposures(position_rows, active_approvals)
+    alerts: list[dict[str, Any]] = []
+    if fetched is not None:
+        # Only incidents that are new or revised in this fetch can notify; a
+        # feed's first fetch is a quiet baseline apart from recent items.
+        fresh = [item for item in fetched.book.incidents if item.incident_id in fetched.linkable]
+        for notice in link_exposure(fresh, wallets):
+            alerts.append(_with_title(
+                _fetched_alert(tenant, notice, position_rows, active_approvals, fetched),
+                fetched.book,
+                notice,
+            ))
+    if news_book is not None:
+        for notice in link_exposure(news_book.incidents, wallets):
+            alerts.append(_with_title(
+                exposure_alert(tenant, notice, _notice_network(notice.wallet_id, position_rows, active_approvals)),
+                news_book,
+                notice,
+            ))
+    return alerts
+
+
+def _commit_news_followup(
+    cycle: CapabilityCycle,
+    *,
+    incoming: list[dict[str, Any]],
+    results: dict[tuple[Any, Any, str], str],
+    coverage_rows: list[dict[str, Any]],
+    news_alerts: list[dict[str, Any]],
+    fetched: FetchReport | None,
+    started: str,
+    rewrite_news_coverage: bool,
+) -> list[dict[str, Any]]:
+    """Write news coverage and news alerts in their own transaction.
+
+    The chain cycle has already committed. A failure here leaves those chain
+    alerts in place.
+    """
+    capability_rows: list[dict[str, Any]] = []
+    if rewrite_news_coverage:
+        exposure = [row for row in coverage_rows if row.get("capability") == "exposure_news"]
+        capability_rows.extend(_storage_rows(exposure, {}, None))
+    if fetched is not None:
+        notes = untrusted_notes()
+        if notes:
+            fetched.state["untrusted_text"] = notes
+        capability_rows.append(news_state_row(fetched.state, started))
+    if not capability_rows and not news_alerts:
+        return []
+    finished = cycle.finish(
+        incoming=incoming,
+        results=results,
+        events=[],
+        capability_rows=capability_rows,
+        cursors=[],
+        alerts=news_alerts,
+        settle_identities=[],
+    )
+    emitted = finished.get("notification_decision") or []
+    return list(emitted)
+
+
+def _news_failure_observation(reason: str) -> CoverageObservation:
+    """One exposure_news gap. It is not an empty news result."""
+    return CoverageObservation(
+        category="partial",
+        pagination_complete=False,
+        gap_detection_complete=False,
+        declared="not_supplied",
+        reason_codes=(reason,),
+        trust="unverified",
+        price_quality="unknown",
+    )
+
+
 def _apply_fetched_coverage(
     observations,
     enabled,
@@ -865,6 +1059,8 @@ def _fetched_observation(
         reasons.append("fetch_error")
     if "budget_exhausted" in statuses:
         reasons.append("budget_exhausted")
+    if any(feed.reason == "deadline" for feed in fetched.feeds):
+        reasons.append("deadline")
     if gaps:
         reasons.append("no_allowlisted_feed")
         reasons.extend(gaps)

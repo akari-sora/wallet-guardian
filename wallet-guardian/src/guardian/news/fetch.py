@@ -25,6 +25,9 @@ from guardian.sources.transport import EndpointRegistry, ReadOnlyTransport, Regi
 from guardian.storage import Database
 
 NEWS_GETS_PER_RUN = 8
+# Measured from the start of this fetch, not from the on-chain round. The chain
+# budget is already closed before these GETs. A frozen clock never trips it.
+DEFAULT_NEWS_DEADLINE_SECONDS = 180
 # The feed state is not a wallet. Wallet ids are UUIDs, so this key cannot
 # collide with a monitored wallet, and "news" is not a chain network.
 NEWS_STATE_WALLET = "news-feeds"
@@ -76,8 +79,14 @@ def fetch_allowlisted_news(
     resolve,
     now: str,
     clock: Clock,
+    deadline: float | None = None,
 ) -> FetchReport:
-    """Fetch each allowlisted feed once. The endpoint is the committed URL."""
+    """Fetch each allowlisted feed once. The endpoint is the committed URL.
+
+    ``deadline`` is seconds from the clock reading at the start of this call.
+    Remaining time is checked between GETs. ``None`` does not stop the loop.
+    A missed deadline records ``deadline`` on the feed and does not open a socket.
+    """
     sources = load_news_sources()
     capability = news_fetch_capability(sources)
     pairs = _pairs(sources)
@@ -88,6 +97,7 @@ def fetch_allowlisted_news(
     prior_feeds = previous.get("feeds") if isinstance(previous.get("feeds"), dict) else {}
     stored: dict[str, Any] = {}
     results: list[FeedResult] = []
+    fetch_started = clock()
     if not pairs:
         return _report(book, (), updated, hashes, stored, sources, linkable)
     registry = _registry(pairs)
@@ -117,6 +127,10 @@ def fetch_allowlisted_news(
         if capability.credential is not None:
             stored[feed.url] = _failed(prior, source.source_id, "news_credential_forbidden", now=now, feed_type=declared_type)
             results.append(FeedResult(source.source_id, feed.url, "fetch_error", "news_credential_forbidden", protocols))
+            continue
+        if _fetch_expired(clock, fetch_started, deadline):
+            stored[feed.url] = _failed(prior, source.source_id, "deadline", now=now, feed_type=declared_type)
+            results.append(FeedResult(source.source_id, feed.url, "fetch_error", "deadline", protocols))
             continue
         try:
             result = transport.request_allowlisted_get(
@@ -247,6 +261,15 @@ def _report(
         fetchable=fetchable,
         health=tuple(health),
     )
+
+
+def _fetch_expired(clock: Clock, started: float, deadline: float | None) -> bool:
+    """True when the news budget measured from ``started`` is already spent."""
+    if deadline is None or isinstance(deadline, bool) or not isinstance(deadline, (int, float)):
+        return False
+    if deadline < 0:
+        return False
+    return clock() - started >= float(deadline)
 
 
 def _pairs(sources: Mapping[str, NewsSource]) -> list[tuple[NewsSource, NewsFeed]]:
