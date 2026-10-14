@@ -97,7 +97,7 @@
 | H3c | coverage-matrix.md:7、:198–215 | "derived from … `examples/monitor.json`"；表格 "Keyed sources and the no-key column" | 缺少範圍說明 | 高（與 H3 合併計） | 在 :7 後加："Cells describe `examples/monitor.json`. A profile from `guardian init` routes fewer sources: no keyless or PRO Blockscout, no Alchemy, no Tenderly Base log route, no CoinGecko, no OFAC source, no Helius route. For an init profile, read every `history.native_external` no-key cell except Ethereum/Arbitrum/Polygon-with-Etherscan-key as `credential_missing`." |
 | H4b | coverage-matrix.md:135、:206 | "Helius parsed events when the key and URL are set and the source is enabled \| not_verified" | 與程式不符 | 高（與 H4 合併計） | keyed path 改成 "Helius adapter exists (offline tests) but is not called by run-once"；keyed status 從 `not_verified` 改成 `credential_missing`／未接線。 |
 | H5b | coverage-matrix.md:146 | "GoPlus with GOPLUS_API_KEY \| not_verified \| partial" | 與程式不符 | 高（與 H5 合併計） | keyed path 改成 "not called by run-once in rc.4"；row status 改成 `blocked`。 |
-| M2 | coverage-matrix.md:35、:103–104、Public eth_getLogs 表（:175 起） | BSC 的 `history.token`／`permissions.standard`："public RPC eth_getLogs when the endpoint accepts a topic filter \| not_verified" | 不完整（已知拒絕沒有記錄） | 中 | 在 publicnode 那條加 "publicnode BSC eth_getLogs returns HTTP 403"，Public eth_getLogs 表加一列 `publicnode-bsc-getLogs \| blocked`。BSC 兩個 cell 註明「with publicnode the approval scan and token history are blocked」。 |
+| M2 | coverage-matrix.md:35、:103–104、Public eth_getLogs 表（:175 起） | BSC 的 `history.token`／`permissions.standard`："public RPC eth_getLogs when the endpoint accepts a topic filter \| not_verified" | 不完整（已知拒絕沒有記錄） | 中 | 在 publicnode 那條加 "publicnode BSC eth_getLogs returns JSON-RPC -32701 (address required)"，Public eth_getLogs 表加一列 `publicnode-bsc-getLogs \| blocked`。BSC 兩個 cell 註明「with publicnode the approval scan and token history are blocked」。 |
 | M7 | coverage-matrix.md:34、:121、:202、:215 vs :56；:115 vs :55 | Optimism keyless "HTTP 200 from the Linux host"；Base keyless "partial"；Arbitrum／Polygon keyless "not_verified" | 內部不一致 | 中 | 依 :55–56 的 2026-10-09 探測改 cell：Optimism keyless 是 `blocked`（301），預設 URL 改為 explorer.optimism.io 並重探；Base keyless 是 `blocked` on Linux host／host-specific；Arbitrum、Polygon keyless 是 `blocked`（403）。也要刪掉 :202、:215、:1450 的 "recorded HTTP 200"。 |
 | — | coverage-matrix.md:9–24、:218–235 | 狀態定義、"What is not claimed" | OK | — | 誠實。72h、TRON、sUSDe／Morpho、PyPI、canary 都寫對了。 |
 
@@ -192,7 +192,7 @@
    | 鏈 | 金額相關告警 | 權限告警 | 備註 |
    |---|---|---|---|
    | Ethereum、Arbitrum、Base、Optimism | 原生 ETH ≥0.5（轉帳、`balance_delta`） | Approval／ApprovalForAll（端點要能做 topic-only `eth_getLogs`） | ERC-20 轉帳不會依金額告警 |
-   | BSC、Polygon、Avalanche | 無（`threshold_unavailable`），除非自己設 `native_unit_thresholds` 或價格來源 | 同上（BSC publicnode 403） | — |
+   | BSC、Polygon、Avalanche | 無（`threshold_unavailable`），除非自己設 `native_unit_thresholds` 或價格來源 | 同上（BSC publicnode 的 `eth_getLogs` 回 JSON-RPC -32701，address required） | — |
    | Solana | 無 | SPL delegate／authority | 不解析交易，沒有轉帳列 |
    | Bitcoin | 無（沒有門檻） | 不適用 | 只有餘額與分頁歷史 |
    | TRON（opt-in） | 無（沒有門檻） | 不告警 | — |
@@ -219,7 +219,7 @@
 - **Preview, not production.** Version `0.4.0rc4` (tag `v0.4.0-rc.4`). Checked with a manually run 12-step local gate at the release commit. Release evidence is `NOT_RUN`; GitLab CI minutes are exhausted and there is no CI pass on record. The 72-hour / 24-window shadow run has not been done. Not on PyPI.
 - **Nothing notifies you by default.** `run-once` is one pass. No scheduler is installed. Alerts are written to a local SQLite outbox; there is no outbox reader command. The schedule that `install-service` prints runs `run-once --no-send` every 3 hours. Telegram sending exists but has only been tested against a mock.
 - **What can alert, in a profile from `guardian init`:** native ETH movements of 0.5 ETH or more on Ethereum, Arbitrum One, Base and Optimism, and approval/permission changes (only if your RPC accepts topic-only `eth_getLogs`). Token transfers are not valued and do not alert by amount. BNB, POL, AVAX, SOL and BTC movements do not alert unless you add a `native_unit_thresholds` floor or a price source.
-- **Chains differ.** Ethereum, Arbitrum and Polygon get external history with a free Etherscan key. Base and Optimism get balances and nonce only unless you add a Blockscout key (Etherscan's free plan refuses them). BSC external history needs a NodeReal key, and publicnode BSC refuses `eth_getLogs` (HTTP 403). Solana: balances, token accounts and SPL authorities; transactions are not parsed, so no transfer alerts. Avalanche: limited. Bitcoin: address set only. TRON: experimental, off by default, not tested live.
+- **Chains differ.** Ethereum, Arbitrum and Polygon get external history with a free Etherscan key. Base and Optimism get balances and nonce only unless you add a Blockscout key (Etherscan's free plan refuses them). BSC external history needs a NodeReal key, and publicnode BSC refuses `eth_getLogs` (JSON-RPC -32701, address required). Solana: balances, token accounts and SPL authorities; transactions are not parsed, so no transfer alerts. Avalanche: limited. Bitcoin: address set only. TRON: experimental, off by default, not tested live.
 - **Keys that do nothing in this preview:** Helius, GoPlus, Chainabuse, DeBank, Zerion and Tenderly. Their adapters are not called by `run-once`.
 - **Not built:** sUSDe, Morpho Blue markets, live yield or APY event alerts, live historical lookups for inflow explanations (the shipped explainer list is empty), and wallet sending (Mode A send stays locked).
 - A gap (`credential_missing`, `partial`, `blocked`, …) is never a zero balance or an all-clear. See docs/coverage-matrix.md; its cells describe `examples/monitor.json`, which routes more sources than `init` does.
@@ -233,7 +233,7 @@
 - **預覽版，不是正式版。** 版本 `0.4.0rc4`（標籤 `v0.4.0-rc.4`）。只在發行 commit 上手動跑過本機 12 步 gate；release evidence 是 `NOT_RUN`。GitLab CI 額度已用完，沒有 CI 通過紀錄。72 小時／24 輪 shadow 驗證沒有做。沒有上 PyPI。
 - **預設不會通知你。** `run-once` 只跑一輪；沒有安裝排程；告警只寫進本機 SQLite outbox，也沒有讀取指令。`install-service` 給的排程每 3 小時跑一次，而且帶 `--no-send`。Telegram 送出只有 mock 測試，沒有實測。
 - **`guardian init` 產生的設定裡，會觸發告警的只有：** Ethereum、Arbitrum One、Base、Optimism 上 ≥0.5 ETH 的原生移動；以及授權／權限變更（前提是 RPC 接受 topic-only 的 `eth_getLogs`）。代幣轉帳不估值，不會依金額告警。BNB、POL、AVAX、SOL、BTC 的移動，要你自己設 `native_unit_thresholds` 或價格來源才會告警。
-- **各鏈深度不同。** Ethereum、Arbitrum、Polygon 有免費 Etherscan key 就能讀外部歷史。Base、Optimism 在免費 Etherscan 下只查餘額和 nonce，要另加 Blockscout key。BSC 外部歷史要 NodeReal key；publicnode BSC 的 `eth_getLogs` 回 403。Solana 只有餘額、token 帳戶與 SPL 權限；不解析交易，所以沒有轉帳告警。Avalanche 有限。Bitcoin 只讀地址集合。TRON 是實驗性功能，預設關閉，沒有實測。
+- **各鏈深度不同。** Ethereum、Arbitrum、Polygon 有免費 Etherscan key 就能讀外部歷史。Base、Optimism 在免費 Etherscan 下只查餘額和 nonce，要另加 Blockscout key。BSC 外部歷史要 NodeReal key；publicnode BSC 的 `eth_getLogs` 回 JSON-RPC -32701（address required）。Solana 只有餘額、token 帳戶與 SPL 權限；不解析交易，所以沒有轉帳告警。Avalanche 有限。Bitcoin 只讀地址集合。TRON 是實驗性功能，預設關閉，沒有實測。
 - **本版設了也沒作用的 key：** Helius、GoPlus、Chainabuse、DeBank、Zerion、Tenderly。`run-once` 不會呼叫這些 adapter。
 - **沒有做：** sUSDe、Morpho Blue 市場、APY／收益活動的即時推播、入帳解釋的即時歷史查詢（內建核准清單是空的）、錢包送出（模式 A 送出鈕仍鎖住）。
 - 缺口（`credential_missing`、`partial`、`blocked`…）不是 0，也不是安全。逐格狀態見 docs/coverage-matrix.md；那份描述的是 `examples/monitor.json`，比 `init` 產生的設定多接了一些來源。
@@ -264,5 +264,5 @@
   建議用一個 ERC-20 fixture 跑一次 `run-once` 確認。
 - **H4（Solana 不解析交易、沒有轉帳告警）**的依據：`pipeline.py` 的 `_read_solana` 呼叫 `session.scan(..., fetch_transactions=False)`；整個 `src/guardian` 除了 adapter 自己，沒有任何地方匯入 `guardian.sources.helius`。coverage-matrix:57 記錄過 `getSignaturesForAddress` 有回應，但簽章清單不等於交易解析。
 - **H3** 的依據：在 repo 外的獨立 venv 呼叫 `onboarding._build()` 組出 init profile，加上 `scan/drive.py:375–386`（只有 `BLOCKSCOUT_API_KEY` 的 PRO 來源會在沒有 key 時照樣呼叫）。沒有對外連線驗證。
-- **「BSC publicnode getLogs 403」與「本機 12 步 gate」**這兩項來自使用者提供的事實。repo 裡沒有這兩項的紀錄，我無法獨立驗證。
+- **「BSC publicnode getLogs」**是 JSON-RPC -32701（address required），與摘要 H1 和延遲稽核附錄 A 一致，不是 HTTP 403。**「本機 12 步 gate」**來自使用者提供的事實。repo 裡沒有 12 步 gate 的紀錄，我無法獨立驗證。
 - 沒有檢查 `docs/legacy-monitor-map.md`（1809 行）、`docs/mcm-01*.md`、`docs/reviews/*` 的逐行內容。我判斷它們是內部設計／審查紀錄，不是面向使用者的文案；用關鍵字 grep 掃過，沒有發現誇大用語。
