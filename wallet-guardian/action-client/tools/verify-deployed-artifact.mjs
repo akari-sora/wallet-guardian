@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { sha256 } from "./artifact-manifest.mjs";
 import { findRelease, loadReleaseDocument, validateRelease, PATHS } from "./release-record.mjs";
+import { isWalletConnectSdkChunk, scanText } from "./scan-send-markers.mjs";
 
 const TASK_REF = `/t/ref_${"0".repeat(32)}`;
 
@@ -65,7 +66,7 @@ function isClientHtml(response, text) {
 }
 
 /**
- * @param {{ origin: string, release: object, fetchImpl?: typeof fetch, distDir?: string | null, expectGone?: boolean }} options
+ * @param {{ origin: string, release: object, fetchImpl?: typeof fetch, distDir?: string | null, expectGone?: boolean, scanSendMarkers?: boolean }} options
  * @returns {Promise<{ ok: boolean, errors: string[] }>}
  */
 export async function verifyDeployedArtifact(options) {
@@ -201,6 +202,15 @@ export async function verifyDeployedArtifact(options) {
     if (!isClientHtml(task.response, task.text)) errors.push(`${TASK_REF}: expected HTML`);
   }
 
+  if (options.scanSendMarkers) {
+    for (const [path, got] of seen) {
+      if (!path.endsWith(".js") || !got || got.response.status !== 200) continue;
+      if (isWalletConnectSdkChunk(path)) continue;
+      const found = scanText(got.text);
+      if (found.length > 0) errors.push(`${path}: send marker ${[...new Set(found)].join(",")}`);
+    }
+  }
+
   return { ok: errors.length === 0, errors };
 }
 
@@ -217,8 +227,9 @@ async function main() {
   const releasesPath = option(args, "--releases") ?? PATHS.RELEASES_PATH;
   const distDir = option(args, "--dist");
   const expectGone = args.includes("--expect-gone");
+  const scanSendMarkers = args.includes("--scan-send-markers");
   if (!origin || !releaseId) {
-    console.error("usage: node tools/verify-deployed-artifact.mjs --origin <url> --release <id> [--releases <file>] [--dist <dir>] [--expect-gone]");
+    console.error("usage: node tools/verify-deployed-artifact.mjs --origin <url> --release <id> [--releases <file>] [--dist <dir>] [--expect-gone] [--scan-send-markers]");
     process.exit(2);
   }
   const document = loadReleaseDocument(releasesPath);
@@ -227,7 +238,7 @@ async function main() {
     console.error(`release not found: ${releaseId}`);
     process.exit(1);
   }
-  const result = await verifyDeployedArtifact({ origin, release, distDir, expectGone });
+  const result = await verifyDeployedArtifact({ origin, release, distDir, expectGone, scanSendMarkers });
   if (!result.ok) {
     for (const error of result.errors) console.error(error);
     process.exit(1);

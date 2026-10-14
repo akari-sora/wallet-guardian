@@ -132,6 +132,14 @@ test("verifier accepts a local mock and names a one-byte asset change", async ()
     const missing = await runVerifier(["--origin", origin, "--release", "fixture-send-off", "--releases", recordPath]);
     assert.notEqual(missing.status, 0);
     assert.match(`${missing.stdout}\n${missing.stderr}`, /assets\/lazy-def\.js/);
+
+    files["/assets/lazy-def.js"] = { status: 200, type: "text/javascript", body: built.lazy };
+    const cleanScan = await runVerifier(["--origin", origin, "--release", "fixture-send-off", "--releases", recordPath, "--scan-send-markers"]);
+    assert.equal(cleanScan.status, 0, cleanScan.stderr);
+    files["/assets/app.js"] = { status: 200, type: "text/javascript", body: `${built.app}\neth_sendTransaction\n` };
+    const dirtyScan = await runVerifier(["--origin", origin, "--release", "fixture-send-off", "--releases", recordPath, "--scan-send-markers"]);
+    assert.notEqual(dirtyScan.status, 0);
+    assert.match(dirtyScan.stderr, /assets\/app\.js: send marker eth_sendTransaction/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

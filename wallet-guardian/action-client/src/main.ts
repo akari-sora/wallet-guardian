@@ -587,7 +587,7 @@ function bindResumeListeners(): void {
   }
 }
 
-async function reverifyCurrent(testApprovals?: unknown[]): Promise<void> {
+async function reverifyCurrent(): Promise<void> {
   const generation = loadGeneration;
   const seq = ++rereadSeq;
   const epoch = walletEpoch;
@@ -650,7 +650,6 @@ async function reverifyCurrent(testApprovals?: unknown[]): Promise<void> {
       startedAt,
       nowUnix: startedAt,
       clock: () => Math.floor(Date.now() / 1000),
-      ...(Array.isArray(testApprovals) ? { testApprovals } : {}),
     });
     if (!still() || (privateRevision ?? plan.revision) !== revision) return;
     rereadPending = false;
@@ -1034,7 +1033,6 @@ async function renderPlan(plan: Plan, task: Task | null, generation: number): Pr
           isCurrent: () => clickGeneration === loadGeneration && lastPlan != null && lastTask != null,
           clock: () => Math.floor(Date.now() / 1000),
           call: (method: string, params: unknown[]) => fetchTrustedRpc(method, params, { fetchImpl: fetch }),
-          testOnlyAllowWalletRequest: false,
           mainnetSend: MAINNET_SEND,
           provider: null,
         });

@@ -136,6 +136,22 @@ assert.equal(preflightAlone.sendAllowed, false);
 assert.equal(preflightAlone.buttonEnabled, false);
 assert.equal(preflightAlone.reason, "preflight_not_ok");
 
+const missingBlockReasons = clientConfirmDecision({
+  plan: {
+    wallet_request_allowed: true,
+    simulation: { status: "PASS", effects_checked: true, usable_as_live_evidence: true, state_overrides: false },
+  },
+  task: {
+    mode: "A",
+    requires_user_wallet_confirmation: true,
+    preflight: { preflight_ok: true, revision_required: false, changes: [] },
+  },
+  mainnetSend: true,
+  mode: "A",
+});
+assert.equal(missingBlockReasons.buttonEnabled, false);
+assert.equal(missingBlockReasons.sendAllowed, false);
+
 assert.equal(eip5792Status({ "0x38": { atomic: { status: "unsupported" } } }, 56), "unsupported");
 assert.equal(executionMode({ capability: "unsupported", callCount: 2, sameChain: true }), "A");
 assert.equal(executionMode({ capability: "supported", callCount: 2, sameChain: true }), "B");

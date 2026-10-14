@@ -1,10 +1,7 @@
 /** Mode A guided path for one Lista original-address claimWithdraw.
 
- * A re-read pass is not send authorization. Production callers keep
- * requestUserSend fail-closed. The only wallet request in this module runs
- * when a test passes testOnlyAllowWalletRequest === true and a provider that
- * marks itself noBroadcast. That call is recorded by the test double. This
- * module does not broadcast.
+ * A re-read pass is not send authorization. This module returns claim fields
+ * and does not construct or submit a wallet request.
  */
 
 import { CLAIM_WITHDRAWAL_TOPIC, claimCalldata, sameAddress, TRUSTED_LISTA } from "./trusted-lista.mjs";
@@ -57,9 +54,6 @@ const ADDRESS_FIELDS = new Set(["implementation", "to", "recipient"]);
 export function sendAuthorizedByReread(view) {
   if (view && view.allowSend !== "closed") {
     throw new Error("allow send stays closed");
-  }
-  if (view && Object.prototype.hasOwnProperty.call(view, "testOnlyAllowWalletRequest")) {
-    throw new Error("re-read cannot carry send authorization");
   }
   return false;
 }
@@ -454,8 +448,8 @@ function driftReasons(second) {
   return reasons.filter((reason) => DRIFT_REASONS.has(reason));
 }
 
-/** Rebuild claimWithdraw(idx) from the re-read observation. The plan idx is not an input. */
-export function exactClaimRequest(observation) {
+/** Claim fields from the re-read. No method name is attached. The plan idx is not an input. */
+export function describePreparedClaim(observation) {
   sendAuthorizedByReread(observation);
   if (!observation || observation.reread !== "pass") {
     throw new Error("only a passing re-read can describe the claim");
@@ -474,33 +468,11 @@ export function exactClaimRequest(observation) {
   }
   if (!sameAddress(claim.recipient, claim.recipient)) throw new Error("recipient");
   return {
-    method: "eth_sendTransaction",
-    params: [{
-      from: observation.binding.account,
-      to: TRUSTED_LISTA.proxy,
-      data,
-      value: "0x0",
-    }],
+    from: observation.binding.account,
+    to: TRUSTED_LISTA.proxy,
+    data,
+    value: "0x0",
   };
-}
-
-const DENIED_BATCH_METHOD = "wallet_sendCalls";
-
-export function assertSingleStep(request) {
-  if (!request || request.method === DENIED_BATCH_METHOD || request.method !== "eth_sendTransaction") {
-    throw new Error("mode A does not batch");
-  }
-  if (!Array.isArray(request.params) || request.params.length !== 1 || Array.isArray(request.params[0].calls)) {
-    throw new Error("mode A does not batch");
-  }
-  return request.method;
-}
-
-function isNoBroadcastRecorder(provider) {
-  return Boolean(provider)
-    && provider.noBroadcast === true
-    && provider.broadcasts !== true
-    && typeof provider.request === "function";
 }
 
 function closedGuide(fields) {
@@ -511,7 +483,7 @@ function closedGuide(fields) {
     testProbe: null,
     autoRetry: false,
     outcome: emptyWalletTrack(),
-    prepared: null,
+    preparedClaim: null,
     revision: null,
     poison: { once: true, forever: false, addressBook: false, text: POISON_NOTE },
     ...fields,
@@ -622,33 +594,11 @@ function readBody(input, call, identity, nowUnix) {
   };
 }
 
-function rememberSubmission(outcome, observation, prepared, identity) {
-  if (!outcome || outcome.status !== "pending" || !hashText(outcome.txHash)) return outcome;
-  const claim = observation && observation.claim;
-  const account = observation && observation.binding && observation.binding.account;
-  if (!claim || !sameAddress(account, account)) return outcome;
-  return {
-    ...outcome,
-    submission: {
-      txHash: outcome.txHash.toLowerCase(),
-      account,
-      idx: claim.idx,
-      uuid: String(claim.uuid),
-      amountOut: String(claim.amountOut),
-      calldata: prepared.params[0].data,
-      to: prepared.params[0].to,
-      taskRef: identity.taskRef ?? null,
-      revision: identity.revision ?? null,
-      chainId: claim.chainId,
-    },
-  };
-}
-
 /**
- * Open the guided claim: two independent re-reads, then a wallet request only
- * for a test recorder. Re-read pass does not set testOnlyAllowWalletRequest.
- * The same task takes the in-flight lock before the first wait. Identity, task
- * version, and the clock are sampled again before any recorder request.
+ * Open the guided claim: two independent re-reads, then claim fields.
+ * This function does not call a provider. The same task takes the in-flight
+ * lock before the first wait. Identity, task version, and the clock are
+ * sampled again before the guide returns.
  */
 export async function guideListaModeA(input) {
   if (!input || !input.plan || typeof input.call !== "function") {
@@ -730,10 +680,9 @@ export async function guideListaModeA(input) {
         outcome: publish(flow.outcome),
       });
     }
-    let prepared;
+    let preparedClaim = null;
     try {
-      prepared = exactClaimRequest(second);
-      assertSingleStep(prepared);
+      preparedClaim = describePreparedClaim(second);
     } catch {
       return closedGuide({ phase: "not_single_step", first, second, revision, reads: rpcCalls, outcome: publish(flow.outcome) });
     }
@@ -745,7 +694,7 @@ export async function guideListaModeA(input) {
         first,
         second,
         revision,
-        prepared,
+        preparedClaim,
         reads: rpcCalls,
         outcome: publish(flow.outcome),
       });
@@ -757,7 +706,7 @@ export async function guideListaModeA(input) {
         first,
         second,
         revision,
-        prepared,
+        preparedClaim,
         reads: rpcCalls,
         outcome: publish(flow.outcome),
       });
@@ -777,73 +726,54 @@ export async function guideListaModeA(input) {
         first,
         second,
         revision,
-        prepared,
+        preparedClaim,
         settled,
         reads: rpcCalls,
         outcome: publish(flow.outcome),
       });
     }
-    if (!sameAddress(liveIdentity.connectedAccount, prepared.params[0].from)) {
+    if (!sameAddress(liveIdentity.connectedAccount, preparedClaim.from)) {
       return closedGuide({
         phase: "identity_changed",
         first,
         second,
         revision,
-        prepared,
+        preparedClaim,
         reads: rpcCalls,
         outcome: publish(flow.outcome),
       });
     }
-    const testOnly = input.testOnlyAllowWalletRequest === true;
-    if (!testOnly || sendAuthorizedByReread(second) !== false) {
-      return closedGuide({
-        phase: "send_closed",
-        first,
-        second,
-        revision,
-        prepared,
-        reads: rpcCalls,
-        reason: "reread_is_not_send_authorization",
-        outcome: publish(flow.outcome),
+    if (typeof input.recordClaim === "function") {
+      const recorded = await input.recordClaim({
+        preparedClaim,
+        observation: second,
+        identity: secondIdentity,
+        flow,
       });
+      if (recorded && typeof recorded === "object") {
+        return closedGuide({
+          phase: recorded.phase,
+          first,
+          second,
+          revision,
+          preparedClaim,
+          reads: rpcCalls,
+          outcome: recorded.outcome ?? publish(flow.outcome),
+          walletRequested: recorded.walletRequested === true,
+          testProbe: recorded.testProbe ?? null,
+          reason: recorded.reason,
+        });
+      }
     }
-    if (!isNoBroadcastRecorder(input.provider)) {
-      return closedGuide({
-        phase: "send_closed",
-        first,
-        second,
-        revision,
-        prepared,
-        reads: rpcCalls,
-        reason: "no_broadcast_provider_required",
-        outcome: publish(flow.outcome),
-      });
-    }
-    let value;
-    let error = null;
-    try {
-      value = await input.provider.request(prepared);
-    } catch (caught) {
-      error = caught;
-    }
-    const outcome = rememberSubmission(
-      applyWalletEvent(emptyWalletTrack(), interpretWalletReturn(value, error)),
-      second,
-      prepared,
-      secondIdentity,
-    );
-    flow.outcome = outcome;
     return closedGuide({
-      phase: "test_probe",
+      phase: "send_closed",
       first,
       second,
       revision,
-      prepared,
+      preparedClaim,
       reads: rpcCalls,
-      outcome,
-      walletRequested: true,
-      testProbe: "recorded_not_broadcast",
-      reason: "test_only_no_broadcast",
+      reason: "reread_is_not_send_authorization",
+      outcome: publish(flow.outcome),
     });
   } finally {
     if (flow.flightToken === token) flow.inFlight = false;

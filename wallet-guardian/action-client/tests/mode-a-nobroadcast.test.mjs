@@ -7,10 +7,7 @@ import { CLAIM_WITHDRAWAL_EVENT, CLAIM_WITHDRAWAL_TOPIC, claimCalldata, encodePa
 import { settleReread } from "../src/lista-reread.mjs";
 import {
   applyWalletEvent,
-  assertSingleStep,
   createModeAFlow,
-  exactClaimRequest,
-  guideListaModeA,
   OUTCOME_TEXT,
   outcomeAfterReread,
   POISON_NOTE,
@@ -20,6 +17,7 @@ import {
   sendAuthorizedByReread,
   verifyRecordedClaim,
 } from "../src/mode-a.mjs";
+import { assertClosedReread, assertSingleStep, exactClaimRequest, guideListaModeA } from "../src/send/mode-a-request.mjs";
 
 const ACCOUNT = "0x" + "1".repeat(40);
 const OTHER = "0x" + "3".repeat(40);
@@ -188,12 +186,12 @@ test("production and a passing re-read do not authorize a wallet request", async
   assert.equal(sendAuthorizedByReread(result.first), false);
   assert.equal(chain.log.some((entry) => entry.method === "eth_sendTransaction"), false);
   assert.equal(chain.log.some((entry) => entry.method === "wallet_sendCalls"), false);
-  assert.equal(result.prepared.method, "eth_sendTransaction");
-  assert.deepEqual(Object.keys(result.prepared.params[0]), ["from", "to", "data", "value"]);
-  assert.equal(result.prepared.params[0].data, claimCalldata(result.second.claim.idx));
-  assert.equal(result.prepared.params[0].value, "0x0");
-  assert.equal(result.prepared.params[0].to, TRUSTED_LISTA.proxy);
-  assert.equal("recipient" in result.prepared.params[0], false);
+  assert.equal(Object.hasOwn(result.preparedClaim, "method"), false);
+  assert.deepEqual(Object.keys(result.preparedClaim).sort(), ["data", "from", "to", "value"]);
+  assert.equal(result.preparedClaim.data, claimCalldata(result.second.claim.idx));
+  assert.equal(result.preparedClaim.value, "0x0");
+  assert.equal(result.preparedClaim.to, TRUSTED_LISTA.proxy);
+  assert.equal("recipient" in result.preparedClaim, false);
   assert.equal(result.poison.forever, false);
   assert.equal(result.poison.addressBook, false);
   assert.equal(result.poison.once, true);
@@ -231,7 +229,7 @@ test("a string flag, a live mainnet flag, and a real provider still do not call 
   assert.equal(unmarked.walletRequested, false);
   assert.equal(unmarked.reason, "no_broadcast_provider_required");
   assert.equal(calls, 0);
-  assert.equal(unmarked.prepared.params[0].data, claimCalldata(0));
+  assert.equal(unmarked.preparedClaim.data, claimCalldata(0));
 });
 
 test("test-only no-broadcast recorder sees one claimWithdraw and does not broadcast", async () => {
@@ -977,15 +975,15 @@ test("recipient confirmation is one claim, and the page keeps send closed", () =
   const main = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
   const reader = readFileSync(new URL("../src/lista-reread.mjs", import.meta.url), "utf8");
   const guide = readFileSync(new URL("../src/mode-a.mjs", import.meta.url), "utf8");
+  const send = readFileSync(new URL("../src/send/mode-a-request.mjs", import.meta.url), "utf8");
   assert.ok(html.includes(POISON_NOTE));
   assert.ok(html.includes(OUTCOME_TEXT.idle));
   assert.match(html, /不是永遠信任這個地址/);
   assert.equal(html.includes("通訊錄"), true);
   assert.doesNotMatch(main, /eth_sendTransaction|wallet_sendCalls|eth_sendRawTransaction/);
   assert.doesNotMatch(reader, /eth_sendTransaction|wallet_sendCalls/);
-  assert.match(main, /testOnlyAllowWalletRequest:\s*false/);
+  assert.doesNotMatch(main, /testOnlyAllowWalletRequest/);
   assert.match(main, /provider:\s*null/);
-  assert.doesNotMatch(main, /testOnlyAllowWalletRequest:\s*true/);
   assert.match(main, /guideListaModeA/);
   assert.match(main, /createModeAFlow/);
   assert.match(main, /flow:\s*modeAFlow/);
@@ -998,13 +996,15 @@ test("recipient confirmation is one claim, and the page keeps send closed", () =
   assert.doesNotMatch(main, /lastTask\?\.ref \?\? task\?\.ref/);
   assert.doesNotMatch(main, /paintWalletOutcome\(\s*["']idle["']\s*\)/);
   assert.match(guide, /settleReread/);
-  assert.match(guide, /wallet_sendCalls/);
-  assert.match(guide, /eth_sendTransaction/);
-  assert.match(guide, /noBroadcast === true/);
+  assert.doesNotMatch(guide, /eth_sendTransaction|wallet_sendCalls|eth_sendRawTransaction|testOnlyAllowWalletRequest|noBroadcast/);
+  assert.match(send, /eth_sendTransaction/);
+  assert.match(send, /wallet_sendCalls/);
+  assert.match(send, /noBroadcast === true/);
+  assert.match(send, /testOnlyAllowWalletRequest/);
   assert.equal(sendAuthorizedByReread({ reread: "pass", allowSend: "closed" }), false);
   assert.throws(() => sendAuthorizedByReread({ reread: "pass", allowSend: "open" }), /closed/);
   assert.throws(
-    () => sendAuthorizedByReread({ reread: "pass", allowSend: "closed", testOnlyAllowWalletRequest: true }),
+    () => assertClosedReread({ reread: "pass", allowSend: "closed", testOnlyAllowWalletRequest: true }),
     /send authorization/,
   );
 });
