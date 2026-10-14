@@ -1,6 +1,6 @@
 # 通知
 
-> 狀態：Telegram 送出只有 mock 測試，從未對真實 Telegram 驗證過（canary `NOT_RUN`）。預設 `outbox_only` 不送。`install-service` 產生的 systemd／cron 排程一律帶 `--no-send`，所以排程永遠不會送出。要送出，你必須自己設定 delivery profile，並自己排一個不帶 `--no-send` 的 `run-once`。
+> 狀態：Telegram 送出只有 mock 測試，從未對真實 Telegram 驗證過（canary `NOT_RUN`）。預設 `outbox_only` 不送。`install-service` 產生的排程裡 `run-once` 與 `watchdog` 都帶 `--no-send`，所以印出的排程不會送出。要送出，你必須自己設定並 opt-in delivery profile，並自己排一個不帶 `--no-send` 的 `run-once` 或 `watchdog`（不帶 `--no-send` 的 watchdog 也會走送出路徑）。
 
 授權：AGPL-3.0-only（見 `LICENSE`）。
 

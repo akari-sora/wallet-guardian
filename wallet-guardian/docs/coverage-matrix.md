@@ -6,7 +6,7 @@ The installable distribution is `wallet-guardian-monitor` (wheel `wallet_guardia
 
 This matrix is the preview claim for chain × capability. It is derived from `config/source-capabilities/*.json`, `config/chains`, `examples/monitor.json`, `src/guardian/sources/`, `src/guardian/protocols/`, `docs/api-keys.md`, `docs/mcm-01/network-tiers.plan.json`, and `docs/coverage.md`. The live probes below are recorded facts. This document does not re-run them. No monitored address, API key, or keyed URL appears here.
 
-**Which profile these cells describe.** Cells describe `examples/monitor.json`. A profile written by `guardian init` routes fewer sources: no keyless or PRO Blockscout, no Alchemy, no Tenderly Base log route, no CoinGecko, no OFAC source, and no Helius route. Adapters that exist but are not called by `run-once` (Helius, GoPlus, Chainabuse) are not a keyed path in this preview, even when a key is set.
+**Which profile these cells describe.** Cells describe `examples/monitor.json`. A profile written by `guardian init` routes fewer sources: no keyless or PRO Blockscout, no Alchemy, no Tenderly Base log route, no CoinGecko, so token USD valuation is off in an init profile until you enable a CoinGecko source, no OFAC source, and no Helius route. Adapters that exist but are not called by `run-once` (Helius, GoPlus, Chainabuse) are not a keyed path in this preview, even when a key is set.
 
 ## How to read
 
