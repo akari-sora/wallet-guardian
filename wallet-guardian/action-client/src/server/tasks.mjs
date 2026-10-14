@@ -43,7 +43,7 @@ async function visibleTask(db, ref, address) {
        FROM tasks t
        JOIN task_acl a ON a.ref = t.ref AND a.tenant_id = t.tenant_id AND a.wallet_address = ?
        JOIN tenant_members m ON m.tenant_id = t.tenant_id AND m.wallet_address = ?
-       WHERE t.ref = ?`,
+       WHERE t.ref = ? AND m.revoked_at IS NULL`,
     )
     .bind(address, address, ref)
     .first();
@@ -60,6 +60,7 @@ function availability(row, now) {
 
 export async function getTask(request, db, now, ref) {
   const url = new URL(request.url);
+  if (!REF_PATTERN.test(ref)) return denied();
   const session = await loadSession(db, request, now);
   if (!session) return json(401, { error: "unauthenticated", execution_authorized: false });
   const row = await visibleTask(db, ref, session.address);
@@ -224,9 +225,16 @@ export async function postCreate(request, env, db, now) {
   if (payload.length > 64 * 1024) return json(413, { error: "too_large", execution_authorized: false });
   const wallet = credential.wallet_address;
   const tenant = credential.tenant_id;
+  const membership = await db
+    .prepare("SELECT revoked_at FROM tenant_members WHERE tenant_id = ? AND wallet_address = ?")
+    .bind(tenant, wallet)
+    .first();
+  if (membership && membership.revoked_at != null) {
+    return json(403, { error: "membership_revoked", execution_authorized: false, send_authorized: false });
+  }
   await db.batch([
     db.prepare(
-      "INSERT INTO tenant_members (tenant_id, wallet_address) VALUES (?, ?) ON CONFLICT DO NOTHING",
+      "INSERT INTO tenant_members (tenant_id, wallet_address, revoked_at) VALUES (?, ?, NULL) ON CONFLICT DO NOTHING",
     ).bind(tenant, wallet),
     db.prepare(
       `INSERT INTO tasks

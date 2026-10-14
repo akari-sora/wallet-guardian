@@ -203,7 +203,8 @@ test('WA-04 client code never parses wallet strings as HTML, and the server neve
   server.push(...readdirSync(functionsDir).map((f) => readFileSync(new URL(f, functionsDir), 'utf8')));
   for (const text of server) assert.doesNotMatch(text, /rdns|uuid|eip6963|binancew3w|wallet_brand/i);
   // The migration (D1 ACL) has no wallet brand/uuid column either.
-  const migration = readFileSync(new URL('../migrations/0001_p1_init.sql', import.meta.url), 'utf8');
+  const migration = readFileSync(new URL('../migrations/0001_p1_init.sql', import.meta.url), 'utf8')
+    + readFileSync(new URL('../migrations/0002_session_lifecycle.sql', import.meta.url), 'utf8');
   assert.doesNotMatch(migration, /rdns|uuid|wallet_brand|provider_name/i);
 });
 

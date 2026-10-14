@@ -111,7 +111,8 @@ export function eip6963Window({ wallets = [], ethereum = null, binance = null, k
   return api;
 }
 
-const schema = readFileSync(new URL('../migrations/0001_p1_init.sql', import.meta.url), 'utf8');
+const schema = readFileSync(new URL('../migrations/0001_p1_init.sql', import.meta.url), 'utf8')
+  + '\n' + readFileSync(new URL('../migrations/0002_session_lifecycle.sql', import.meta.url), 'utf8');
 
 /** Routes the harness fetch to the real Pages Function handler with an in-memory D1 stand-in. */
 export async function realBackend() {

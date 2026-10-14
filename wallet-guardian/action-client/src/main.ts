@@ -160,6 +160,9 @@ let privateCancelAllowed = false;
 let authGeneration = 0;
 let authBusy = false;
 let sessionAddress: string | null = null;
+// Memory only: the address this page sent to the wallet to sign, after verify returns the same one.
+// Not stored in localStorage, sessionStorage, or a cookie. A reload starts without it.
+let loginAddress: string | null = null;
 let rereadSeq = 0;
 let rereadResult: RereadView | null = null;
 let rereadPending = false;
@@ -1179,6 +1182,7 @@ function applySession(body: unknown): boolean {
     /^0x[a-fA-F0-9]{40}$/.test(record.address);
   csrfToken = valid ? record.csrf_token! : null;
   sessionAddress = valid ? record.address! : null;
+  if (!valid) loginAddress = null;
   syncAccountControls();
   return valid;
 }
@@ -1283,8 +1287,10 @@ async function revokeServerSession(reason: string): Promise<boolean> {
     finishLogout(flow);
     applyFlowView();
     applySession(null);
+    loginAddress = null;
     revokePending = false;
     lastRevocation = { reason, confirmed: true, status: response.status };
+    publishLogout();
     return true;
   } catch {
     revokePending = true;
@@ -1408,7 +1414,14 @@ async function login(): Promise<void> {
       return;
     }
     if (!verifyResponse.ok) throw new Error("登入沒有完成。");
+    const verifiedAddress = typeof (verified as SessionBody).address === "string" ? (verified as SessionBody).address! : "";
+    if (verifiedAddress.toLowerCase() !== address.toLowerCase()) {
+      loginAddress = null;
+      await revokeOrphanSession(verified);
+      throw new Error("登入回應的地址與簽名地址不一致。");
+    }
     if (!applySession(verified)) throw new Error("登入回應不完整。");
+    loginAddress = verifiedAddress;
     revokePending = false;
     banner.textContent = `已用「${connection.name}」登入。這只是讀取身分，不是交易授權。主網送出保持關閉。`;
     if (privateRef) {
@@ -1604,7 +1617,9 @@ async function logout(): Promise<void> {
     finishLogout(flow);
     applyFlowView();
     applySession(null);
+    loginAddress = null;
     revokePending = false;
+    publishLogout();
     banner.textContent = "已登出。此工作階段已失效。不會送出交易。";
   } catch {
     banner.textContent = "畫面已清除，但伺服器登出結果未確認。請重試登出；不會送出交易。";
@@ -1766,9 +1781,65 @@ function refreshInjectedWallets(): void {
   }
 }
 
+// Tests set window.__wgTabGroup so harnesses do not share a channel. Browsers leave it unset.
+function logoutChannelName(): string {
+  const group = (window as { __wgTabGroup?: unknown }).__wgTabGroup;
+  return typeof group === "string" && /^[a-z0-9-]{1,64}$/.test(group)
+    ? `wg-session-logout:${group}`
+    : "wg-session-logout";
+}
+
+function openLogoutChannel(): BroadcastChannel | null {
+  if (typeof BroadcastChannel !== "function") return null;
+  try {
+    return new BroadcastChannel(logoutChannelName());
+  } catch {
+    return null;
+  }
+}
+
+let logoutChannel: BroadcastChannel | null = null;
+
+function applyRemoteLogout(): void {
+  authGeneration += 1;
+  loginAddress = null;
+  invalidatePrivateView();
+  syncFlow();
+  finishLogout(flow);
+  applyFlowView();
+  applySession(null);
+  revokePending = false;
+  banner.textContent = "其他分頁已登出，這個分頁的登入已結束。不會送出交易。";
+  syncAccountControls();
+}
+
+function listenForRemoteLogout(): void {
+  if (logoutChannel) return;
+  logoutChannel = openLogoutChannel();
+  if (!logoutChannel) return;
+  logoutChannel.onmessage = (event: MessageEvent) => {
+    const data = event?.data as { type?: unknown } | null;
+    if (!data || data.type !== "wg-logout") return;
+    applyRemoteLogout();
+  };
+}
+
+function publishLogout(): void {
+  const channel = openLogoutChannel();
+  if (!channel) return;
+  try {
+    channel.postMessage({ type: "wg-logout" });
+  } catch {
+    // This tab already cleared its own session. Other tabs keep their listener.
+  } finally {
+    if (typeof channel.close === "function") channel.close();
+  }
+}
+
 if (!originApproved()) {
   showUnapprovedOrigin();
 } else {
+  listenForRemoteLogout();
   installTypographyEnhancements();
   registry.start();
   watchWallet();

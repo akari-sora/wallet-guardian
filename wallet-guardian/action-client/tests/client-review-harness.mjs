@@ -55,7 +55,25 @@ class Element {
   addEventListener(event, handler) { this.listeners.set(event, handler); }
 }
 
-export async function harness({ onFetch, onWallet, initialSession = session(), pathname = `/t/${REF}`, setupWindow, importOverrides = {}, env = {} } = {}) {
+const logoutPeers = new Map();
+
+class MemoryBroadcastChannel {
+  constructor(name) {
+    this.name = String(name);
+    this.onmessage = null;
+    if (!logoutPeers.has(this.name)) logoutPeers.set(this.name, new Set());
+    logoutPeers.get(this.name).add(this);
+  }
+  postMessage(data) {
+    for (const peer of [...logoutPeers.get(this.name)]) {
+      if (peer === this || typeof peer.onmessage !== 'function') continue;
+      peer.onmessage({ data });
+    }
+  }
+  close() { logoutPeers.get(this.name)?.delete(this); }
+}
+
+export async function harness({ onFetch, onWallet, initialSession = session(), pathname = `/t/${REF}`, setupWindow, importOverrides = {}, env = {}, tabGroup = '' } = {}) {
   const sourceRoot = process.env.GUARDIAN_REVIEW_SOURCE_DIR
     ? resolve(process.env.GUARDIAN_REVIEW_SOURCE_DIR)
     : new URL('../src/', import.meta.url).pathname;
@@ -113,8 +131,10 @@ export async function harness({ onFetch, onWallet, initialSession = session(), p
     if (path.startsWith('/api/tasks/')) return jsonResponse(await envelope());
     throw new Error(`Unexpected network request: ${path}`);
   };
+  if (tabGroup) window.__wgTabGroup = tabGroup;
   if (typeof setupWindow === 'function') setupWindow(window);
   const context = vm.createContext({ document, window, fetch, crypto:globalThis.crypto,
+    ...(tabGroup ? { BroadcastChannel: MemoryBroadcastChannel } : {}),
     URL, URLSearchParams, Headers, Request, Response, AbortController, AbortSignal,
     TextEncoder, TextDecoder, console, setTimeout, clearTimeout, setInterval, clearInterval,
     exports: {}, require: name => {
@@ -129,7 +149,7 @@ export async function harness({ onFetch, onWallet, initialSession = session(), p
     walletConnect: typeof walletConnect === 'undefined' ? undefined : walletConnect,
     wcCandidate: typeof wcCandidate === 'undefined' ? undefined : wcCandidate,
     getState: () => ({ loadGeneration, lastPlan, lastTask, csrfToken, privateRef, privateRevision, privateCancelAllowed, reread: currentVerification(),
-      authBusy, sessionAddress,
+      authBusy, sessionAddress, loginAddress,
       ...(typeof connectionEpoch === 'number' ? { connectionEpoch, selected: selectedCandidate, revokePending, lastRevocation } : {}) })
   };`;
   const transpiled = ts.transpileModule(

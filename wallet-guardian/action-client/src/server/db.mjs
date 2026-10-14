@@ -1,3 +1,15 @@
+/**
+ * Suggested defaults from Mode A WP-4
+ * (docs/reviews/2026-10-14-mode-a-packages.md).
+ * These are the spec's suggested defaults, not a product decision of D-9.
+ * The operator owns the real limits.
+ * Absolute session TTL is 12 hours. Idle timeout is 30 minutes.
+ * The 15-minute Mode A auth_time window is WP-5. This package does not send.
+ */
+export const SUGGESTED_SESSION_ABSOLUTE_TTL_SECONDS = 12 * 60 * 60;
+export const SUGGESTED_SESSION_IDLE_TIMEOUT_SECONDS = 30 * 60;
+export const SUGGESTED_MODE_A_AUTH_FRESHNESS_SECONDS = 15 * 60;
+
 /** Authz, session revoke, and latest-revision reads go to the D1 primary. */
 export function primary(env) {
   if (!env || !env.DB || typeof env.DB.withSession !== "function") {
@@ -40,7 +52,7 @@ export function readConfig(env) {
     origin: parsed.origin,
     chainId,
     challengeTtl: 600,
-    sessionTtl: 12 * 60 * 60,
+    sessionTtl: SUGGESTED_SESSION_ABSOLUTE_TTL_SECONDS,
     challengeLimit,
     challengeGlobalLimit,
     challengeWindow: 600,

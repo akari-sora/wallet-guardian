@@ -10,10 +10,10 @@ import { handleApi } from "./handle.mjs";
 import { randomHex, sha256Hex } from "./http.mjs";
 import { acceptLoginChallenge } from "../siwe-gate.mjs";
 import { checksumAddress } from "./siwe.mjs";
-import { createPrimaryDatabase } from "./test-db.mjs";
+import { createPrimaryDatabase, privateTaskSchema } from "./test-db.mjs";
 
 const ORIGIN = "https://wallet-guardian-action-client.pages.dev";
-const schema = readFileSync(new URL("../../migrations/0001_p1_init.sql", import.meta.url), "utf8");
+const schema = privateTaskSchema();
 const sample = JSON.parse(readFileSync(new URL("../../public/sample-task.json", import.meta.url), "utf8"));
 const staticSample = readFileSync(new URL("../../public/sample-task.json", import.meta.url), "utf8");
 
