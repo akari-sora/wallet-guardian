@@ -122,7 +122,7 @@ Back up the state directory before an upgrade, install the new wheel with that r
 - Agent、排程與這台共用電腦不能簽名或廣播。
 - 主網測試交易未授權（`mainnet_test_transactions_authorized=false`）。
 - 沒有 trace／fork／真錢包端到端，所以 Lista 領取的模擬是 `INCOMPLETE`，寫入覆蓋是 `DRAFT` / `BLOCKED`。
-- 沒有 DeBank、Zerion、Alchemy、Tenderly、GoPlus key 時，不能宣稱全鏈 discovery 或保證模擬。
+- DeBank、Zerion、Tenderly 在這個版本沒有實作 adapter。設了 key 也不會呼叫它們，也不會解鎖全鏈 discovery 或模擬；doctor 會回「key configured; this provider adapter is not implemented」。GoPlus 也不會被自動呼叫。Alchemy 只出現在 `examples/monitor.json` 的 Base 路由，`init` 不會加。
 - 官方 BSC dataseed 停用 `eth_getLogs`，沒有 Etherscan key 就無法回補歷史領取。
 - 沒有公開 webhook、沒有付費套餐、沒有持續監控。`monitoring_active` 是 false。
 - Cloudflare Pages 已有公開來源，見 `docs/deploy.md`。程式常數 `fixed_https_origin` 仍是 false，所以這個套件不會發行公開任務連結。localhost 不是手機上的 localhost。網址回 200 不是執行授權。
@@ -177,15 +177,15 @@ uv run guardian alerts test --dry-run
 
 Etherscan V2 只用一把 `ETHERSCAN_API_KEY`，涵蓋 chainlist 以及之後的帳戶、交易與日誌。沒有第二把鏈別金鑰。有 key 且 chainlist 回傳資料列時，doctor 才標 `LIVE_PASS`。沒有 key 時是 `LIMITED_DISCOVERY`，不會把未認證的呼叫當成通過。
 
-| 變數 | 用途 | 沒有 key 時 |
-|---|---|---|
-| `ETHERSCAN_API_KEY` | Etherscan V2 chainlist、交易、ABI、日誌 | `LIMITED_DISCOVERY`，chainlist 不是 LIVE_PASS |
-| `GOPLUS_API_KEY` | 地址／授權風險補充 | `LIMITED_DISCOVERY`，不會假裝已篩過 |
-| `DEBANK_ACCESS_KEY` | DeFi discovery | `BLOCKED` |
-| `ZERION_API_KEY` | 替代 discovery | `BLOCKED`；本建置也不開放 webhook |
-| `ALCHEMY_API_KEY` | Portfolio token | `BLOCKED` |
-| `TENDERLY_ACCESS_KEY` | 可選模擬 | `BLOCKED` |
-| `GUARDIAN_MAINNET_SEND` | 使用者錢包的主網送出開關，預設 `false` | 確認鈕即使可按也不會呼叫錢包 |
+| 變數 | 用途 | 沒有 key 時 | 本版是否會呼叫 |
+|---|---|---|---|
+| `ETHERSCAN_API_KEY` | Etherscan V2 chainlist、交易、ABI、日誌 | `LIMITED_DISCOVERY`，chainlist 不是 LIVE_PASS | 會（有 key 且路由指定時） |
+| `GOPLUS_API_KEY` | 地址／授權風險補充 | `LIMITED_DISCOVERY`，不會假裝已篩過 | 否 |
+| `DEBANK_ACCESS_KEY` | 舊文件寫 DeFi discovery | 沒有 adapter，不是「有 key 就解鎖」 | 否（未實作） |
+| `ZERION_API_KEY` | 舊文件寫替代 discovery | 沒有 adapter；本建置也不開放 webhook | 否（未實作） |
+| `ALCHEMY_API_KEY` | Portfolio token | 沒有這把 key 時，範例 Base 路由不會連上 | 只在 `examples/monitor.json` 的 Base 路由；`init` 不會加 |
+| `TENDERLY_ACCESS_KEY` | 舊文件寫可選模擬 | 沒有 adapter，設了 key 也不保證模擬 | 否（未實作） |
+| `GUARDIAN_MAINNET_SEND` | 使用者錢包的主網送出開關，預設 `false` | 確認鈕即使可按也不會呼叫錢包 | 監控程式不會簽名或廣播 |
 
 `GUARDIAN_MAINNET_SEND=true` 也不會讓監控程式簽名或廣播。`mainnet_test_transactions_authorized` 在這個建置仍必須是 false。不要購買套餐，除非另外授權。
 
