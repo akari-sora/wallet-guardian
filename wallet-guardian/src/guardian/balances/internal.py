@@ -1,4 +1,4 @@
-"""Validate NodeReal internal transfers. This is not kind=\"internal\".
+"""Validate NodeReal and Blockscout internal transfers. This is not kind=\"internal\".
 
 kind=\"internal\" in the alert rules means a transfer between the operator's
 own wallets. An EVM internal call uses transfer_origin=evm_internal instead.
@@ -60,6 +60,8 @@ def normalize_internal_batch(
 def status_for_refusal(reason: str | None) -> str:
     """Map a provider failure onto the disclosed internal-history status."""
     text = reason or ""
+    if text in {"bot_challenge", "indexer_lag"}:
+        return text
     if text in {"credential_missing"}:
         return "credential_missing"
     if text in {"not_queried", "endpoint_missing", "source_disabled"}:
@@ -111,7 +113,9 @@ def _classify(item: Any, *, chain_id: int | None, owner: str) -> tuple[str, dict
         return "gap", None
     if state != "ok" or amount is None:
         return "drop", None
-    tx = _hash(item.get("hash") or item.get("tx_hash") or item.get("transactionHash"))
+    tx = _hash(
+        item.get("hash") or item.get("tx_hash") or item.get("transactionHash") or item.get("transaction_hash")
+    )
     block = _block(item)
     if tx is None or block is None:
         return "gap", None
@@ -187,6 +191,8 @@ def _trace_failure(item: Mapping[str, Any]) -> bool:
 def _explicit_failure(item: Mapping[str, Any]) -> bool:
     if _flag(item.get("isError")) in {"1", "true"}:
         return True
+    if "success" in item and _flag(item.get("success")) in _FAILED:
+        return True
     for key in ("status", "txreceipt_status"):
         if key not in item:
             continue
@@ -197,6 +203,8 @@ def _explicit_failure(item: Mapping[str, Any]) -> bool:
 
 
 def _explicit_success(item: Mapping[str, Any]) -> bool:
+    if "success" in item and _flag(item.get("success")) in _SUCCESS:
+        return True
     for key in ("status", "txreceipt_status", "receiptsStatus", "receipts_status"):
         if key not in item:
             continue
@@ -213,10 +221,12 @@ def _trace(
     amount: int,
     block: int,
 ) -> tuple[str, str]:
-    for key in ("uniqueId", "traceId", "traceAddress"):
+    for key in ("uniqueId", "traceId", "traceAddress", "index"):
         found = item.get(key)
         if isinstance(found, str) and found.strip():
             return found.strip(), "trace"
+        if isinstance(found, int) and not isinstance(found, bool):
+            return str(found), "trace"
         if isinstance(found, list) and found and all(isinstance(part, int) and not isinstance(part, bool) for part in found):
             return ".".join(str(part) for part in found), "trace"
     material = "\x1f".join((tx, sender, receiver, str(amount), str(block)))

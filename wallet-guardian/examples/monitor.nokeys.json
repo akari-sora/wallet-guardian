@@ -275,6 +275,13 @@
       ]
     },
     {
+      "network": "bsc-mainnet",
+      "capability": "history.native_internal",
+      "source_ids": [
+        "nodereal-bsc"
+      ]
+    },
+    {
       "network": "arbitrum-one",
       "capability": "balances.native",
       "source_ids": [
@@ -365,6 +372,15 @@
         "blockscout-pro",
         "blockscout-optimism-public",
         "blockscout-optimism"
+      ]
+    },
+    {
+      "network": "optimism-mainnet",
+      "capability": "history.native_internal",
+      "source_ids": [
+        "blockscout-optimism-public",
+        "blockscout-optimism",
+        "blockscout-pro"
       ]
     },
     {

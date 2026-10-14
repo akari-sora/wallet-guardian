@@ -85,9 +85,9 @@
       "support": "partial"
     },
     "history.native_internal": {
-      "notes": "",
-      "probe": "untested",
-      "support": "unsupported"
+      "notes": "Optimism keyless REST v2 /internal-transactions is partial from offline fixtures. The live probe was not run. Base and Arbitrum Cloudflare 403 is not bypassed. A later Blockscout PRO key uses this same v2 path with the source base URL and a Bearer header.",
+      "probe": "documented",
+      "support": "partial"
     },
     "history.nft": {
       "notes": "",
