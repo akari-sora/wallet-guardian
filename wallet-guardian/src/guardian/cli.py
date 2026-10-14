@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import sys
 import time
 from collections.abc import Callable
@@ -599,6 +600,8 @@ def _mcm_run(
         sys.stdout.flush()
         args._stdout_sent = True
 
+    news_bytes, news_problem = _read_optional(getattr(args, "news_input", None))
+    price_bytes, price_problem = _read_optional(getattr(args, "price_input", None))
     try:
         report = run_capability_pipeline(
             public,
@@ -609,8 +612,10 @@ def _mcm_run(
             clock=time.time if clock is None else clock,
             no_send=bool(args.no_send),
             sender=sender,
-            news_input=_optional_bytes(getattr(args, "news_input", None)),
-            price_input=_optional_bytes(getattr(args, "price_input", None)),
+            news_input=news_bytes,
+            price_input=price_bytes,
+            news_gap=_input_gap("news", news_problem),
+            price_gap=_input_gap("price", price_problem),
             notification_backend=notification_backend,
             notification_resolve=notification_resolve,
             report_ready=publish,
@@ -772,13 +777,34 @@ def _mcm_plan(args: argparse.Namespace) -> tuple[dict, int]:
     return plan, 0
 
 
-def _optional_bytes(path: str | None) -> bytes | None:
+_MAX_OPTIONAL_BYTES = 2 * 1024 * 1024
+
+
+def _read_optional(path: str | None) -> tuple[bytes | None, str | None]:
+    """Read a caller file. Missing, unreadable, or oversized input is a gap reason."""
     if not path:
-        return None
+        return None, None
+    target = Path(path)
     try:
-        return Path(path).read_bytes()
-    except OSError as exc:
-        raise GuardianError("input file is not readable") from exc
+        info = target.stat()
+    except OSError:
+        return None, "unreadable"
+    if not stat.S_ISREG(info.st_mode) or (os.name == "posix" and (info.st_mode & 0o777) == 0):
+        return None, "unreadable"
+    if info.st_size > _MAX_OPTIONAL_BYTES:
+        return None, "too_large"
+    try:
+        return target.read_bytes(), None
+    except OSError:
+        return None, "unreadable"
+
+
+def _input_gap(kind: str, problem: str | None) -> str | None:
+    if problem == "unreadable":
+        return f"{kind}_unreadable"
+    if problem == "too_large":
+        return f"{kind}_too_large"
+    return None
 
 
 def _chosen_backend(backend: Any) -> Any:

@@ -4,6 +4,8 @@
 
 The 72h shadow validation is not complete. A timer does not start that count. The formal series of 24 successive 3-hour windows has not been run.
 
+A news file written by another job is optional. `run-once --news-input <path>` reads it when the file is there. If the path is missing, unreadable, or larger than 2 MiB, the round records `news_unreadable` or `news_too_large` on `exposure_news` and continues the chain reads. That gap is not a zero and not a completed news check. This page does not switch the sender on.
+
 ## What the command does
 
 ```bash
