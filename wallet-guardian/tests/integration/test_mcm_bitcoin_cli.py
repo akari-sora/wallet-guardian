@@ -101,6 +101,7 @@ class EsploraBackend:
         self.mode = mode
         self.status = status
         self.calls: list[tuple[str, str]] = []
+        self.chain: list | None = None
 
     def send(self, call: object) -> RawResponse:
         method = str(getattr(call, "method", ""))
@@ -132,6 +133,11 @@ class EsploraBackend:
                 return 200, _stats(42, 0, 0, 0)
             if self.mode == "pending":
                 return 200, _stats(1000, 0, 5000, 0)
+            if self.mode == "quiet":
+                return 200, _stats(0, 0, 0, 0)
+            if self.chain is not None:
+                funded = sum(int(item.get("value") or 0) for tx in self.chain for item in tx.get("vout") or [])
+                return 200, _stats(funded, 0, 0, 0)
             return 200, _stats(260_000, 150_000, 5000, 0)
         if path.endswith(f"{marker}/txs/mempool"):
             if self.mode == "pending":
@@ -145,6 +151,12 @@ class EsploraBackend:
                 return 200, [forced]
             return 200, []
         if "/txs/chain" in path:
+            if self.mode == "quiet":
+                return 200, []
+            if self.chain is not None:
+                if path.endswith("/txs/chain"):
+                    return 200, self.chain
+                return 200, []
             if self.mode == "capped":
                 return 200, [_filler(number) for number in range(1, 26)]
             if self.mode == "pending":
@@ -163,11 +175,13 @@ class EsploraBackend:
         raise AssertionError(path)
 
 
-def _desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, address: str = WATCH) -> Path:
+def _desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, address: str = WATCH, *, floor: str | None = None) -> Path:
     document = json.loads(EXAMPLE.read_text(encoding="utf-8"))
     document["enabled_networks"] = ["bitcoin-mainnet"]
     document["plugins"] = []
     document["routing"] = [row for row in document["routing"] if row["network"] == "bitcoin-mainnet"]
+    if floor is not None:
+        document["alerts"]["native_unit_thresholds"] = {"bitcoin-mainnet": floor}
     config = tmp_path / "monitor.json"
     config.write_text(json.dumps(document), encoding="utf-8")
     accounts = {"schema_version": "guardian.accounts.v1", "tenant_id": "local", "accounts": [{
@@ -352,6 +366,35 @@ def test_bitcoin_cli_is_get_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         assert "tx/push" not in path
         assert not path.rstrip("/").endswith("/tx")
         assert method != "POST"
+
+
+def test_bitcoin_cli_point_zero_one_floor_alerts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """BTC 0.01 is an amount alert. 999_999 sats is below that floor and does not alert."""
+    dust_tx = "ee" * 32
+    floor_tx = "ff" * 32
+    config = _desk(tmp_path, monkeypatch, floor="0.01")
+    code, report = _run(capsys, config, EsploraBackend("quiet"))
+    assert code == 0, report
+    _events, alerts = _stored(tmp_path)
+    assert not any(row.get("kind") == "native_unit" for row in alerts)
+
+    below = EsploraBackend()
+    below.chain = [_tx(dust_tx, 799990, [_vin(OTHER, 999_999)], [_vout(WATCH, 999_999)], confirmed=True)]
+    code, report = _run(capsys, config, below)
+    assert code == 0, report
+    _events, alerts = _stored(tmp_path)
+    assert not any(row.get("kind") == "native_unit" for row in alerts)
+
+    hit = EsploraBackend()
+    hit.chain = [_tx(floor_tx, 799980, [_vin(OTHER, 1_000_000)], [_vout(WATCH, 1_000_000)], confirmed=True)]
+    code, report = _run(capsys, config, hit)
+    assert code == 0, report
+    _events, alerts = _stored(tmp_path)
+    native = [row for row in alerts if row.get("kind") == "native_unit"]
+    assert len(native) == 1
+    assert native[0]["network"] == "bitcoin-mainnet"
+    assert native[0]["tx_id"] == floor_tx
+    assert native[0]["alert"] is True
 
 
 def test_bitcoin_cli_bad_address_makes_no_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

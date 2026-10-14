@@ -441,6 +441,26 @@ def commit_eligible(
             return 0, None
         if planned["action"] == "discard":
             return 0, planned.get("decision")
+        if planned["action"] == "hold":
+            decision = planned.get("decision") if isinstance(planned.get("decision"), dict) else None
+            alert = planned.get("alert") if isinstance(planned.get("alert"), dict) else None
+            status = database.note_unjudged_native(
+                tenant,
+                wallet_id=item["wallet_id"],
+                network=item["network"],
+                asset=item["asset"],
+                expected_version=current,
+                checkpoint=_checkpoint_row(item, read, policy, started),
+                alert=alert,
+                decision=decision,
+            )
+            if status == "alerted":
+                return 1, decision
+            if status == "committed":
+                return 0, decision
+            if status == "rejected":
+                return 0, decision
+            continue
         decision = planned.get("decision") if isinstance(planned.get("decision"), dict) else None
         status = database.commit_native_observation(
             tenant,
@@ -522,6 +542,30 @@ def plan_transition(
     )
     alert = payload if judgment["decision"] == "above" else None
     decision = payload
+    if judgment["decision"] == "threshold_unavailable":
+        held = dict(payload)
+        material = "\x1f".join((
+            str(item["wallet_id"]),
+            str(item["network"]),
+            str(item["asset"]),
+            str(old_block),
+            old_hash.lower(),
+            "threshold_unavailable",
+        ))
+        held["identity"] = hashlib.sha256(material.encode("utf-8")).hexdigest()
+        held["dedup_key"] = dedup_key(
+            str(item.get("tenant") or ""),
+            item["wallet_id"],
+            item["network"],
+            "balance_delta",
+            held["identity"],
+        )
+        held["alert"] = True
+        held["detail"] = (
+            str(payload["detail"])
+            + " No native-unit floor or fresh USD quote was available, so this movement is unjudged and the recorded baseline is unchanged."
+        )
+        return {"action": "hold", "alert": held, "continuity": continuity, "decision": held, "reset": False}
     return {"action": "commit", "alert": alert, "continuity": continuity, "decision": decision, "reset": False}
 
 

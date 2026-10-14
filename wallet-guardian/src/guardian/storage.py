@@ -383,6 +383,54 @@ class Database:
             return None
         return {key: row[key] for key in row.keys()}
 
+    def note_unjudged_native(
+        self,
+        tenant_id: str,
+        *,
+        wallet_id: str,
+        network: str,
+        asset: str,
+        expected_version: int,
+        checkpoint: dict[str, Any],
+        alert: dict[str, Any] | None,
+        decision: dict[str, Any] | None,
+    ) -> str:
+        """Store an unjudged native movement. The baseline block and raw balance stay put."""
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.conn.execute(
+                """
+                SELECT version, raw_balance, block_number FROM native_balance_baselines
+                WHERE tenant_id=? AND wallet_id=? AND network=? AND asset=?
+                """,
+                (tenant_id, wallet_id, network, asset),
+            ).fetchone()
+            if row is None or int(row["version"]) != expected_version:
+                self.conn.rollback()
+                return "conflict" if row is not None else "rejected"
+            inserted = False
+            if isinstance(alert, dict) and alert.get("alert") is True and isinstance(alert.get("dedup_key"), str):
+                inserted = self._add_alert(tenant_id, str(alert["dedup_key"]), alert, notify=True)
+            if isinstance(decision, dict) and isinstance(checkpoint, dict):
+                _store_native_decision(
+                    self.conn, tenant_id, wallet_id, network, asset, checkpoint, decision,
+                )
+            kept = self.conn.execute(
+                """
+                SELECT raw_balance, block_number FROM native_balance_baselines
+                WHERE tenant_id=? AND wallet_id=? AND network=? AND asset=?
+                """,
+                (tenant_id, wallet_id, network, asset),
+            ).fetchone()
+            if kept is None or kept["raw_balance"] != row["raw_balance"] or kept["block_number"] != row["block_number"]:
+                self.conn.rollback()
+                return "rejected"
+            self.conn.commit()
+            return "alerted" if inserted else "committed"
+        except Exception:
+            self.conn.rollback()
+            raise
+
     def commit_native_observation(
         self,
         tenant_id: str,
