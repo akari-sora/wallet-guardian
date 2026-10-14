@@ -14,6 +14,7 @@ import {
   encodeRequestStatusCall,
   encodeWithdrawalRequestsCall,
   hexQuantity,
+  isAddress,
   sameAddress,
   trustedQuerySources,
 } from "./trusted-lista.mjs";
@@ -146,7 +147,7 @@ function localBlock(input) {
   const { plan, task, account, connectedAccount, walletChainId, planDigest } = input;
   const simulation = plan && plan.simulation;
   if (!plan || typeof plan !== "object") return view("insufficient", ["missing_fields"], null, simulation);
-  if (!sameAddress(account, account)) return view("insufficient", ["missing_fields"], null, simulation);
+  if (!isAddress(account)) return view("insufficient", ["missing_fields"], null, simulation);
   if (!sameAddress(plan.sender, plan.recipient) || !sameAddress(plan.sender, plan.execution_account)) {
     return fail(["recipient_changed"], input);
   }
@@ -174,7 +175,7 @@ function localBlock(input) {
   if (!deployment || deployment.method !== CLAIM_SIGNATURE || !sameAddress(deployment.proxy, sources.proxy)) {
     return fail(["deployment_changed"], input);
   }
-  if (!sameAddress(deployment.implementation, deployment.implementation) ||
+  if (!isAddress(deployment.implementation) ||
       !hashString(deployment.proxy_code_sha256) || !hashString(deployment.implementation_code_sha256)) {
     return view("insufficient", ["missing_fields"], null, simulation);
   }
@@ -301,7 +302,7 @@ function entryTuple(entry) {
   if (!entry || entry.registryVersion !== TRUSTED_LISTA.approvalRegistryVersion) return null;
   if (typeof entry.id !== "string" || entry.id.length === 0) return null;
   if (typeof entry.provenance !== "string" || entry.provenance.length === 0) return null;
-  if (!sameAddress(entry.implementation, entry.implementation)) return null;
+  if (!isAddress(entry.implementation)) return null;
   if (!hashString(entry.proxyCodeSha256) || !hashString(entry.implementationCodeSha256)) return null;
   return {
     implementation: entry.implementation,
@@ -338,6 +339,27 @@ function classifyApproval(entries, tuple, now) {
     if (state === "unbounded") unbounded = true;
   }
   return { active: false, retired, unbounded, entry: null };
+}
+
+/** Client pin classification. Empty entries stay unapproved_deployment. */
+export function classifyDeploymentApproval(entries, tuple, nowUnix) {
+  const list = Array.isArray(entries) ? entries : [];
+  if (list.length === 0) return { status: "unapproved_deployment", entry: null };
+  if (!tuple || typeof tuple !== "object" || !Number.isSafeInteger(nowUnix)) {
+    return { status: "unapproved_deployment", entry: null };
+  }
+  const normalized = {
+    implementation: tuple.implementation,
+    proxyCodeSha256: typeof tuple.proxyCodeSha256 === "string" ? tuple.proxyCodeSha256.toLowerCase() : tuple.proxyCodeSha256,
+    implementationCodeSha256: typeof tuple.implementationCodeSha256 === "string"
+      ? tuple.implementationCodeSha256.toLowerCase()
+      : tuple.implementationCodeSha256,
+  };
+  const approval = classifyApproval(list, normalized, nowUnix);
+  if (approval.active) return { status: "active", entry: approval.entry };
+  if (approval.retired) return { status: "approval_retired", entry: null };
+  if (approval.unbounded) return { status: "approval_unbounded", entry: null };
+  return { status: "unapproved_deployment", entry: null };
 }
 
 export function blockTagFailure(error) {

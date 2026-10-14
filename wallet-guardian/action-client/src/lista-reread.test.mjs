@@ -11,6 +11,7 @@ import {
   statusLines,
 } from "./lista-reread.mjs";
 import {
+  DEPLOYMENT_APPROVALS,
   TRUSTED_LISTA,
   claimCalldata,
   encodePausedCall,
@@ -180,9 +181,13 @@ test("trusted sources ignore rpc and abi named by task JSON", () => {
   assert.equal(lista.proxy, TRUSTED_LISTA.proxy);
   for (const signature of TRUSTED_LISTA.reads) assert.ok(lista.methods.read.includes(signature));
   assert.deepEqual(lista.methods.planned_write, [TRUSTED_LISTA.method]);
+  const bundled = JSON.parse(readFileSync(new URL("../../src/guardian/_resources/config/protocols/lista-bsc.json", import.meta.url), "utf8"));
   assert.equal(lista.deployment_approvals.registry_version, TRUSTED_LISTA.approvalRegistryVersion);
-  assert.deepEqual(lista.deployment_approvals.entries, []);
-  assert.deepEqual([...TRUSTED_LISTA.approvals], []);
+  assert.deepEqual(lista.deployment_approvals, bundled.deployment_approvals);
+  assert.deepEqual(lista.deployment_approvals, DEPLOYMENT_APPROVALS);
+  assert.equal(JSON.stringify(lista.deployment_approvals), JSON.stringify(bundled.deployment_approvals));
+  assert.equal(JSON.stringify(lista.deployment_approvals), JSON.stringify(DEPLOYMENT_APPROVALS));
+  assert.deepEqual(lista.deployment_approvals.entries, [...TRUSTED_LISTA.approvals]);
 });
 
 test("forged preflight: pass re-read, simulation not done, allow send closed", async () => {
