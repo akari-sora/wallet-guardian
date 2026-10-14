@@ -213,6 +213,34 @@
       "budget_group": "base-1rpc",
       "enabled": false,
       "range_limit": 50
+    },
+    "bsc-logs-nodereal": {
+      "adapter": "evm_rpc",
+      "endpoint_env": "NODEREAL_BSC_URL",
+      "budget_group": "nodereal-key",
+      "enabled": true,
+      "range_limit": 2000
+    },
+    "bsc-logs-48club": {
+      "adapter": "evm_rpc",
+      "endpoint_env": "RPC_BSC_LOGS_URL",
+      "budget_group": "bsc-logs-48club",
+      "enabled": true,
+      "range_limit": 1000
+    },
+    "op-logs-public": {
+      "adapter": "evm_rpc",
+      "endpoint_env": "RPC_OPTIMISM_LOGS_URL",
+      "budget_group": "op-logs-public",
+      "enabled": true,
+      "range_limit": 2000
+    },
+    "base-logs-drpc": {
+      "adapter": "evm_rpc",
+      "endpoint_env": "RPC_BASE_DRPC_URL",
+      "budget_group": "base-logs-drpc",
+      "enabled": false,
+      "range_limit": 100
     }
   },
   "routing": [
@@ -257,14 +285,16 @@
       "network": "bsc-mainnet",
       "capability": "history.token",
       "source_ids": [
-        "rpc-bsc-mainnet"
+        "bsc-logs-nodereal",
+        "bsc-logs-48club"
       ]
     },
     {
       "network": "bsc-mainnet",
       "capability": "permissions.standard",
       "source_ids": [
-        "rpc-bsc-mainnet"
+        "bsc-logs-nodereal",
+        "bsc-logs-48club"
       ]
     },
     {
@@ -323,7 +353,8 @@
       "capability": "history.token",
       "source_ids": [
         "tenderly_base",
-        "base-1rpc"
+        "base-1rpc",
+        "base-logs-drpc"
       ]
     },
     {
@@ -331,7 +362,8 @@
       "capability": "permissions.standard",
       "source_ids": [
         "tenderly_base",
-        "base-1rpc"
+        "base-1rpc",
+        "base-logs-drpc"
       ]
     },
     {
@@ -355,14 +387,14 @@
       "network": "optimism-mainnet",
       "capability": "history.token",
       "source_ids": [
-        "rpc-optimism-mainnet"
+        "op-logs-public"
       ]
     },
     {
       "network": "optimism-mainnet",
       "capability": "permissions.standard",
       "source_ids": [
-        "rpc-optimism-mainnet"
+        "op-logs-public"
       ]
     },
     {
@@ -639,6 +671,24 @@
       "retry_attempts": 3
     },
     "base-1rpc": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 10000,
+      "retry_attempts": 3
+    },
+    "bsc-logs-48club": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 10000,
+      "retry_attempts": 3
+    },
+    "op-logs-public": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 10000,
+      "retry_attempts": 3
+    },
+    "base-logs-drpc": {
       "max_rps": 1,
       "max_concurrency": 1,
       "max_requests_per_day": 10000,

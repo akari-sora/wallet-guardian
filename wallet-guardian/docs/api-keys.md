@@ -41,6 +41,8 @@ Signup: <https://nodereal.io>. `nr_getAssetTransfers` is documented for Ethereum
 
 What it unlocks: BSC `history.native_external` (external transfers, both directions, full `pageKey`). Token categories are a separate capability. A refused method is `method_not_found` or `unauthorized` (`blocked`), not an empty wallet.
 
+`examples/monitor.json` also names `bsc-logs-nodereal` for BSC `history.token` and `permissions.standard`. It reuses `NODEREAL_BSC_URL` and the `nodereal-key` budget group, with `range_limit` 2000. The key stays in that URL's `/v1/<key>` path. Logs and `budget.providers` mask the key segment and keep the host prefix. Do not commit the URL. The public host `bsc.nodereal.io` is not this source: the 2026-10-14 review recorded `-32005` there. The keyed getLogs width is the configured example width, not a live probe. This package did not re-run that review.
+
 Free tier: the limit is on the API key, shared by every host that key opens (BSC, Ethereum, Optimism, and any other chain on that same key). It is not a separate allowance per chain. NodeReal's free tier is a compute-unit-per-second limit. Check the dashboard for the current number. This repo does not assume a paid CU pack.
 
 `examples/monitor.json` and `examples/monitor.nokeys.json` put the NodeReal BSC source `nodereal-bsc` on one budget group, `nodereal-key`, with `max_rps` 1 and `max_concurrency` 1. That is a conservative default so one free key is not burst by this process. Several sources may name that same `budget_group`; they then share one token bucket.
@@ -54,7 +56,7 @@ Environment:
 - `NODEREAL_API_KEY`
 - `NODEREAL_BSC_URL`
 
-Without the key: BSC native history is `credential_missing`. There is no keyless BSC native-history source. BSC token history still uses public RPC logs when that endpoint accepts a topic-only filter; if it rejects even one block, the row stays a gap.
+Without the key: BSC native history is `credential_missing`. There is no keyless BSC native-history source. BSC token logs use `bsc-logs-48club` when `RPC_BSC_LOGS_URL` is set. If that variable is also unset, the log row is a gap, not an empty history. dataseed and publicnode are not topic-only log sources.
 
 <a id="blockscout"></a>
 
@@ -119,6 +121,19 @@ Base log endpoints, if you set them yourself:
 
 - `TENDERLY_BASE_URL`, for example `https://base.gateway.tenderly.co`, `range_limit` 1000. No key.
 - `BASE_1RPC_URL`, for example `https://1rpc.io/base`, `range_limit` 50. The example leaves `base-1rpc` disabled. It runs only after you enable it, and only when the remaining daily budget can cover the catch-up.
+- `RPC_BASE_DRPC_URL`, `range_limit` 100. The example leaves `base-logs-drpc` disabled. The 2026-10-14 review recorded Base dRPC accepting 100 blocks and rejecting 1000 with "ranges over". No default URL is set. See [Public log endpoints](#logs).
+
+<a id="logs"></a>
+
+## Public log endpoints
+
+These sources do not take an API key. The public config names the environment variable. It does not contain a URL, and it does not contain a key. A missing variable skips that source. A read that fails stays a gap. It is not an empty wallet and it is not complete. Wallet addresses travel in `eth_getLogs` topics, so the first call records an `indexer_disclosures` row. `privacy.third_party_wallet_queries` stays `deny_until_local_consent` until you set `operator_approved_sources_only`.
+
+The numbers below are the 2026-10-14 review appendix. This package did not call the network. Live Mac probes are NOT_RUN.
+
+- `RPC_BSC_LOGS_URL` is `bsc-logs-48club`, `range_limit` 1000. There is no default endpoint. There are no docs and no SLA. The operator is an MEV builder. The review recorded HTTP 200 at 100 blocks and at 1000 blocks. That is not a finished history. BSC dataseed (`-32005`) and publicnode (`-32701`) are not topic-only log sources. The privacy page cited by the review is <https://docs.48.club/privacy-rpc.md>.
+- `RPC_OPTIMISM_LOGS_URL` is `op-logs-public`, `range_limit` 2000. The review recorded `https://mainnet.optimism.io` accepting 1000 and 5000 blocks, and HTTP 413 at 20000 ("limited to a 10,000 range"). publicnode returned `-32701` and is not this route. Optimism documents the public endpoint as not suitable for production: <https://docs.optimism.io/app-developers/reference/rpc-providers>.
+- `RPC_BASE_DRPC_URL` is `base-logs-drpc`, `range_limit` 100, disabled in the examples. The review recorded 100 blocks accepted and 1000 rejected with "ranges over". The public citation is <https://blog.drpc.org/upcoming-changes-to-drpcs-free-plan-effective-june-1-2025/>.
 
 <a id="goplus"></a>
 

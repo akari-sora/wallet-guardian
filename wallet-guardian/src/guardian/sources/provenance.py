@@ -11,6 +11,7 @@ import re
 from collections import Counter
 from typing import Any, Mapping
 
+from guardian.security.redact import redact
 from guardian.sources.alchemy import CU_ESTIMATE
 from guardian.sources.resolver import egress_evidence
 
@@ -84,16 +85,22 @@ class CallLedger:
         providers = {}
         for source_id in sorted(self.providers):
             entry = self.providers[source_id]
+            methods = {redact(str(name)): count for name, count in sorted(entry["methods"].items())}
+            headers = {
+                redact(str(key)): redact(str(value))
+                for key, value in sorted(entry["rate_headers"].items())
+            }
+            remaining = entry["remaining_quota"]
             providers[source_id] = {
-                "adapter": entry["adapter"],
+                "adapter": redact(str(entry["adapter"])),
                 "credits": entry["credits"],
                 "credits_basis": entry.get("credits_basis", "count"),
                 "http_calls": entry["http_calls"],
                 "logical_methods": entry["logical_methods"],
-                "methods": dict(sorted(entry["methods"].items())),
+                "methods": methods,
                 "pages": entry["pages"],
-                "rate_headers": dict(sorted(entry["rate_headers"].items())),
-                "remaining_quota": entry["remaining_quota"],
+                "rate_headers": headers,
+                "remaining_quota": None if remaining is None else redact(str(remaining)),
             }
         return {
             "backoff": list(self.backoff),

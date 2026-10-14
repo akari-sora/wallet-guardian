@@ -566,6 +566,8 @@ def _finish(source_id: str, protocol: str, raw: RawResponse, max_bytes: int) -> 
         raise
     classification = classify_response(raw.status, parsed)
     body = parsed if classification.category in {"empty", "error", "ok", "partial"} else None
+    if isinstance(body, dict):
+        body = _redact_error_text(body)
     return _result(source_id, raw.status, body, classification, headers)
 
 
@@ -589,6 +591,52 @@ def _result(
         headers=headers,
         detail=detail,
     )
+
+
+def _redact_error_text(body: dict) -> dict:
+    """Mask a key embedded in an error string. Log rows are left alone.
+
+    ``error.message`` and every string inside ``error.data`` are masked.
+    ``error.data`` may be a string, a dict, or a list. Nested dicts and lists
+    are walked. Other error fields are not treated as log rows.
+    """
+    cleaned = body
+    error = body.get("error")
+    if isinstance(error, dict):
+        copied = dict(error)
+        changed = False
+        message = copied.get("message")
+        if isinstance(message, str):
+            masked = redact(message)
+            if masked != message:
+                copied["message"] = masked
+                changed = True
+        if "data" in copied:
+            masked_data = _redact_nested(copied.get("data"))
+            if masked_data != copied.get("data"):
+                copied["data"] = masked_data
+                changed = True
+        if changed:
+            cleaned = dict(cleaned)
+            cleaned["error"] = copied
+    message = cleaned.get("message")
+    if isinstance(message, str):
+        masked = redact(message)
+        if masked != message:
+            cleaned = dict(cleaned)
+            cleaned["message"] = masked
+    return cleaned
+
+
+def _redact_nested(value: Any) -> Any:
+    """Mask NodeReal and other path keys in every string of a JSON value."""
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {key: _redact_nested(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_nested(item) for item in value]
+    return value
 
 
 def _snippet(body: bytes) -> str:
