@@ -1,4 +1,4 @@
-import { getSession, postChallenge, postLogout, postVerify } from "./auth.mjs";
+import { getSession, postChallenge, postLogout, postLogoutAll, postVerify } from "./auth.mjs";
 import { primary, privateApiConfigured, readConfig } from "./db.mjs";
 import { internalError, json, nowSeconds } from "./http.mjs";
 import { getTask, postCancel, postCreate } from "./tasks.mjs";
@@ -7,6 +7,7 @@ const ROUTES = [
   { method: "POST", pattern: /^\/api\/auth\/challenge$/, origin: true, handler: (request, env, db, now) => postChallenge(request, env, db, now) },
   { method: "POST", pattern: /^\/api\/auth\/verify$/, origin: true, handler: (request, env, db, now) => postVerify(request, env, db, now) },
   { method: "POST", pattern: /^\/api\/auth\/logout$/, origin: true, handler: (request, env, db, now) => postLogout(request, env, db, now) },
+  { method: "POST", pattern: /^\/api\/auth\/logout-all$/, origin: true, handler: (request, env, db, now) => postLogoutAll(request, env, db, now) },
   { method: "GET", pattern: /^\/api\/session$/, origin: false, handler: (request, _env, db, now) => getSession(request, db, now) },
   { method: "GET", pattern: /^\/api\/tasks\/(ref_[a-f0-9]{32})$/, origin: false, handler: (request, _env, db, now, match) => getTask(request, db, now, match[1]) },
   { method: "POST", pattern: /^\/api\/tasks\/(ref_[a-f0-9]{32})\/cancel$/, origin: true, handler: (request, _env, db, now, match) => postCancel(request, db, now, match[1]) },
@@ -28,6 +29,13 @@ async function route(request, env) {
   // Preview deployments carry no D1 binding or AUTH audience: the private API stays unavailable there.
   if (!privateApiConfigured(env)) {
     return json(503, { error: "private_api_unavailable", execution_authorized: false });
+  }
+  // A malformed task ref is not the strict route. GET still answers; other methods stay unmatched.
+  if (request.method === "GET") {
+    const loose = /^\/api\/tasks\/([^/]+)$/.exec(path);
+    if (loose && !/^ref_[a-f0-9]{32}$/.test(loose[1])) {
+      return getTask(request, primary(env), nowSeconds(), loose[1]);
+    }
   }
 
   let matched = false;

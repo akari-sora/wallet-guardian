@@ -249,8 +249,11 @@ test('WA-05 logging in with a different account than the live session revokes th
   const other = '0x' + '2'.repeat(40);
   const binance = makeProvider('binance', { address: other });
   const env = eip6963Window({ wallets: [{ provider: binance, info: BINANCE_INFO }] });
-  const h = await harness({ setupWindow: env.setup, onFetch: (path) => path === '/api/auth/challenge'
-    ? jsonResponse(challenge({ address: other })) : undefined });
+  const h = await harness({ setupWindow: env.setup, onFetch: (path) => {
+    if (path === '/api/auth/challenge') return jsonResponse(challenge({ address: other }));
+    if (path === '/api/auth/verify') return jsonResponse({ ...session(), address: other });
+    return undefined;
+  } });
   await waitFor(() => h.elements.get('view').textContent.includes('Lista'));
   await h.app.login();
   const order = h.calls.map((c) => c.path);

@@ -11,15 +11,18 @@
  * Re-runnable: a stored credential that D1 confirms is reused. A credential that cannot be
  * verified (store/D1 mismatch, or an active D1 row with no stored secret) stops the run instead of
  * silently issuing another token. --rotate revokes (revoked_at) and reissues explicitly.
+ * --revoke checks ^[a-f0-9]{16}$ before any SQL.
+ * --revoke-wallet revokes that address's credential, membership, and sessions in one D1 batch.
+ * It prints a masked address and never prints the token.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { d1Execute, maskAddress, maskHex } from "./lib/d1.mjs";
+import { revokeWalletAccess, sqlBatchDb, validateCredentialId, validateWalletAddress } from "./lib/revoke-access.mjs";
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
-const HEX16 = /^[a-f0-9]{16}$/;
 const TENANT = /^tnt_[a-f0-9]{16}$/;
 const DEFAULT_TTL = 24 * 60 * 60;
 
@@ -39,10 +42,24 @@ const { values } = parseArgs({
     "ttl-seconds": { type: "string" },
     rotate: { type: "boolean", default: false },
     revoke: { type: "string" },
+    "revoke-wallet": { type: "string" },
     "confirm-remote": { type: "boolean", default: false },
   },
   strict: true,
 });
+
+// Format before any SQL, including a quote in --revoke. Validators do not build statements.
+if (values.revoke !== undefined && values["revoke-wallet"] !== undefined) {
+  fail("pass only one of --revoke or --revoke-wallet");
+}
+if (values.revoke !== undefined) {
+  const parsed = validateCredentialId(values.revoke);
+  if (!parsed.ok) fail(parsed.error);
+}
+if (values["revoke-wallet"] !== undefined) {
+  const parsed = validateWalletAddress(values["revoke-wallet"]);
+  if (!parsed.ok) fail(parsed.error);
+}
 
 const target = values.target;
 if (target !== "local" && target !== "remote") fail("--target must be local or remote");
@@ -136,9 +153,10 @@ function active(row, now) {
 }
 
 function revoke(id, now) {
-  if (!HEX16.test(id)) fail("credential id must be 16 hex characters");
-  d1Execute(target, `UPDATE publish_credentials SET revoked_at = ${now} WHERE credential_id = '${id}' AND revoked_at IS NULL`, d1opts);
-  const [row] = d1Execute(target, `SELECT credential_id, revoked_at FROM publish_credentials WHERE credential_id = '${id}'`, d1opts);
+  const parsed = validateCredentialId(id);
+  if (!parsed.ok) fail(parsed.error);
+  d1Execute(target, `UPDATE publish_credentials SET revoked_at = ${now} WHERE credential_id = '${parsed.id}' AND revoked_at IS NULL`, d1opts);
+  const [row] = d1Execute(target, `SELECT credential_id, revoked_at FROM publish_credentials WHERE credential_id = '${parsed.id}'`, d1opts);
   for (const record of loadRecords()) {
     if (record.credential_id === id) saveRecord({ ...record, status: "revoked", revoked_at: row?.revoked_at ?? now, token: null });
   }
@@ -150,6 +168,20 @@ const report = { target, tool: "bootstrap-publisher", at: new Date(now * 1000).t
 
 if (values.revoke) {
   report.results.push({ action: "revoke", ...revoke(values.revoke, now) });
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  process.exit(0);
+}
+
+if (values["revoke-wallet"]) {
+  const parsed = validateWalletAddress(values["revoke-wallet"]);
+  if (!parsed.ok) fail(parsed.error);
+  await revokeWalletAccess(sqlBatchDb((sql) => d1Execute(target, sql, d1opts)), parsed.address, now);
+  for (const record of loadRecords()) {
+    if (String(record.wallet_address).toLowerCase() === parsed.address) {
+      saveRecord({ ...record, status: "revoked", revoked_at: now, token: null });
+    }
+  }
+  report.results.push({ action: "revoke-wallet", wallet: maskAddress(parsed.address), revoked: true });
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   process.exit(0);
 }

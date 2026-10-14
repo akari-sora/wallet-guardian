@@ -1,4 +1,13 @@
+import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+
+/** 0001 plus every later private-task migration the in-memory tests must apply. */
+export function privateTaskSchema() {
+  const dir = new URL("../../migrations/", import.meta.url);
+  return ["0001_p1_init.sql", "0002_session_lifecycle.sql"]
+    .map((name) => readFileSync(new URL(name, dir), "utf8"))
+    .join("\n");
+}
 
 export function createPrimaryDatabase(schemaSql) {
   const sqlite = new DatabaseSync(":memory:");

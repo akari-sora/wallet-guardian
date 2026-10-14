@@ -1,4 +1,4 @@
-import { readConfig } from "./db.mjs";
+import { readConfig, SUGGESTED_SESSION_IDLE_TIMEOUT_SECONDS } from "./db.mjs";
 import {
   cookies,
   hostCookie,
@@ -13,22 +13,56 @@ import { buildSiweMessage, checksumAddress, readNonce, recoverAddress } from "./
 const ATTEMPT = "__Host-wg_attempt";
 const SESSION = "__Host-wg_session";
 
+// Do not write last_seen_at on every GET. Spec suggestion, not a D-9 decision.
+export const SESSION_LAST_SEEN_WRITE_INTERVAL_SECONDS = 60;
+
 function clearCookie(name) {
   return hostCookie(name, "", 0);
 }
 
-export async function loadSession(db, request, now) {
+function idleAnchor(row) {
+  const raw = row.last_seen_at ?? row.auth_time ?? row.created_at;
+  if (raw == null) return null;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) return null;
+  return value;
+}
+
+function sessionUsable(row, now) {
+  if (!row || row.revoked_at != null || Number(row.expires_at) <= now) return false;
+  const anchor = idleAnchor(row);
+  if (anchor == null) return false;
+  return now - anchor < SUGGESTED_SESSION_IDLE_TIMEOUT_SECONDS;
+}
+
+async function sessionRow(db, request) {
   const token = cookies(request)[SESSION];
   if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
   const tokenHash = await sha256Hex(token);
-  const row = await db
+  return db
     .prepare(
-      "SELECT token_hash, address, csrf_token, expires_at, revoked_at FROM sessions WHERE token_hash = ?",
+      `SELECT token_hash, address, csrf_token, created_at, expires_at, revoked_at, auth_time, last_seen_at
+       FROM sessions WHERE token_hash = ?`,
     )
     .bind(tokenHash)
     .first();
-  if (!row || row.revoked_at != null || row.expires_at <= now) return null;
-  return row;
+}
+
+async function touchLastSeen(db, row, now) {
+  const anchor = idleAnchor(row);
+  if (anchor == null || now - anchor < SESSION_LAST_SEEN_WRITE_INTERVAL_SECONDS) return row;
+  const updated = await db
+    .prepare("UPDATE sessions SET last_seen_at = ? WHERE token_hash = ? AND revoked_at IS NULL")
+    .bind(now, row.token_hash)
+    .run();
+  if (Number(updated.meta.changes) !== 1) return null;
+  return { ...row, last_seen_at: now };
+}
+
+export async function loadSession(db, request, now) {
+  const row = await sessionRow(db, request);
+  if (!sessionUsable(row, now)) return null;
+  return touchLastSeen(db, row, now);
 }
 
 async function rateLimited(db, key, now, windowSeconds, limit) {
@@ -186,13 +220,25 @@ export async function postVerify(request, env, db, now) {
   const token = randomHex(32);
   const sessionCsrf = randomHex(32);
   const expires = now + cfg.sessionTtl;
-  await db
-    .prepare(
-      `INSERT INTO sessions (token_hash, address, csrf_token, created_at, expires_at, revoked_at)
-       VALUES (?, ?, ?, ?, ?, NULL)`,
-    )
-    .bind(await sha256Hex(token), row.address, sessionCsrf, now, expires)
-    .run();
+  const tokenHash = await sha256Hex(token);
+  // A still-valid cookie on this request is rotated away in the same batch as the insert
+  // (docs/wallet-connect-01.md known limitation: the old D1 row otherwise lives until expiry).
+  const previous = await sessionRow(db, request);
+  const statements = [];
+  if (sessionUsable(previous, now)) {
+    statements.push(
+      db.prepare("UPDATE sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL")
+        .bind(now, previous.token_hash),
+    );
+  }
+  statements.push(
+    db.prepare(
+      `INSERT INTO sessions
+        (token_hash, address, csrf_token, created_at, expires_at, revoked_at, auth_time, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
+    ).bind(tokenHash, row.address, sessionCsrf, now, expires, now, now),
+  );
+  await db.batch(statements);
   return json(
     200,
     { ...publicIdentity(row.address), expires_at: expires, csrf_token: sessionCsrf },
@@ -226,6 +272,35 @@ export async function postLogout(request, env, db, now) {
   ]);
 }
 
+export async function postLogoutAll(request, env, db, now) {
+  readConfig(env);
+  const parsed = await readJson(request, 1024);
+  if (parsed.error) return json(400, { error: parsed.error, execution_authorized: false });
+  const session = await loadSession(db, request, now);
+  if (!session) {
+    return json(401, { authenticated: false, error: "unauthenticated", execution_authorized: false }, [
+      ["set-cookie", clearCookie(SESSION)],
+    ]);
+  }
+  const csrf = request.headers.get("x-csrf-token") ?? "";
+  if (!(await timingSafeEqual(session.csrf_token, csrf))) {
+    return json(403, { error: "csrf_required", execution_authorized: false });
+  }
+  await db
+    .prepare("UPDATE sessions SET revoked_at = ? WHERE lower(address) = ? AND revoked_at IS NULL")
+    .bind(now, String(session.address).toLowerCase())
+    .run();
+  return json(200, {
+    authenticated: false,
+    revoked: true,
+    scope: "address",
+    erc1271: "unsupported",
+    execution_authorized: false,
+  }, [
+    ["set-cookie", clearCookie(SESSION)],
+  ]);
+}
+
 export async function getSession(request, db, now) {
   const session = await loadSession(db, request, now);
   if (!session) return json(200, { authenticated: false, erc1271: "unsupported", execution_authorized: false });
@@ -233,5 +308,6 @@ export async function getSession(request, db, now) {
     ...publicIdentity(session.address),
     expires_at: session.expires_at,
     csrf_token: session.csrf_token,
+    auth_time: session.auth_time == null ? null : Number(session.auth_time),
   });
 }
