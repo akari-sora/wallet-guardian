@@ -226,6 +226,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     service.add_argument("--dry-run", action="store_true", help="print the plan and do not enable units")
     service.add_argument("--apply", action="store_true", help="install rendered units; refused when omitted")
+    service.add_argument(
+        "--schedule-mode",
+        choices=("auto", "launchd_agent"),
+        default="auto",
+        help="auto (default) selects systemd or cron; launchd_agent prints three LaunchAgents and does not load them",
+    )
     service.add_argument("--mcm-config", default=None)
     service.add_argument("--output", default=None, help="write rendered units only under this directory")
     service.add_argument("--executable", default=None, help="absolute path of the installed guardian executable")
@@ -371,6 +377,7 @@ def dispatch(
             offset_minutes=int(getattr(args, "offset_minutes", 5)),
             legacy_executable=getattr(args, "legacy_executable", None),
             runner=service_runner,
+            schedule_mode=getattr(args, "schedule_mode", None),
         )
         return payload, 0 if payload.get("installed") else 1
     raise GuardianError("unknown command")

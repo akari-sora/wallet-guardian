@@ -74,7 +74,7 @@ If the system resolver returns an address in `198.18.0.0/15`, the lookup is refu
 
 ## Sleeping Mac
 
-A laptop that is asleep at the slot does not run that slot. The shipped timers set `Persistent=false`, so systemd does not fire the missed slot on wake as an on-time run. `persistent_counts_as_on_time` is false. The slot recorder stores `reason` `missed`, or `late_start` if the process starts more than 30 minutes late. A later catch-up may fill data and does not count as the missed slot having run on time. `install-service` does not write a macOS LaunchAgent. See [scheduling.md](scheduling.md). Host smoke of missed-slot recording is `NOT_RUN`.
+A laptop that is asleep at the slot does not run that slot. The shipped timers set `Persistent=false`, so systemd does not fire the missed slot on wake as an on-time run. `persistent_counts_as_on_time` is false. The slot recorder stores `reason` `missed`, or `late_start` if the process starts more than 30 minutes late. A later catch-up may fill data and does not count as the missed slot having run on time. `install-service --schedule-mode launchd_agent` prints three LaunchAgents and does not load them. A run coalesced on wake is not an on-time slot. See [scheduling.md](scheduling.md). Host smoke of missed-slot recording is `NOT_RUN`.
 
 ## An empty alert outbox is not all clear
 
