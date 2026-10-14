@@ -1,4 +1,5 @@
 interface ImportMetaEnv {
+  readonly PROD: boolean;
   readonly VITE_GUARDIAN_MAINNET_SEND?: string;
   /** WALLET-CONNECT-01 W-B: "true" to offer WalletConnect. Off when missing. */
   readonly VITE_WALLETCONNECT_ENABLED?: string;

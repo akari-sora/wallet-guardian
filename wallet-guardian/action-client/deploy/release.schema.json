@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Action client deployment inventory. mainnet_send is false for every release. send_off with mainnet_send true is invalid. Origins must also appear in config/deployments/private-task-origins.json; that cross-file check is enforced by the record validator, not by this schema alone. This schema does not authorize a deploy.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "releases"],
+  "properties": {
+    "schema_version": {
+      "const": "guardian.action_client_releases.v1"
+    },
+    "note": {
+      "type": "string"
+    },
+    "releases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/release"
+      }
+    }
+  },
+  "$defs": {
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "release_id",
+        "deployment_id",
+        "origin",
+        "source_sha",
+        "client_build",
+        "variant",
+        "walletconnect",
+        "mainnet_send",
+        "files",
+        "headers_sha256",
+        "cf_deployment_url",
+        "status"
+      ],
+      "properties": {
+        "release_id": { "type": "string", "minLength": 1 },
+        "deployment_id": { "type": "string", "minLength": 1 },
+        "origin": { "type": "string", "minLength": 1, "pattern": "^https://[^/]+$" },
+        "source_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "client_build": { "type": "string", "minLength": 1 },
+        "variant": { "enum": ["send_off", "mode_a"] },
+        "walletconnect": { "type": "boolean" },
+        "mainnet_send": { "const": false },
+        "files": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        },
+        "headers_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "cf_deployment_url": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["active", "retired", "deleted"] }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "variant": { "const": "send_off" } },
+            "required": ["variant"]
+          },
+          "then": {
+            "properties": { "mainnet_send": { "const": false } },
+            "required": ["mainnet_send"]
+          }
+        }
+      ]
+    }
+  }
+}

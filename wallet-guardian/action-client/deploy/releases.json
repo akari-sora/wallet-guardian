@@ -1,0 +1,5 @@
+{
+  "schema_version": "guardian.action_client_releases.v1",
+  "note": "No release in this file has hashed dist bytes. An empty releases array does not claim that any origin is serving a recorded build, and it does not record a deployment as active.",
+  "releases": []
+}
