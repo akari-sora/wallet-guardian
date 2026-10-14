@@ -11,6 +11,7 @@ wallet-guardian/data/
 wallet-guardian/evidence/
 wallet-guardian/action-client/node_modules/
 wallet-guardian/action-client/dist/
+wallet-guardian/action-client/dist-mode-a/
 .env
 .env.*
 *.env

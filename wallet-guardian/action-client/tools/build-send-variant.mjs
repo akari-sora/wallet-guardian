@@ -38,7 +38,6 @@ function main() {
     env: {
       ...process.env,
       WG_SEND_VARIANT: "mode_a",
-      WG_SEND_VARIANT_BUILD: "mode_a",
     },
     stdio: "inherit",
   });

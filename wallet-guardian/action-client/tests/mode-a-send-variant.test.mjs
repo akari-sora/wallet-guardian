@@ -4,7 +4,8 @@
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import vm from "node:vm";
@@ -494,6 +495,79 @@ test("build:send-variant exits non-zero without an auth id or inventory entry", 
   });
   assert.notEqual(authOnly.status, 0);
   assert.match(`${authOnly.stdout}\n${authOnly.stderr}`, /approved_by_user/);
+});
+
+function spawnVite(overrides, args) {
+  const env = { ...process.env };
+  delete env.WG_SEND_VARIANT;
+  delete env.WG_RELEASE_AUTH_ID;
+  delete env.WG_SEND_VARIANT_BUILD;
+  delete env.VITE_GUARDIAN_MAINNET_SEND;
+  Object.assign(env, overrides);
+  const viteBin = join(CLIENT, "node_modules/vite/bin/vite.js");
+  return new Promise((resolvePromise) => {
+    const child = spawn(process.execPath, [viteBin, ...args], { cwd: CLIENT, env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("close", (status) => resolvePromise({ status, stdout, stderr }));
+  });
+}
+
+function walkFiles(dir) {
+  if (!existsSync(dir)) return [];
+  const found = [];
+  for (const name of readdirSync(dir)) {
+    const absolute = join(dir, name);
+    if (statSync(absolute).isDirectory()) found.push(...walkFiles(absolute));
+    else found.push(absolute);
+  }
+  return found;
+}
+
+function sendVariantEntryPresent(dir) {
+  return walkFiles(dir).some((file) => {
+    const normalized = file.split("\\").join("/");
+    if (normalized.includes("sendVariant") || normalized.includes("send-variant-entry")) return true;
+    if (!file.endsWith(".js")) return false;
+    return readFileSync(file, "utf8").includes("send variant is not this build");
+  });
+}
+
+test("direct vite build with WG_SEND_VARIANT=mode_a throws without an approved inventory", async () => {
+  const outDir = mkdtempSync(join(tmpdir(), "wg-vite-refuse-"));
+  try {
+    const missing = await spawnVite({ WG_SEND_VARIANT: "mode_a" }, ["build", "--outDir", outDir]);
+    assert.notEqual(missing.status, 0);
+    assert.match(`${missing.stdout}\n${missing.stderr}`, /send variant refused/);
+    assert.match(`${missing.stdout}\n${missing.stderr}`, /WG_RELEASE_AUTH_ID/);
+    assert.equal(sendVariantEntryPresent(outDir), false);
+    const authOnly = await spawnVite({
+      WG_SEND_VARIANT: "mode_a",
+      WG_RELEASE_AUTH_ID: "missing-inventory-test",
+    }, ["build", "--outDir", outDir]);
+    assert.notEqual(authOnly.status, 0);
+    assert.match(`${authOnly.stdout}\n${authOnly.stderr}`, /approved_by_user/);
+    assert.equal(sendVariantEntryPresent(outDir), false);
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
+test("a default vite build does not emit the send-variant entry", { timeout: 120_000 }, async () => {
+  const outDir = mkdtempSync(join(tmpdir(), "wg-vite-default-"));
+  try {
+    const built = await spawnVite({}, ["build", "--outDir", outDir, "--emptyOutDir"]);
+    assert.equal(built.status, 0, `${built.stdout}\n${built.stderr}`);
+    const files = walkFiles(outDir);
+    assert.ok(files.some((file) => file.endsWith(".js")));
+    assert.equal(sendVariantEntryPresent(outDir), false);
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+  }
 });
 
 function specsIn(file) {
