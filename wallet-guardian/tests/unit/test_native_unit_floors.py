@@ -38,3 +38,10 @@ def test_init_writes_floors_only_for_enabled_non_eth_networks() -> None:
         "polygon-pos": "1000",
     }
     assert "ethereum-mainnet" not in floors
+    solana = _build(
+        _answers(["solana-mainnet", "bitcoin-mainnet"]),
+        recorded_at="2026-10-14T00:00:00Z",
+    )
+    solana_floors = solana["monitor"]["alerts"]["native_unit_thresholds"]
+    assert "solana-mainnet" not in solana_floors
+    assert solana_floors["bitcoin-mainnet"] == "0.01"
