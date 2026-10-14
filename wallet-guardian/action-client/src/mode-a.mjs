@@ -4,7 +4,7 @@
  * and does not construct or submit a wallet request.
  */
 
-import { CLAIM_WITHDRAWAL_TOPIC, claimCalldata, sameAddress, TRUSTED_LISTA } from "./trusted-lista.mjs";
+import { CLAIM_WITHDRAWAL_TOPIC, claimCalldata, isAddress, sameAddress, TRUSTED_LISTA } from "./trusted-lista.mjs";
 import { reverifyListaClaim, settleReread } from "./lista-reread.mjs";
 
 export const POISON_NOTE =
@@ -170,7 +170,7 @@ function boundSubmission(track) {
   if (!submission || typeof submission !== "object") return null;
   if (!hashText(track.txHash) || !hashText(submission.txHash)) return null;
   if (submission.txHash.toLowerCase() !== track.txHash.toLowerCase()) return null;
-  if (!sameAddress(submission.account, submission.account)) return null;
+  if (!isAddress(submission.account)) return null;
   if (!sameAddress(submission.to, TRUSTED_LISTA.proxy)) return null;
   if (!Number.isSafeInteger(submission.idx) || submission.idx < 0) return null;
   if (submission.chainId !== TRUSTED_LISTA.chainId) return null;
@@ -466,7 +466,7 @@ export function describePreparedClaim(observation) {
   if (!sameAddress(claim.recipient, observation.binding && observation.binding.account)) {
     throw new Error("recipient");
   }
-  if (!sameAddress(claim.recipient, claim.recipient)) throw new Error("recipient");
+  if (!isAddress(claim.recipient)) throw new Error("recipient");
   return {
     from: observation.binding.account,
     to: TRUSTED_LISTA.proxy,

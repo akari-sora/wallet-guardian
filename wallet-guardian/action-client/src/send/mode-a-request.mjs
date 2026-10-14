@@ -11,7 +11,7 @@ import {
   interpretWalletReturn,
   sendAuthorizedByReread,
 } from "../mode-a.mjs";
-import { sameAddress } from "../trusted-lista.mjs";
+import { isAddress } from "../trusted-lista.mjs";
 
 const DENIED_BATCH_METHOD = "wallet_sendCalls";
 
@@ -59,7 +59,7 @@ function rememberSubmission(outcome, observation, prepared, identity) {
   if (!outcome || outcome.status !== "pending" || !hashText(outcome.txHash)) return outcome;
   const claim = observation && observation.claim;
   const account = observation && observation.binding && observation.binding.account;
-  if (!claim || !sameAddress(account, account)) return outcome;
+  if (!claim || !isAddress(account)) return outcome;
   return {
     ...outcome,
     submission: {

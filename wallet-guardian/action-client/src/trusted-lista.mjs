@@ -4,6 +4,20 @@ import { keccak_256 } from "@noble/hashes/sha3.js";
 import { readRpcResult } from "./rpc-result.mjs";
 
 export const CLAIM_SIGNATURE = "claimWithdraw(uint256)";
+
+/**
+ * Client-owned deployment pins. D-1: entries stay empty until an operator
+ * approves one. An empty list is valid and means unapproved_deployment.
+ * A chain read must not fill this. Keep the same object in
+ * config/protocols/lista-bsc.json and
+ * src/guardian/_resources/config/protocols/lista-bsc.json.
+ */
+export const DEPLOYMENT_APPROVALS = Object.freeze({
+  registry_version: 1,
+  provenance: "client policy; entries are reviewed pins and are not learned from a chain read or from task JSON",
+  entries: Object.freeze([]),
+});
+
 export const TRUSTED_LISTA = Object.freeze({
   chainId: 56,
   rpcUrl: "https://bsc-dataseed.bnbchain.org",
@@ -18,8 +32,8 @@ export const TRUSTED_LISTA = Object.freeze({
     "getUserWithdrawalRequests(address)",
     "getUserRequestStatus(address,uint256)",
   ]),
-  approvalRegistryVersion: 1,
-  approvals: Object.freeze([]),
+  approvalRegistryVersion: DEPLOYMENT_APPROVALS.registry_version,
+  approvals: DEPLOYMENT_APPROVALS.entries,
 });
 
 const READ_METHODS = new Set([
@@ -80,9 +94,13 @@ export function assertReadMethod(method) {
   }
 }
 
+/** True when value is a 20-byte hex address. */
+export function isAddress(value) {
+  return typeof value === "string" && /^0x[0-9a-fA-F]{40}$/.test(value);
+}
+
 export function sameAddress(left, right) {
-  return typeof left === "string" && typeof right === "string" &&
-    /^0x[0-9a-fA-F]{40}$/.test(left) && left.toLowerCase() === right.toLowerCase();
+  return typeof right === "string" && isAddress(left) && left.toLowerCase() === right.toLowerCase();
 }
 
 const RPC_REQUEST_ID = 1;
@@ -125,7 +143,7 @@ function word(value) {
 }
 
 function addressWord(address) {
-  if (!sameAddress(address, address)) throw new Error("bad address");
+  if (!isAddress(address)) throw new Error("bad address");
   return address.slice(2).toLowerCase().padStart(64, "0");
 }
 
