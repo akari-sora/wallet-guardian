@@ -9,7 +9,7 @@
     "test:canonical": "node src/canonical.test.mjs",
     "test:validation": "node --test src/plan-validation.test.mjs",
     "test:gate": "node src/gate.test.mjs",
-    "test:api": "node --test --test-force-exit src/private-task.test.mjs src/client-flow.test.mjs src/siwe-gate.test.mjs src/server/api.test.mjs src/lista-reread.test.mjs tests/*.test.mjs",
+    "test:api": "node --test --test-force-exit src/private-task.test.mjs src/client-flow.test.mjs src/siwe-gate.test.mjs src/client-evidence.test.mjs src/server/api.test.mjs src/server/access-lifecycle.test.mjs src/lista-reread.test.mjs tests/*.test.mjs",
     "test:review": "node --test --test-force-exit tests/*.test.mjs",
     "test:runtime": "node --test integration/d1-private-runtime.test.mjs",
     "test:wallets": "node --test --test-force-exit tests/wallet-discovery.test.mjs tests/wallet-selection.test.mjs tests/walletconnect-sdk.test.mjs tests/walletconnect-page.test.mjs",

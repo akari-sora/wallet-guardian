@@ -6,8 +6,9 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { productionViewOrigin } from '../src/view-origin.mjs';
 
-export const ORIGIN = 'https://wallet-guardian-action-client.pages.dev';
+export const ORIGIN = productionViewOrigin();
 export const ADDRESS = '0x' + '1'.repeat(40);
 export const REF = 'ref_' + 'ab'.repeat(16);
 export const SESSION_CSRF = 'a'.repeat(64);

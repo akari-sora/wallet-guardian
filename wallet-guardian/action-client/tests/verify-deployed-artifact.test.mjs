@@ -6,9 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { manifestFromDirectory } from "../tools/artifact-manifest.mjs";
+import { productionViewOrigin } from "../src/view-origin.mjs";
 
 const CLIENT = new URL("..", import.meta.url);
-const ORIGIN = "https://wallet-guardian-action-client.pages.dev";
+const ORIGIN = productionViewOrigin();
 const REF = `/t/ref_${"0".repeat(32)}`;
 
 function fixture() {

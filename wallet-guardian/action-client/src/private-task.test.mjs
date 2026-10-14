@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { clientConfirmDecision } from "./gate.mjs";
 import { LOGIN_STATEMENT } from "./login-statement.mjs";
-import { parsePrivateTaskRef, privateTaskSendAllowed, readBoundedJson } from "./private-task.mjs";
+import { parsePrivateTaskRef, privateTaskPathFormatError, privateTaskSendAllowed, readBoundedJson } from "./private-task.mjs";
 
 test("private task paths stay on /t/<ref>", () => {
   const ref = `ref_${"ab".repeat(16)}`;
@@ -13,6 +13,12 @@ test("private task paths stay on /t/<ref>", () => {
   assert.equal(parsePrivateTaskRef(`/?ref=${ref}`), null);
   assert.equal(parsePrivateTaskRef(`/tasks/${ref}.json`), null);
   assert.equal(parsePrivateTaskRef(`/api/tasks/${ref}`), null);
+  assert.equal(parsePrivateTaskRef(`/t/ref_${"AB".repeat(16)}`), null);
+  assert.equal(parsePrivateTaskRef(`/t/ref_${"a".repeat(31)}`), null);
+  assert.equal(privateTaskPathFormatError(`/t/${ref}`), null);
+  assert.equal(typeof privateTaskPathFormatError(`/t/ref_${"AB".repeat(16)}`), "string");
+  assert.equal(typeof privateTaskPathFormatError(`/t/ref_${"a".repeat(31)}`), "string");
+  assert.equal(typeof privateTaskPathFormatError(`/t/${ref}/x`), "string");
 });
 
 test("preflight_ok alone does not authorize send", () => {

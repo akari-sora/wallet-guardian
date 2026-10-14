@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { productionViewEntries } from "../src/view-origin.mjs";
 
 // Keys `wrangler pages deploy` accepts in a Pages config (workers-utils validation-pages.ts).
 const PAGES_KEYS = new Set([
@@ -26,9 +27,11 @@ test("wrangler.jsonc only uses keys Pages deploy accepts, binds the real D1, and
   assert.match(db.database_id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   assert.notEqual(db.database_id, "00000000-0000-4000-8000-000000000000");
   assert.equal(db.migrations_dir, "migrations");
+  const entry = productionViewEntries()[0];
+  assert.ok(entry);
   assert.deepEqual(config.vars, {
-    AUTH_DOMAIN: "wallet-guardian-action-client.pages.dev",
-    AUTH_URI: "https://wallet-guardian-action-client.pages.dev",
+    AUTH_DOMAIN: new URL(entry.origin).host,
+    AUTH_URI: entry.origin,
     AUTH_CHAIN_ID: "56",
     AUTH_CHALLENGE_LIMIT: "10",
     AUTH_CHALLENGE_GLOBAL_LIMIT: "200",

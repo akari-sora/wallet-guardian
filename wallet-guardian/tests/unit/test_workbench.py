@@ -59,14 +59,16 @@ def _enforcer(fields: list[str] | None = None, **extra):
 
 def test_w01_link_is_not_execution_authorization():
     link = issue_task_link(REF, "https://wallet.example")
+    assert link["issued"] is not True
+    assert link["url"] is None
     assert link["execution_authorized"] is False
     assert _task()["execution_authorized"] is False
 
 
 def test_w02_link_does_not_carry_private_state():
     link = issue_task_link(REF, "https://wallet.example")
-    assert link["url"].endswith("/t/" + REF)
-    assert "0x" not in link["url"]
+    assert link["issued"] is not True
+    assert link["url"] is None
     assert link["contains_private_state"] is False
     with pytest.raises(SecurityError):
         issue_task_link(REF, "https://wallet.example/?address=0x1111111111111111111111111111111111111111")
@@ -398,14 +400,23 @@ def test_cli_workbench_reports_untested_evidence():
 def test_private_task_view_link_uses_only_the_versioned_origin():
     from guardian.actions.workbench import issue_private_task_link, load_private_task_origins, evidence_status
 
+    root = Path(__file__).resolve().parents[2]
+    disk = json.loads((root / "config/deployments/private-task-origins.json").read_text(encoding="utf-8"))
+    packaged = json.loads(
+        (root / "src/guardian/_resources/config/deployments/private-task-origins.json").read_text(encoding="utf-8")
+    )
+    assert packaged == disk
     policy = load_private_task_origins()
     entry = policy["wg-private-task-v1"]
-    assert entry["origin"] == "https://wallet-guardian-action-client.pages.dev"
+    recorded = disk["deployments"][0]
+    assert entry["origin"] == recorded["origin"]
+    assert entry["task_path"] == recorded["task_path"]
+    assert entry["data_path"] == recorded["data_path"]
     assert entry["purpose"] == "private_task_view"
     assert entry["execution_authorized"] is False
     link = issue_private_task_link(REF)
     assert link["issued"] is True
-    assert link["url"] == "https://wallet-guardian-action-client.pages.dev/t/" + REF
+    assert link["url"] == entry["origin"] + entry["task_path"].replace("{ref}", REF)
     assert link["execution_authorized"] is False
     assert link["contains_private_state"] is False
     unknown = issue_private_task_link(REF, "https://evil.example")

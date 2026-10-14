@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { secp256k1 } from '@noble/curves/secp256k1';
-import { harness, tick, REF } from './client-review-harness.mjs';
+import { harness, tick, REF, ORIGIN } from './client-review-harness.mjs';
 import { addressOf, realBackend, unauthenticated, walletSign } from './wallet-fixtures.mjs';
 import { ns56 } from './wc-fixtures.mjs';
 import { checksumAddress } from '../src/siwe-message.mjs';
@@ -169,7 +169,7 @@ test('WB-05 mobile-return: jump links from versioned config, leave/return, appro
     { href: `bnc://app.binance.com/cedefi/wc?uri=${encoded}`, target: undefined, rel: 'noopener noreferrer', cls: 'wc-link wc-link-native' },
     { href: URI, target: undefined, rel: 'noopener noreferrer', cls: 'wc-link wc-link-generic' },
   ]);
-  assert.equal(sdk.log.opts.origin, 'https://wallet-guardian-action-client.pages.dev');
+  assert.equal(sdk.log.opts.origin, ORIGIN);
   assert.equal(sdk.log.opts.projectId, 'a'.repeat(32), 'project id comes from the build env');
   assert.equal(bannerText(h).includes('wc:'), false);
   // The user jumps to the wallet app (page hidden) and comes back before approving.

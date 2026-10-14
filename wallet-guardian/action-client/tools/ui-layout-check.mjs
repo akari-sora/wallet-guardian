@@ -20,6 +20,7 @@ import { join, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { MockRelay } from "../tests/wc-relay-mock.mjs";
+import { productionViewOrigin } from "../src/view-origin.mjs";
 
 const CLIENT = fileURLToPath(new URL("..", import.meta.url));
 const [distArg, outArg, only] = process.argv.slice(2);
@@ -27,7 +28,7 @@ const dir = resolve(CLIENT, distArg || "dist");
 const OUT = resolve(outArg || "/tmp/wg-ui-check");
 mkdirSync(OUT, { recursive: true });
 const label = "shot";
-const ORIGIN = "https://wallet-guardian-action-client.pages.dev";
+const ORIGIN = productionViewOrigin();
 const REF = "ref_" + "ab".repeat(16); // synthetic; the page only sees the unauthenticated 401
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml", ".json": "application/json", ".ico": "image/x-icon" };
 if (!existsSync(join(dir, "_headers"))) throw new Error(`${dir}/_headers missing: run npm run build first`);

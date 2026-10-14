@@ -1,10 +1,13 @@
 import { LOGIN_STATEMENT } from "./login-statement.mjs";
 import { buildSiweMessage, checksumAddress } from "./siwe-message.mjs";
+import { productionViewEntries } from "./view-origin.mjs";
 
 /** Audience the action client is willing to sign. Not an execution allowlist. */
+const audience = productionViewEntries()[0];
+if (!audience) throw new Error("private task view origin is not configured");
 export const LOGIN_CHAIN_ID = 56;
-export const LOGIN_DOMAIN = "wallet-guardian-action-client.pages.dev";
-export const LOGIN_URI = "https://wallet-guardian-action-client.pages.dev";
+export const LOGIN_DOMAIN = new URL(audience.origin).host;
+export const LOGIN_URI = audience.origin;
 
 const NONCE = /^[a-f0-9]{32}$/;
 const ISO = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$/;

@@ -3,7 +3,7 @@
  * plus a fresh local D1 (--persist-to). Not the Node SQLite stand-in used by test:api.
  *
  * Requests keep the production AUTH audience: curl --connect-to (and Chrome host-resolver-rules) send
- * https://wallet-guardian-action-client.pages.dev to 127.0.0.1. --insecure / ignore-certificate-errors is
+ * the policy view origin to 127.0.0.1. --insecure / ignore-certificate-errors is
  * only used together with that explicit loopback redirect for the local dev certificate.
  *
  * Needs: `npm run build` first, curl, and a Chrome/Chromium for D1-09 (WG_CHROME or /opt/google/chrome/chrome).
@@ -23,10 +23,11 @@ import { LOGIN_STATEMENT } from "../src/login-statement.mjs";
 import { acceptLoginChallenge } from "../src/siwe-gate.mjs";
 import { checksumAddress } from "../src/siwe-message.mjs";
 import { buildTestTask } from "../tools/lib/test-task.mjs";
+import { productionViewOrigin } from "../src/view-origin.mjs";
 
 const CLIENT = fileURLToPath(new URL("..", import.meta.url));
-const HOST = "wallet-guardian-action-client.pages.dev";
-const ORIGIN = `https://${HOST}`;
+const ORIGIN = productionViewOrigin();
+const HOST = new URL(ORIGIN).host;
 const PORT = Number(process.env.WG_RUNTIME_PORT ?? 8788);
 const TABLES = ["challenges", "sessions", "tenant_members", "publish_credentials", "tasks", "task_acl", "rate_buckets"];
 const SEND_METHODS = new Set([

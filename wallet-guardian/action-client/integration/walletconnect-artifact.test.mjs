@@ -25,9 +25,10 @@ import { LOGIN_STATEMENT } from "../src/login-statement.mjs";
 import { addressOf, realBackend, walletSign } from "../tests/wallet-fixtures.mjs";
 import { MockRelay, startRelayServer } from "../tests/wc-relay-mock.mjs";
 import { TEST_PROJECT_ID, createTestWallet } from "../tests/wc-fixtures.mjs";
+import { productionViewOrigin } from "../src/view-origin.mjs";
 
 const CLIENT = fileURLToPath(new URL("..", import.meta.url));
-const ORIGIN = "https://wallet-guardian-action-client.pages.dev";
+const ORIGIN = productionViewOrigin();
 const SEND_METHODS = new Set([
   "eth_sendTransaction", "eth_sendRawTransaction", "wallet_sendCalls", "eth_sign", "eth_signTransaction",
   "eth_signTypedData", "eth_signTypedData_v3", "eth_signTypedData_v4", "wallet_grantPermissions",
