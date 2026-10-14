@@ -11,6 +11,7 @@ import test from "node:test";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { originIsApproved } from "../src/approved-origins.mjs";
+import { productionViewOrigin } from "../src/view-origin.mjs";
 import { claimCalldata, TRUSTED_LISTA } from "../src/trusted-lista.mjs";
 import { walletRequestDecision } from "../src/wallets/request-policy.mjs";
 import { WC_METHODS } from "../src/wallets/walletconnect-config.mjs";
@@ -32,7 +33,7 @@ import { scanText } from "../tools/scan-send-markers.mjs";
 const CLIENT = fileURLToPath(new URL("..", import.meta.url));
 const ACCOUNT = "0x1111111111111111111111111111111111111111";
 const OTHER = "0x2222222222222222222222222222222222222222";
-const ORIGIN = "https://wallet-guardian-action-client.pages.dev";
+const ORIGIN = productionViewOrigin();
 const NOW = 1_700_000_000;
 const IDX = 4;
 

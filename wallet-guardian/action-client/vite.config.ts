@@ -2,22 +2,22 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import { pagesHeaders } from "./src/csp.mjs";
 import { walletConnectConfig } from "./src/wallets/walletconnect-config.mjs";
-import { sendVariantGate } from "./tools/build-send-variant.mjs";
 
 // A direct `vite build` with WG_SEND_VARIANT=mode_a is the send variant only when
 // sendVariantGate passes (WG_RELEASE_AUTH_ID and an approved_by_user inventory entry).
 // Otherwise this config throws. npm run build does not set WG_SEND_VARIANT.
+// The gate module is loaded only on that path, so a default build does not depend on it.
 // This package does not add that inventory entry.
-function resolveSendVariant(): "off" | "mode_a" {
+async function resolveSendVariant(): Promise<"off" | "mode_a"> {
   if (process.env.WG_SEND_VARIANT !== "mode_a") return "off";
+  const href = new URL("./tools/build-send-variant.mjs", import.meta.url).href;
+  const { sendVariantGate } = await import(href);
   const gate = sendVariantGate();
   if (!gate.ok) {
     throw new Error(`send variant refused: ${gate.reason}`);
   }
   return "mode_a";
 }
-
-const SEND_VARIANT = resolveSendVariant();
 
 // WALLET-CONNECT-01 W-B5: dist/_headers (CSP) follows the actual build. WalletConnect endpoints are
 // only allowed when this build offers WalletConnect (both public settings present).
@@ -49,7 +49,8 @@ function forbidSendModules(variant: string): Plugin {
   };
 }
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(async ({ mode }) => {
+  const SEND_VARIANT = await resolveSendVariant();
   const env = { ...loadEnv(mode, process.cwd(), "VITE_"), ...process.env };
   const wc = walletConnectConfig({ enabled: env.VITE_WALLETCONNECT_ENABLED, projectId: env.VITE_REOWN_PROJECT_ID });
   return {
