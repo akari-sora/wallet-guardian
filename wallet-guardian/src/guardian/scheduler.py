@@ -41,28 +41,44 @@ class Watchdog:
         self.interval = polling["interval_seconds"]
 
     def evaluate(self, run_report_or_none: Any, now: str) -> dict[str, Any]:
-        """Emit at most one health alert. Repeated blind evaluations emit nothing."""
+        """One alert when an episode starts, one for a new gap during it, one when it ends."""
         if self.public_config.document["execution"].get("auto_disable_schedule") is not False:
             raise ConfigError("auto_disable_schedule")
         moment = _parse(now)
         health = _load(self.database, self.tenant)
+        previous_required = health.get("required") if isinstance(health.get("required"), dict) else {}
+        current_required = getattr(run_report_or_none, "required", None)
+        fresh = _new_worse_keys(previous_required, current_required)
+        episode_gaps = health.get("episode_gaps") if isinstance(health.get("episode_gaps"), list) else []
         blind = _blind(run_report_or_none, health, moment, self.interval)
+        if fresh and health.get("blind") is not True:
+            blind = True
+        still = [key for key in episode_gaps if _gap_still_worse(key, current_required)]
+        if health.get("blind") is True and still:
+            blind = True
         was = health.get("blind") is True
         emitted: list[dict[str, str]] = []
         if blind and not was:
             episode = now
             health["blind"] = True
             health["episode_start"] = episode
+            health["episode_gaps"] = fresh
             emitted.append(self._alert("monitor_blind", episode, now))
         elif blind and was:
             health["blind"] = True
+            extra = [key for key in fresh if key not in episode_gaps]
+            if extra:
+                health["episode_gaps"] = sorted(set(episode_gaps) | set(extra))
+                emitted.append(self._alert("monitor_new_gap", "new:" + ",".join(extra), now, gap_keys=extra))
         elif was and not blind:
             episode = str(health.get("episode_start") or now)
             health["blind"] = False
             health["episode_start"] = None
+            health["episode_gaps"] = []
             emitted.append(self._alert("monitor_recovered", episode, now))
         else:
             health["blind"] = False
+            health["episode_gaps"] = []
         required_now = getattr(run_report_or_none, "required", None)
         if (
             run_report_or_none is not None
@@ -84,16 +100,18 @@ class Watchdog:
             "schedule_disabled": False,
         }
 
-    def _alert(self, kind: str, episode: str, now: str) -> dict[str, str]:
+    def _alert(self, kind: str, episode: str, now: str, gap_keys: list[str] | None = None) -> dict[str, str]:
         identity = episode
         key = dedup_key(self.tenant, "*", "*", kind, identity)
         payload = {
             "dedup_key": key,
-            "episode_start": episode,
+            "episode_start": episode if kind != "monitor_new_gap" else now,
             "kind": kind,
             "observed_at": now,
             "tenant_id": self.tenant,
         }
+        if gap_keys:
+            payload["gap_keys"] = list(gap_keys)
         self.database.add_alert(self.tenant, key, payload)
         return {"dedup_key": key, "kind": kind}
 
@@ -155,7 +173,10 @@ def _blind(report: Any, health: dict[str, Any], now: datetime, interval: int) ->
     if report is not None and _finished_stale(report, now, interval):
         return True
     status = getattr(report, "status", None) if report is not None else None
-    if status in {"failed", "degraded"}:
+    # A long-running degraded round is not itself blind. A failed round is.
+    # New worse required keys are handled by the caller so a known gap does not
+    # hide a later one.
+    if status == "failed":
         return True
     if report is not None and _shrunk(health.get("required"), getattr(report, "required", None)):
         return True
@@ -170,6 +191,25 @@ def _blind(report: Any, health: dict[str, Any], now: datetime, interval: int) ->
         return True
     age = (now - previous).total_seconds()
     return age > 2 * interval
+
+
+def _new_worse_keys(previous: Any, current: Any) -> list[str]:
+    """Required keys that are newly error or blocked compared with the last check."""
+    if not isinstance(current, dict):
+        return []
+    prev = previous if isinstance(previous, dict) else {}
+    found = [
+        str(key)
+        for key, value in current.items()
+        if value in _WORSE and prev.get(key) not in _WORSE
+    ]
+    return sorted(found)
+
+
+def _gap_still_worse(key: str, current: Any) -> bool:
+    if not isinstance(current, dict):
+        return False
+    return current.get(key) in _WORSE
 
 
 def _required_healthy(required: Any) -> bool:

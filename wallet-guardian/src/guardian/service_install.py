@@ -153,6 +153,7 @@ def render_units(
         if any(marker in lowered for marker in _FETCH_MARKERS):
             raise ConfigError("unit would fetch code")
         rendered[name] = text if text.endswith("\n") else text + "\n"
+    _pair_watchdog_no_send(rendered)
     _require_hardening(rendered)
     return rendered
 
@@ -436,6 +437,28 @@ def _offset(value: int) -> int:
 def _check_user(user: str) -> None:
     if not isinstance(user, str) or _USER.fullmatch(user) is None or user == "root":
         raise ConfigError("monitor account must be a dedicated non-root user")
+
+
+def _pair_watchdog_no_send(rendered: dict[str, str]) -> None:
+    """A printed watchdog line uses --no-send when its run-once line does."""
+    paired = False
+    for text in rendered.values():
+        for line in text.splitlines():
+            if "run-once" in line and "--no-send" in line.split():
+                paired = True
+                break
+        if paired:
+            break
+    if not paired:
+        return
+    for name, text in rendered.items():
+        lines = []
+        for line in text.splitlines():
+            parts = line.split()
+            if "watchdog" in parts and "--mcm-config" in parts and "--no-send" not in parts:
+                line = line.replace("watchdog ", "watchdog --no-send ", 1)
+            lines.append(line)
+        rendered[name] = "\n".join(lines) + ("\n" if text.endswith("\n") or lines else "")
 
 
 def _require_hardening(rendered: Mapping[str, str]) -> None:

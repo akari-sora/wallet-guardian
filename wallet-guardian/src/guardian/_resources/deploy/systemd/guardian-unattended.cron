@@ -8,4 +8,4 @@
 SHELL=/bin/sh
 @OFFSET_MINUTE@ */3 * * * @EXECUTABLE@ run-once --mcm-config @MCM_CONFIG@ --no-send
 @OFFSET_MINUTE@ */3 * * * @LEGACY_EXECUTABLE@
-*/15 * * * * @EXECUTABLE@ watchdog --mcm-config @MCM_CONFIG@
+*/15 * * * * @EXECUTABLE@ watchdog --no-send --mcm-config @MCM_CONFIG@

@@ -10,7 +10,7 @@ Type=oneshot
 Environment=GUARDIAN_INSTALLED_VERSION=@VERSION@
 Environment=GUARDIAN_CONFIG_DIR=@CONFIG_DIR@
 Environment=GUARDIAN_STATE_DIR=@STATE_DIR@
-ExecStart=@EXECUTABLE@ watchdog --mcm-config @MCM_CONFIG@
+ExecStart=@EXECUTABLE@ watchdog --no-send --mcm-config @MCM_CONFIG@
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only

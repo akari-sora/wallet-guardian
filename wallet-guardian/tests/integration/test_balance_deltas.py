@@ -393,7 +393,10 @@ def _run(
         argv.append("--no-send")
     code = main(argv, backend=backend, sender=sender, clock=clock or (lambda: CLOCK))
     payload = json.loads(capsys.readouterr().out)
-    assert code in ({0} if expect_ok else {0, 1}), payload
+    if expect_ok and isinstance(payload, dict) and payload.get("status") == "degraded":
+        assert code == 3, payload
+    else:
+        assert code in ({0} if expect_ok else {0, 1, 3}), payload
     blob = json.dumps(payload)
     assert ADDRESS.lower() not in blob.lower()
     return payload

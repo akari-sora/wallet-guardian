@@ -476,7 +476,8 @@ def _cli(capsys: pytest.CaptureFixture[str], argv: list[str], backend: FixtureRp
     code = main(argv, backend=backend, sender=sender)
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
-    assert code == 0, payload
+    expected = 3 if isinstance(payload, dict) and payload.get("status") == "degraded" else 0
+    assert code == expected, payload
     assert payload.get("status") != "error"
     return payload
 

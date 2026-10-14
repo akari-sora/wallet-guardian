@@ -185,8 +185,17 @@ def build_parser() -> argparse.ArgumentParser:
     finished.add_argument("--exit-code", type=int, required=True)
     finished.add_argument("--finished-at", required=True)
 
+    outbox = sub.add_parser("outbox")
+    outbox_sub = outbox.add_subparsers(dest="outbox_command", required=True)
+    pending = outbox_sub.add_parser("pending", parents=[common])
+    pending.add_argument("--mcm-config", required=True)
+    ack = outbox_sub.add_parser("ack", parents=[common])
+    ack.add_argument("--mcm-config", required=True)
+    ack.add_argument("--id", required=True, type=int)
+
     watchdog = sub.add_parser("watchdog", parents=[common])
     watchdog.add_argument("--mcm-config", required=True)
+    watchdog.add_argument("--no-send", action="store_true")
 
     monitor = sub.add_parser("monitor")
     monitor_sub = monitor.add_subparsers(dest="monitor_command", required=True)
@@ -322,8 +331,10 @@ def dispatch(
         return _mcm_news_health(args)
     if args.command == "legacy-capture":
         return _legacy_capture(args)
+    if args.command == "outbox":
+        return _mcm_outbox(args)
     if args.command == "watchdog":
-        return _mcm_watchdog(args, clock)
+        return _mcm_watchdog(args, clock, sender)
     if args.command == "monitor":
         return _mcm_plan(args)
     if args.command == "init":
@@ -622,8 +633,19 @@ def _mcm_run(
         )
     finally:
         database.close()
-    code = 2 if report.misconfigured else 1 if report.status == "failed" else 0
-    return report.as_dict(), code
+    return report.as_dict(), _mcm_exit_code(report)
+
+
+def _mcm_exit_code(report: Any) -> int:
+    """degraded is 3, failed is 1, misconfigured delivery is 2, ok is 0."""
+    if getattr(report, "misconfigured", False):
+        return 2
+    status = getattr(report, "status", None)
+    if status == "failed":
+        return 1
+    if status == "degraded":
+        return 3
+    return 0
 
 
 def _mcm_coverage(args: argparse.Namespace) -> tuple[dict, int]:
@@ -742,17 +764,58 @@ def _capture_json(value: str, label: str) -> dict:
     return parsed
 
 
-def _mcm_watchdog(args: argparse.Namespace, clock: Callable[[], float] | None) -> tuple[dict, int]:
+def _mcm_watchdog(args: argparse.Namespace, clock: Callable[[], float] | None, sender: Any) -> tuple[dict, int]:
+    from guardian.delivery import deliver, load_handoff
+
     public, private, database = _open_mcm(args.mcm_config)
     try:
-        record = database.latest_run(private.accounts.tenant_id)
+        tenant = private.accounts.tenant_id
+        record = database.latest_run(tenant)
         loaded = _loaded_run(record)
-        report = Watchdog(database, private.accounts.tenant_id, public).evaluate(loaded, _now(clock))
+        report = Watchdog(database, tenant, public).evaluate(loaded, _now(clock))
+        delivery = deliver(
+            database,
+            tenant,
+            mode="no_send" if args.no_send else "send",
+            sender=sender,
+            handoff=load_handoff(public, os.environ),
+            clock=time.time if clock is None else clock,
+        )
+        report["delivery_status"] = delivery.status
+        report["sent"] = delivery.sent
     finally:
         database.close()
     report["live_verified"] = False
     report["live_pass"] = False
     return report, 0
+
+
+def _mcm_outbox(args: argparse.Namespace) -> tuple[dict, int]:
+    _public, private, database = _open_mcm(args.mcm_config)
+    try:
+        tenant = private.accounts.tenant_id
+        if args.outbox_command == "pending":
+            rows = []
+            for row in database.outbox_for(tenant):
+                if row.get("status") != "pending":
+                    continue
+                payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+                rows.append({
+                    "dedup_key": payload.get("dedup_key") if isinstance(payload.get("dedup_key"), str) else "",
+                    "id": row["id"],
+                    "identity": payload.get("identity") if isinstance(payload.get("identity"), str) else "",
+                    "kind": payload.get("kind") if isinstance(payload.get("kind"), str) else "",
+                    "network": payload.get("network") if isinstance(payload.get("network"), str) else "",
+                    "status": "pending",
+                })
+            return {"live_verified": False, "rows": rows, "status": "ok"}, 0
+        if args.outbox_command == "ack":
+            status = database.acknowledge_outbox(tenant, int(args.id))
+            code = 0 if status == "acknowledged" else 2
+            return {"id": int(args.id), "live_verified": False, "status": status}, code
+    finally:
+        database.close()
+    raise GuardianError("unknown command")
 
 
 def _loaded_run(record: dict[str, Any] | None) -> SimpleNamespace | None:

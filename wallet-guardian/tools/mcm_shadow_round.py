@@ -134,7 +134,7 @@ def run_round(
     if "--no-send" not in run_argv:
         raise ConfigError("shadow run-once requires --no-send")
     run_code, run_out, _run_err = _capture(commands, "run-once", run_argv, backend=transport, sender=guarded, clock=clock)
-    _capture(commands, "watchdog", ["watchdog", "--mcm-config", mcm_config], backend=transport, sender=guarded, clock=clock)
+    _capture(commands, "watchdog", ["watchdog", "--no-send", "--mcm-config", mcm_config], backend=transport, sender=guarded, clock=clock)
     _capture(commands, "coverage", ["coverage", "--mcm-config", mcm_config], backend=transport, sender=guarded, clock=clock)
     _register_labels(mcm_config)
     compare_argv = [
