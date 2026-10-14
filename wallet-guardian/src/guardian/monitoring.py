@@ -224,6 +224,7 @@ class CapabilityCycle:
         capability_rows: list[dict[str, Any]] | None = None,
         cursors: list[dict[str, Any]] | None = None,
         alerts: list[dict[str, Any]] | None = None,
+        settle_identities: list[str] | None = None,
     ) -> dict[str, Any]:
         current = reconcile_capabilities(self.previous_items, incoming, results)
         rows = (
@@ -237,6 +238,7 @@ class CapabilityCycle:
             capability_rows=rows,
             cursors=list(cursors or []),
             alerts=list(alerts or []),
+            settle_identities=list(settle_identities or []),
         )
         self.previous_items = current
         return {"items": current, "notification_decision": emitted}

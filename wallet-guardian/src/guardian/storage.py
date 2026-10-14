@@ -976,6 +976,8 @@ class Database:
         capability_rows: list[dict[str, Any]],
         cursors: list[dict[str, Any]],
         alerts: list[dict[str, Any]] | None = None,
+        pending: list[dict[str, Any]] | None = None,
+        settle_identities: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Write events, capability state, cursors, and outbox alerts in one transaction.
 
@@ -1012,11 +1014,88 @@ class Database:
                     self._queue_notification(tenant_id, alert)
             finally:
                 self._defer_alert_notify = False
+            self._upsert_pending_candidates(tenant_id, pending or [])
+            self._settle_pending_candidates(tenant_id, settle_identities or [])
             self.conn.commit()
         except Exception:
             self.conn.rollback()
             raise
         return emitted
+
+    def list_pending_alert_candidates(self, tenant_id: str) -> list[dict[str, Any]]:
+        """Candidates stored with a leaf and not yet judged. Missing table is empty."""
+        present = {
+            row["name"]
+            for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if "pending_alert_candidates" not in present:
+            return []
+        loaded = []
+        for row in self.list_pending_alert_candidate_rows(tenant_id):
+            payload = row["payload"]
+            if isinstance(payload, dict) and payload.get("schema") == "pending_alert_candidate.v1":
+                loaded.append(payload)
+        return loaded
+
+    def list_pending_alert_candidate_rows(self, tenant_id: str) -> list[dict[str, Any]]:
+        """Stored rows. Unparseable JSON is payload None so the caller can quarantine it."""
+        present = {
+            row["name"]
+            for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if "pending_alert_candidates" not in present:
+            return []
+        rows = self.conn.execute(
+            "SELECT identity, payload FROM pending_alert_candidates WHERE tenant_id=? ORDER BY identity",
+            (tenant_id,),
+        ).fetchall()
+        loaded = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload"])
+            except json.JSONDecodeError:
+                payload = None
+            if not isinstance(payload, dict):
+                payload = None
+            loaded.append({"identity": row["identity"], "payload": payload})
+        return loaded
+
+    def quarantine_pending_alert_candidate(self, tenant_id: str, identity: str) -> None:
+        """Replace one unreadable candidate with a gap record. Later rounds skip it."""
+        from guardian.pending_alerts import gap_snapshot
+
+        if not isinstance(identity, str) or not identity:
+            return
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE pending_alert_candidates SET payload=?
+                WHERE tenant_id=? AND identity=?
+                """,
+                (_json(gap_snapshot(identity)), tenant_id, identity),
+            )
+
+    def _upsert_pending_candidates(self, tenant_id: str, pending: list[dict[str, Any]]) -> None:
+        for item in pending:
+            identity = item.get("identity")
+            if not isinstance(identity, str) or not identity:
+                raise ValueError("pending alert candidate identity")
+            self.conn.execute(
+                """
+                INSERT INTO pending_alert_candidates(tenant_id, identity, payload) VALUES (?, ?, ?)
+                ON CONFLICT(tenant_id, identity) DO UPDATE SET payload=excluded.payload
+                """,
+                (tenant_id, identity, _json(item)),
+            )
+
+    def _settle_pending_candidates(self, tenant_id: str, identities: list[str]) -> None:
+        for identity in identities:
+            if not isinstance(identity, str) or not identity:
+                continue
+            self.conn.execute(
+                "DELETE FROM pending_alert_candidates WHERE tenant_id=? AND identity=?",
+                (tenant_id, identity),
+            )
 
     def _guard_cursors(self, tenant_id: str, cursors: list[dict[str, Any]], rows: list[dict[str, Any]]) -> None:
         errored = {

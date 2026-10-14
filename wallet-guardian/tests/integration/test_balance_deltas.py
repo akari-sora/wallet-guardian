@@ -10,6 +10,7 @@ import os
 import socket
 import sqlite3
 import threading
+from contextlib import contextmanager
 from decimal import Decimal
 from pathlib import Path
 
@@ -842,8 +843,22 @@ def test_bal_06_atomic_concurrent_and_no_sender(tmp_path: Path, monkeypatch: pyt
     race_backend = ScriptBackend()
     _run(race_config, race_backend, capsys, no_send=True, sender=Sink())
     race_backend.at(30, NINE)
-    race_backend.barrier = threading.Barrier(2)
+    codes: list[int] = []
     errors: list[BaseException] = []
+    held = threading.Event()
+    release = threading.Event()
+    import guardian.pipeline as pipeline_module
+
+    real_guard = pipeline_module.run_once_guard
+
+    @contextmanager
+    def _overlap(database):
+        with real_guard(database):
+            held.set()
+            assert release.wait(30)
+            yield
+
+    monkeypatch.setattr(pipeline_module, "run_once_guard", _overlap)
 
     def _once() -> None:
         try:
@@ -853,19 +868,28 @@ def test_bal_06_atomic_concurrent_and_no_sender(tmp_path: Path, monkeypatch: pyt
                 sender=Sink(),
                 clock=lambda: CLOCK,
             )
-            if code != 0:
-                errors.append(RuntimeError(f"exit {code}"))
+            codes.append(code)
         except BaseException as exc:  # noqa: BLE001 - the test records the thread failure
             errors.append(exc)
 
-    first = threading.Thread(target=_once)
-    second = threading.Thread(target=_once)
-    first.start()
-    second.start()
-    first.join(30)
-    second.join(30)
+    holder = threading.Thread(target=_once)
+    holder.start()
+    assert held.wait(30)
+    try:
+        codes.append(
+            main(
+                ["run-once", "--mcm-config", str(race_config), "--no-send"],
+                backend=race_backend,
+                sender=Sink(),
+                clock=lambda: CLOCK,
+            )
+        )
+    finally:
+        release.set()
+    holder.join(30)
     assert not errors
-    assert not first.is_alive() and not second.is_alive()
+    assert not holder.is_alive()
+    assert sorted(codes) == [0, 2]
     final = _baseline(race)
     assert final is not None
     assert final["block_number"] == 30
