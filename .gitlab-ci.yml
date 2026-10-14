@@ -41,6 +41,9 @@ client-tests:
   stage: test
   image: node:22.16.0-bookworm-slim
   timeout: 10 minutes
+  # test:wallets:artifact is not in this job. It launches Chrome through playwright-core
+  # (WG_CHROME or /opt/google/chrome/chrome). This image has no browser, and
+  # playwright-core does not download one. See docs/ci.md.
   script:
     - cd wallet-guardian/action-client
     - npm ci --ignore-scripts --no-audit --no-fund

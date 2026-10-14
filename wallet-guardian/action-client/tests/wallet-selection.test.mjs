@@ -107,6 +107,25 @@ test('WA-05 switch while the old wallet is still asking: the late signature is d
   assert.equal(other.calls.filter((c) => c.method === 'personal_sign').length, 1);
 });
 
+test('WA-05 a switch keeps this tab revoked=true and logs the peer tab out', async () => {
+  const { env } = twoWallets();
+  const h = await harness({ setupWindow: env.setup, tabGroup: 'switch-tabs', initialSession: unauthenticated() });
+  const peer = await harness({ tabGroup: 'switch-tabs', initialSession: unauthenticated() });
+  await h.app.selectWallet(byLabel(h, 'other'));
+  await h.app.login();
+  await peer.app.login();
+  assert.equal(peer.app.getState().loginAddress !== null, true);
+  await h.app.selectWallet(byLabel(h, 'binance'));
+  await tick();
+  assert.equal(h.calls.filter((c) => c.path === '/api/auth/logout').length, 1);
+  assert.equal(h.app.getState().csrfToken, null);
+  assert.match(h.elements.get('banner').textContent, /revoked=true/);
+  assert.equal(h.elements.get('banner').textContent.includes('其他分頁已登出'), false);
+  assert.equal(peer.app.getState().loginAddress, null);
+  assert.equal(peer.app.getState().csrfToken, null);
+  assert.match(peer.elements.get('banner').textContent, /其他分頁已登出/);
+});
+
 test('WA-05 switching providers with a live session revokes it on the server, with evidence', async () => {
   const { binance, other, env } = twoWallets();
   const h = await harness({ setupWindow: env.setup });
