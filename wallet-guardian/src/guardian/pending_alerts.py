@@ -14,6 +14,8 @@ from typing import Any
 from guardian.rules import Candidate
 
 _SCHEMA = "pending_alert_candidate.v1"
+_GAP_SCHEMA = "pending_alert_gap.v1"
+_GAP_REASON = "pending_candidate_unreadable"
 _FIELDS = (
     "tenant_id",
     "wallet_id",
@@ -52,6 +54,15 @@ def snapshot_candidate(candidate: Candidate) -> dict[str, Any]:
             value = format(value, "f")
         payload[name] = value
     return payload
+
+
+def gap_snapshot(identity: str) -> dict[str, Any]:
+    """Durable skip marker. The unreadable payload is not copied."""
+    return {"schema": _GAP_SCHEMA, "reason": _GAP_REASON, "identity": identity}
+
+
+def is_gap_snapshot(payload: dict[str, Any]) -> bool:
+    return payload.get("schema") == _GAP_SCHEMA
 
 
 def candidate_from_snapshot(payload: dict[str, Any]) -> Candidate:

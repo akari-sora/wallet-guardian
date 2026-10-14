@@ -145,9 +145,10 @@ class RunReport:
     egress: dict[str, Any] | None = None
     provider_message_ids: tuple[str, ...] = ()
     news_health: list[dict[str, Any]] | None = None
+    pending_gaps: list[dict[str, Any]] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        body = {
             "baseline": self.baseline,
             "budget": self.budget or {},
             "canary": CANARY_STATUS,
@@ -176,6 +177,9 @@ class RunReport:
             "status": self.status,
             "valuation_unknown": self.valuation_unknown,
         }
+        if self.pending_gaps:
+            body["pending_gaps"] = self.pending_gaps
+        return body
 
 
 def run_capability_pipeline(
@@ -382,7 +386,7 @@ def _execute_capability_pipeline(
         _fill_gaps(public_config, private_inputs, catalog, account.wallet_id, network, observations, transport)
     from guardian.balances.reconcile import reconcile_native, refresh_balance_decisions, stamp_native_quotes
 
-    _replay_pending_candidates(database, tenant, candidates)
+    pending_gaps = _replay_pending_candidates(database, tenant, candidates)
     stamp_native_quotes(candidates, balance_prime.quotes, balance_prime.decimals)
     reconcile_native(database, tenant, candidates)
     balance_prime.decisions = refresh_balance_decisions(database, tenant, balance_prime.decisions)
@@ -521,6 +525,7 @@ def _execute_capability_pipeline(
         indexer_disclosures=disclosures,
         provider_message_ids=delivery.message_ids,
         news_health=news_health,
+        pending_gaps=pending_gaps,
     )
     database.save_run(tenant, run_id, {
         "baseline": report.baseline,
@@ -706,17 +711,37 @@ def _resolve(host: str) -> list[str]:
     return HostnameResolver(load_resolver_settings(None, os.environ)).resolve(name)
 
 
-def _replay_pending_candidates(database: Database, tenant: str, candidates: list[Candidate]) -> None:
-    """Judge leaf candidates the previous round stored and did not alert."""
+def _replay_pending_candidates(database: Database, tenant: str, candidates: list[Candidate]) -> list[dict[str, str]]:
+    """Judge leaf candidates the previous round stored and did not alert.
+
+    An unreadable row is replaced with a gap record and skipped. It does not
+    fail this round or any later round, and it is not stored as a zero balance.
+    """
+    from guardian.pending_alerts import is_gap_snapshot
+
     known = {item.identity for item in candidates}
-    for payload in database.list_pending_alert_candidates(tenant):
-        candidate = candidate_from_snapshot(payload)
-        if candidate.tenant_id != tenant:
-            raise GuardianError("pending alert candidate tenant")
+    gaps: list[dict[str, str]] = []
+    for row in database.list_pending_alert_candidate_rows(tenant):
+        payload = row["payload"]
+        identity = row["identity"]
+        if isinstance(payload, dict) and is_gap_snapshot(payload):
+            gaps.append({"identity": identity, "reason": "pending_candidate_unreadable"})
+            continue
+        try:
+            if not isinstance(payload, dict):
+                raise ValueError("pending alert candidate schema")
+            candidate = candidate_from_snapshot(payload)
+            if candidate.tenant_id != tenant:
+                raise GuardianError("pending alert candidate tenant")
+        except (ValueError, TypeError, InvalidOperation, GuardianError):
+            database.quarantine_pending_alert_candidate(tenant, identity)
+            gaps.append({"identity": identity, "reason": "pending_candidate_unreadable"})
+            continue
         if candidate.identity in known:
             continue
         candidates.append(candidate)
         known.add(candidate.identity)
+    return gaps
 
 
 def _judged_identities(candidates: list[Candidate]) -> list[str]:

@@ -18,6 +18,8 @@ import pytest
 
 from guardian.cli import main
 from guardian.monitoring import CapabilityCycle
+from guardian.pending_alerts import snapshot_candidate
+from guardian.rules import Candidate
 from guardian.storage import Database
 
 _SPEC = importlib.util.spec_from_file_location(
@@ -100,6 +102,81 @@ def test_interrupted_finish_replays_native_alert_without_rereading(
     blob = json.dumps(recovered)
     assert KEY not in blob
     assert ADDRESS_A.lower() not in blob.lower()
+
+
+def test_corrupt_pending_candidate_is_quarantined_and_later_round_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An unreadable pending row becomes a gap. The next round still runs, and a sibling still alerts."""
+    desk = _desk(tmp_path, monkeypatch)
+    argv = ["run-once", "--mcm-config", str(desk.config), "--no-send"]
+    _cli(capsys, desk, argv)
+    desk.backend.show_material()
+    original_finish = CapabilityCycle.finish
+
+    def interrupted(self, **kwargs):
+        raise RuntimeError("commit_b_interrupted")
+
+    monkeypatch.setattr(CapabilityCycle, "finish", interrupted)
+    code = main(argv, backend=desk.backend, clock=lambda: 1_700_000_000.0)
+    failed = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert failed["status"] == "error"
+    other = snapshot_candidate(Candidate(
+        tenant_id="other-tenant",
+        wallet_id="wallet",
+        network="ethereum-mainnet",
+        capability="history.native_external",
+        identity="pending-candidate-other-tenant",
+        kind="asset",
+        raw_amount=1,
+        is_native=True,
+    ))
+    database = Database(desk.state / "monitor.sqlite")
+    try:
+        database.conn.executemany(
+            "INSERT INTO pending_alert_candidates(tenant_id, identity, payload) VALUES (?, ?, ?)",
+            (
+                (TENANT, "pending-candidate-corrupt", "{"),
+                (TENANT, "pending-candidate-bad-schema", json.dumps({"schema": "nope"})),
+                (TENANT, "pending-candidate-other-tenant", json.dumps(other)),
+            ),
+        )
+        database.conn.commit()
+        assert database.list_pending_alert_candidates(TENANT)
+    finally:
+        database.close()
+
+    monkeypatch.setattr(CapabilityCycle, "finish", original_finish)
+    desk.backend.native_rows = []
+    desk.backend.token_rows = []
+    desk.backend.logs = []
+    recovered = _cli(capsys, desk, argv)
+    reasons = {item["identity"]: item["reason"] for item in recovered["pending_gaps"]}
+    assert reasons["pending-candidate-corrupt"] == "pending_candidate_unreadable"
+    assert reasons["pending-candidate-bad-schema"] == "pending_candidate_unreadable"
+    assert reasons["pending-candidate-other-tenant"] == "pending_candidate_unreadable"
+    assert "native_eth" in {row["payload"].get("kind") for row in _outbox(desk)}
+    database = Database(desk.state / "monitor.sqlite")
+    try:
+        stored = {
+            row["identity"]: json.loads(row["payload"])
+            for row in database.conn.execute(
+                "SELECT identity, payload FROM pending_alert_candidates WHERE tenant_id=?",
+                (TENANT,),
+            )
+        }
+        replayable = database.list_pending_alert_candidates(TENANT)
+    finally:
+        database.close()
+    assert replayable == []
+    for identity in reasons:
+        assert stored[identity]["schema"] == "pending_alert_gap.v1"
+        assert stored[identity]["reason"] == "pending_candidate_unreadable"
+        assert "raw_amount" not in stored[identity]
+    again = _cli(capsys, desk, argv)
+    assert again["status"] != "failed"
+    assert {item["identity"] for item in again["pending_gaps"]} >= set(reasons)
 
 
 def test_overlapping_run_once_is_locked_and_does_not_move_cursor(
