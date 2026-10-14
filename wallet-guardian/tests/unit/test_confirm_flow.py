@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -291,11 +289,26 @@ def test_env_local_configures_etherscan_without_leaking(tmp_path, monkeypatch):
 
 
 def test_client_gate_matches_python():
-    completed = subprocess.run(
-        ["node", "src/gate.test.mjs"],
-        cwd=ROOT / "action-client",
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert completed.returncode == 0, completed.stderr
+    """client-tests runs the JS gate. This process does not spawn node."""
+    ci_text = (ROOT.parent / ".gitlab-ci.yml").read_text(encoding="utf-8")
+    lines = ci_text.splitlines()
+    start = lines.index("client-tests:")
+    block: list[str] = []
+    for line in lines[start + 1 :]:
+        if line and not line.startswith((" ", "#")):
+            break
+        block.append(line)
+    script: list[str] = []
+    in_script = False
+    for line in block:
+        if line == "  script:":
+            in_script = True
+            continue
+        if not in_script:
+            continue
+        if line.startswith("    - "):
+            script.append(line.removeprefix("    - "))
+            continue
+        break
+    assert "npm run test:gate" in script
+    assert (ROOT / "action-client" / "src" / "gate.test.mjs").is_file()

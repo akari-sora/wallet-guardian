@@ -11,7 +11,7 @@ Runner profile: `ci/profile/wg-box-ondemand.md`. Example config (placeholders on
 - One gate at a time: runner `concurrent = 1`, runner `limit = 1`, and job `resource_group: wg-box-ondemand`.
 - The runner stays paused except while an approved SHA is running. After the job, pause it again and record cleanup.
 - A persistent host runs only an approved explicit SHA. Arbitrary fork merge-request code does not run next to private monitoring data.
-- Shared-runner jobs `python-tests`, `client-tests`, and `pages` keep their current rules. They are not switched to manual.
+- Shared-runner jobs `python-tests` and `client-tests` keep their current rules. `pages` stays in the file (D-11). On `main` it is `when: manual` and `allow_failure: true`, so a merge does not publish and does not block the pipeline.
 
 Own runners do not spend GitLab.com minutes. A failed GitLab pipeline is never treated as green.
 

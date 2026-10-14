@@ -435,11 +435,13 @@ def test_mcm_share_s6_01_reuse_isolated_runner() -> None:
     assert jobs["box-build-checks"]["script"][-1] == "uv build --wheel --sdist"
     assert [name for name, job in jobs.items() if job.get("stage") == "deploy"] == ["pages"]
 
+    assert jobs["python-tests"]["timeout"] == "20m"
     assert jobs["python-tests"]["script"] == [
         "python -m pip install --disable-pip-version-check uv",
         "cd wallet-guardian",
         "uv sync --frozen --group dev",
-        "uv run --frozen pytest -q --junitxml=test-results/python.xml",
+        "mkdir -p test-results",
+        "uv run --frozen pytest -q -rf --durations=25 --timeout=60 --junitxml=test-results/python.xml",
     ]
     assert jobs["python-tests"]["rules"] == [
         {"if": '$CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event"'},
@@ -454,7 +456,9 @@ def test_mcm_share_s6_01_reuse_isolated_runner() -> None:
         "npm run test:api",
         "npm run build",
     ]
-    assert jobs["pages"]["rules"] == [{"if": '$CI_COMMIT_BRANCH == "main"'}]
+    assert jobs["pages"]["rules"] == [
+        {"if": '$CI_COMMIT_BRANCH == "main"', "when": "manual", "allow_failure": True},
+    ]
     assert jobs["pages"]["stage"] == "deploy"
     assert document["default"]["interruptible"] is True
     assert document["workflow"]["rules"][1]["when"] == "never"
@@ -543,6 +547,8 @@ def test_mcm_share_s6_02_fixed_sha_trigger() -> None:
     assert runs(shared, {"CI_PIPELINE_SOURCE": "push"}) is True
     assert runs(shared, {"CI_PIPELINE_SOURCE": "merge_request_event"}) is True
     assert runs(jobs["pages"]["rules"], {"CI_COMMIT_BRANCH": "main"}) is True
+    assert jobs["pages"]["rules"][0]["when"] == "manual"
+    assert jobs["pages"]["rules"][0]["allow_failure"] is True
     assert runs(jobs["pages"]["rules"], {"CI_COMMIT_BRANCH": "ci/wallet-guardian-on-demand"}) is False
 
 
