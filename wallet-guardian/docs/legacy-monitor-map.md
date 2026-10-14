@@ -40,7 +40,7 @@
 - `guardian.storage:Database`
 - `guardian.domain:normalize_hyperliquid`
 
-`guardian.cli:build_parser` 註冊的指令：`doctor`、`run-once`、`snapshot`、`reconcile`、`claims`、`providers`、`wallets`、`approvals`、`explain`、`coverage`、`replay`、`alerts`、`self-check`、`diagnose`、`actions`、`action`、`rescue`、`operation-coverage`、`workbench`、`config`、`sources`、`export`、`compare-legacy`、`legacy-capture`、`watchdog`、`monitor`、`egress-doctor`、`init`、`install-service`。`legacy-capture` 只寫同機 sidecar，不開 MCM 資料庫，也不改既有指令。見 `docs/legacy-evidence.md`。
+`guardian.cli:build_parser` 註冊的指令：`doctor`、`run-once`、`balance-probe`、`snapshot`、`reconcile`、`claims`、`providers`、`wallets`、`approvals`、`explain`、`coverage`、`replay`、`alerts`、`self-check`、`diagnose`、`actions`、`action`、`rescue`、`operation-coverage`、`workbench`、`config`、`sources`、`export`、`compare-legacy`、`legacy-capture`、`watchdog`、`monitor`、`egress-doctor`、`init`、`install-service`。`balance-probe` 是唯讀探針，必須帶 `--no-send`，不寫告警，也不推進 `history.*` 游標。`legacy-capture` 只寫同機 sidecar，不開 MCM 資料庫，也不改既有指令。見 `docs/legacy-evidence.md`。
 
 `guardian init` 寫單一操作者的唯讀設定。它不掃描可推導地址、不開啟 GoPlus 或 Chainabuse 的地址查詢，也不啟動 sender。`guardian install-service` 只印出計畫中的 unit 名稱並以非 0 結束，不安裝服務。
 
@@ -99,12 +99,16 @@
 - `explanation_failures`
 - `mcm_schema_migrations`
 - `pending_alert_candidates`
+- `probe_cursors`
+- `probe_trigger_records`
 - `wallet_identities`
 - `wallet_label_aliases`
 - `legacy_imports`
 - `legacy_alert_suppressions`
 
 W1 另外建立上面五張表。`PRAGMA user_version` 仍是 1，所以舊程式還能開這個庫。遷移檔在 `migrations/monitor/`，套用記錄在 `mcm_schema_migrations`（含 sha256）。重開不會再套用，已套用的檔案若 sha256 變了就拒絕。`run-once` 不寫這些表。`wallet_identities` 以 `wallet_id` 為身份；標籤改名會把舊標籤留在 `wallet_label_aliases`，不改 `wallet_id`。
+
+`balance-probe` 另用 `probe_cursors` 與 `probe_trigger_records`。這兩張表不是 `history.native_external` 或 `history.native_internal`。`PRAGMA user_version` 仍是 1。失敗的讀取不寫 0。
 
 W3 建立 `chain_events`、`capability_state` 與 `capability_cursors`。`PRAGMA user_version` 仍是 1。`run-once` 不寫這三張表。事件、能力狀態、游標與 outbox 在同一個交易裡提交。失敗的讀取不會把舊數量改成 0。葉提交若先寫了事件與游標、整輪告警還沒提交，候選留在 `pending_alert_candidates`。下一輪重判這些列；判定與刪除在同一筆交易。讀取失敗不會寫成 0，也不會把該列標成完成。
 

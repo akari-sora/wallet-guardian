@@ -45,7 +45,7 @@ The older private legacy patrol is outside this package. An operator reported a 
 
 The gaps this package addresses are narrower:
 
-- Cadence: the patrol had no balance-delta check. This package does not change cadence, so it does not itself reduce detection latency. `docs/balance-probe-design.md` is a design only, with no scheduler.
+- Cadence: the patrol had no balance-delta check. This package does not change the three-hour `run-once` cadence. `guardian balance-probe` is a separate read-only command. It does not add a scheduler. See `docs/balance-probe-design.md`.
 - Other chains: the patrol made no large-inflow judgment on non-BSC chains. A balance delta does not depend on a history source. Covers configured EVM networks for which an eligible definite-block native observation and a usable threshold are available.
 - This package's history layer: before it, `history.native_internal` was `not_queried` in rc.3. Now only BSC via NodeReal `internal` is queried, with offline fixtures. Other networks stay `not_queried` or `unsupported`.
 
