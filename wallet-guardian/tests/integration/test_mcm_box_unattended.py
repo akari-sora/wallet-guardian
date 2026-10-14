@@ -81,6 +81,13 @@ def test_mcm_share_s3_01_render_units_absolute_executable_fixed_version_no_fetch
     timer = rendered["guardian-mcm-shadow.timer"]
     assert mcm.split("ExecStart=", 1)[1].splitlines()[0].startswith(resolved_executable + " ")
     assert "--no-send" in mcm
+    watchdog_start = watchdog.split("ExecStart=", 1)[1].splitlines()[0]
+    assert "watchdog" in watchdog_start and "--no-send" in watchdog_start.split()
+    cron = rendered["guardian-unattended.cron"]
+    run_lines = [line for line in cron.splitlines() if "run-once" in line]
+    watch_lines = [line for line in cron.splitlines() if "watchdog" in line]
+    assert run_lines and all("--no-send" in line.split() for line in run_lines)
+    assert watch_lines and all("--no-send" in line.split() for line in watch_lines)
     assert f"GUARDIAN_INSTALLED_VERSION={__version__}" in mcm
     assert f"ReadWritePaths={resolved_state}" in mcm
     for marker in _HARDENING:

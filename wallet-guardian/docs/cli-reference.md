@@ -622,7 +622,7 @@ options:
 ## `guardian watchdog`
 
 ```text
-usage: guardian watchdog [-h] [--db DB] [--tenant TENANT] [--json] --mcm-config MCM_CONFIG
+usage: guardian watchdog [-h] [--db DB] [--tenant TENANT] [--json] --mcm-config MCM_CONFIG [--no-send]
 
 options:
   -h, --help            show this help message and exit
@@ -630,6 +630,7 @@ options:
   --tenant TENANT       local tenant scope (required when ambiguous)
   --json                print JSON (this is always on)
   --mcm-config MCM_CONFIG
+  --no-send
 ```
 
 ## `guardian monitor`

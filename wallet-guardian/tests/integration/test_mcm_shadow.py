@@ -288,6 +288,60 @@ def test_mcm_live_l3_04_no_shadow_send_and_critical_relay_once(tmp_path: Path, m
         tool.prepare_evidence_dir(loose)
 
 
+def test_shadow_plan_sends_nothing_when_sender_is_opted_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A configured, opted-in sender still gets zero sends from the shadow plan."""
+    tool = _tool()
+    desk = _desk(tmp_path, monkeypatch)
+    document = json.loads(desk.config.read_text(encoding="utf-8"))
+    document["delivery"] = {"mode": "configured_sender", "profile_env": "MONITOR_DELIVERY_PROFILE"}
+    desk.config.write_text(json.dumps(document), encoding="utf-8")
+    profile = {
+        "schema_version": "guardian.delivery-profile.v1",
+        "channel": "telegram",
+        "opt_in": True,
+        "owner_id": "desk-owner",
+        "chat_id": "10001",
+        "token_env": "TELEGRAM_BOT_TOKEN",
+        "single_sender_handoff": True,
+        "legacy_shadow": False,
+        "event_watermark": None,
+    }
+    _write_private(tmp_path / "delivery.json", json.dumps(profile) + "\n")
+    monkeypatch.setenv("MONITOR_DELIVERY_PROFILE", str(tmp_path / "delivery.json"))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "synthetic-bot-token")
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps({"alerted": []}), encoding="utf-8")
+    sender = _Sink()
+    code = tool.main(_argv(desk, path), backend=_backend(), sender=sender, clock=lambda: 1_700_000_000.0)
+    assert code == 0
+    assert sender.messages == []
+    watchdog_argv = (desk.evidence / "commands" / "watchdog.argv").read_text(encoding="utf-8")
+    assert "--no-send" in watchdog_argv.split()
+    watchdog = json.loads((desk.evidence / "commands" / "watchdog.stdout").read_text(encoding="utf-8"))
+    assert watchdog["delivery_status"] == "no_send"
+    assert watchdog["sent"] == 0
+    record = json.loads((desk.evidence / "round.json").read_text(encoding="utf-8"))
+    assert record["sender_calls"] == 0
+    assert record["no_send"] is True
+    import io
+    from contextlib import redirect_stdout
+
+    from guardian.cli import main as guardian_main
+
+    captured = io.StringIO()
+    with redirect_stdout(captured):
+        delivered = guardian_main(
+            ["watchdog", "--mcm-config", str(desk.config)],
+            backend=_backend(),
+            sender=sender,
+            clock=lambda: 1_700_000_300.0,
+        )
+    contrast = json.loads(captured.getvalue())
+    assert delivered == 0, contrast
+    assert contrast["sent"] >= 1
+    assert sender.messages
+
+
 def test_mcm_live_l3_05_overlap_restart_reorg_dedup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """MCM-LIVE-L3-05. Restart keeps the committed cursor. A replaced tx counts once. Drills stay out of the 24."""
     tool = _tool()

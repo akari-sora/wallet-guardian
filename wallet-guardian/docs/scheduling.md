@@ -51,7 +51,7 @@ The JSON below is abbreviated to the fields that say whether anything was instal
 - `guardian-legacy-collector.service` and `.timer`
 - `guardian-watchdog.service` and `.timer`
 
-The rendered MCM `ExecStart` is the absolute `guardian` plus `run-once --mcm-config <path> --no-send`. The watchdog `ExecStart` is `watchdog --mcm-config <path>`. The legacy unit's `ExecStart` is the operator command (`--legacy-executable`, default `/usr/local/sbin/guardian-legacy-collector`). `Persistent=false` and `RandomizedDelaySec=0` are set on the timers. The MCM and legacy calendars are `*-*-* 0/3:<offset>:00` (`--offset-minutes`, default 5, range 0 through 59). The watchdog calendar is `*:0/15`. Each service includes `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp=yes`, `MemoryMax=512M`, `CPUQuota=50%`, and `TimeoutStartSec=3600`.
+The rendered MCM `ExecStart` is the absolute `guardian` plus `run-once --mcm-config <path> --no-send`. The paired watchdog `ExecStart` is `watchdog --no-send --mcm-config <path>`. The legacy unit's `ExecStart` is the operator command (`--legacy-executable`, default `/usr/local/sbin/guardian-legacy-collector`). `Persistent=false` and `RandomizedDelaySec=0` are set on the timers. The MCM and legacy calendars are `*-*-* 0/3:<offset>:00` (`--offset-minutes`, default 5, range 0 through 59). The watchdog calendar is `*:0/15`. Each service includes `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp=yes`, `MemoryMax=512M`, `CPUQuota=50%`, and `TimeoutStartSec=3600`.
 
 `--output <directory>` writes the rendered text only under that directory. That is still not an install. `--apply` without `--dry-run` is the install path. This preview does not tell you to apply it. A same-host watchdog cannot see a dead host. `common_cause` in the JSON says that. Silence is not proof the machine was healthy. `watchdog` does call the delivery path itself, so a configured sender can send pending outbox rows when `run-once` is not the process that notices. Default `outbox_only` still does not send. A `degraded` `run-once` exits 3, which is not the `failed` exit 1. A required gap that was already `error` or `blocked` is a known gap; a newly worse required key emits `monitor_new_gap` instead of being folded into that old episode.
 
@@ -70,7 +70,7 @@ The fallback file is `guardian-unattended.cron`. The shipped lines are:
 ```text
 <offset> */3 * * * <guardian> run-once --mcm-config <monitor.json> --no-send
 <offset> */3 * * * <legacy-executable>
-*/15 * * * * <guardian> watchdog --mcm-config <monitor.json>
+*/15 * * * * <guardian> watchdog --no-send --mcm-config <monitor.json>
 ```
 
 `--apply` in cron mode reads `crontab -l` and replaces only the block between `# BEGIN wallet-guardian-monitor (managed block, do not edit)` and `# END wallet-guardian-monitor`. Other lines stay. A dry run does not call `crontab`.
@@ -97,7 +97,7 @@ The fallback file is `guardian-unattended.cron`. The shipped lines are:
 </array>
 ```
 
-Repeat the hour dict for 3, 6, 9, 12, 15, 18, and 21 if you want the same 3-hour grid as `OnCalendar=*-*-* 0/3:05:00`. A second agent, every 15 minutes, runs `watchdog --mcm-config` with the same monitor file. Keep the absolute paths. Do not point the agent at `uv sync` or a moving branch.
+Repeat the hour dict for 3, 6, 9, 12, 15, 18, and 21 if you want the same 3-hour grid as `OnCalendar=*-*-* 0/3:05:00`. A second agent, every 15 minutes, runs `watchdog --no-send --mcm-config` with the same monitor file. Keep the absolute paths. Do not point the agent at `uv sync` or a moving branch.
 
 ## Sleeping laptops and missed slots
 

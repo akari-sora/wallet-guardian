@@ -195,6 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     watchdog = sub.add_parser("watchdog", parents=[common])
     watchdog.add_argument("--mcm-config", required=True)
+    watchdog.add_argument("--no-send", action="store_true")
 
     monitor = sub.add_parser("monitor")
     monitor_sub = monitor.add_subparsers(dest="monitor_command", required=True)
@@ -775,7 +776,7 @@ def _mcm_watchdog(args: argparse.Namespace, clock: Callable[[], float] | None, s
         delivery = deliver(
             database,
             tenant,
-            mode="send",
+            mode="no_send" if args.no_send else "send",
             sender=sender,
             handoff=load_handoff(public, os.environ),
             clock=time.time if clock is None else clock,

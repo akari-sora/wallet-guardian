@@ -351,8 +351,10 @@ def test_mcm_share_s2_05_single_writer_report_only(tmp_path: Path, monkeypatch: 
     assert result["code"] == 0
     assert result["round"].get("sender_calls") == 0
     assert result["round"].get("no_send") is True
+    watchdog_argv = (tmp_path / "evidence-read" / "commands" / "watchdog.argv").read_text(encoding="utf-8")
+    assert "--no-send" in watchdog_argv.split()
     watchdog_out = (tmp_path / "evidence-read" / "commands" / "watchdog.stdout").read_text(encoding="utf-8")
-    assert json.loads(watchdog_out)["delivery_status"] == "send_disabled"
+    assert json.loads(watchdog_out)["delivery_status"] == "no_send"
     assert _tree(published) == before_tree
     assert source.read_bytes() == before_source
     assert source.stat().st_mtime_ns == before_ns
