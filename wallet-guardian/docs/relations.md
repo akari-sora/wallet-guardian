@@ -4,9 +4,9 @@
 
 ## What it is
 
-Two commands exist: `guardian relations inbound` and `guardian relations expand`. Both are read-only. The package is imported only from the command line: `guardian.cli` calls `execute` when the command is `relations`. `run-once`, `watchdog`, `balance-probe`, and `install-service` do not call it. The units `install-service` prints run `run-once`, `watchdog`, and `balance-probe` only. Nothing in the relations package signs a transaction or broadcasts one.
+Two commands exist: `guardian relations inbound` and `guardian relations expand`. Both are read-only. The package is imported only from the command line: `guardian.cli` calls `execute` when the command is `relations`. `run-once`, `watchdog`, `balance-probe`, and `install-service` do not call it. The built-in schedule and the schedule `install-service` produces do not call relations. Nothing in the relations package signs a transaction or broadcasts one.
 
-A finished command exits 0, including when its status is `partial`. That exit code is not an empty result. A missing `--yes`, and any `ConfigError`, exit 2. No request is sent on exit 2.
+JSON and Markdown are written only for a run whose status is `dry_run`, `consent_required`, `complete`, or `partial`. Markdown is written only when `--markdown` is also set. A finished command exits 0, including when its status is `partial`. That exit code is not an empty result. A missing `--yes` is `consent_required` and exits 2. No request is sent on exit 2. `ConfigError` exits 2 and writes no result file. A `SecurityError` whose reason is not `redirect_host` exits 4 and writes no result file. A request may already have been sent. Any other error exits 1 and writes no result file.
 
 ## Layers
 
@@ -28,17 +28,17 @@ With `--yes` and without `--dry-run`, only the planned queries are sent. A skip 
 
 ## Flags
 
-`build_parser()` accepts the flags below on `inbound`, `expand`, or both. A value outside a bound, or a value that is not an integer, is `ConfigError` and exit 2 before any request. Booleans are rejected. Bounds are inclusive.
+`build_parser()` accepts the flags below on `inbound`, `expand`, or both. A non-integer value for `--since-days`, `--max-pages`, `--max-nodes`, or `--hub-threshold` is rejected by argparse: the process exits 2, stderr prints usage, and stdout has no JSON. An integer outside a bound is `ConfigError` and exit 2 before any request. Bounds are inclusive.
 
 | Flag | Commands | Default | Bound or rule |
 | --- | --- | --- | --- |
 | `--help` | both | | Prints help and does not send. |
 | `--db` | both | | Accepted. `execute` does not read it. The profile comes from `--mcm-config`. |
 | `--tenant` | both | | Accepted. `execute` does not read it. |
-| `--json` | both | | Accepted. The process prints one JSON object whether or not this flag is set. |
+| `--json` | both | | Accepted. The process prints one JSON object whether or not this flag is set. An argparse error and `--help` do not print that JSON. |
 | `--mcm-config` | both | required | Path of the monitor profile. |
 | `--seed` | both, repeatable | profile accounts | Inbound: address to read. Expand: address excluded from `co_recipients` and used as the seed-receipt set. Duplicates are dropped. An empty string is `bad_address`. Inbound with no seed and no profile account is `seed_required`. |
-| `--network` | both, repeatable | see below | Duplicates are dropped, and the first spelling is kept. |
+| `--network` | both, repeatable | see below | Exact duplicates are dropped. The comparison is the exact string, so a different case is an unknown network. |
 | `--since-days` | both | 90 | 1 through 3650. |
 | `--max-pages` | both | 10 | 1 through 50. |
 | `--max-nodes` | both | 500 | 1 through 5000. Caps queried addresses and output rows. |
@@ -55,7 +55,7 @@ When `--network` is set on inbound, a seed is read only on named networks of its
 
 `--network` on expand is required. Repeat it to add another network in the payer's family. A different family is `network_family` and sends nothing. The same enabled-network rule applies, including the Solana and Bitcoin exception.
 
-`--since-days` sets the oldest timestamp kept: `max(0, now - since_days * 86400)`, in whole seconds. An older row is not an edge. Reaching an older row ends that page walk as a finished window, not as a gap.
+`--since-days` sets the oldest timestamp kept: `max(0, now - since_days * 86400)`, in whole seconds. An older row is not an edge. Stopping the page walk at a row outside the window applies to Blockscout, and that walk ends as a finished window, not as a gap. TRON sends the time window for the server to filter. Locally, an older row is dropped and that page walk does not stop there.
 
 `--max-nodes` is checked twice. Before any request, the number of distinct `(network, address)` pairs that would actually be queried must be at most the cap. Skip-only jobs do not count. Above the cap, the command exits 2 with `max_nodes` and sends nothing. After a read, `counterparties` or `co_recipients` are cut to that many rows, in the order already sorted. `truncated` is `{"reason": "node_cap", "total": <full row count>}`. If the command status would have been `complete`, it becomes `partial`. The source `read_status` can stay `complete`. `recipient_count` still uses the full recipient set.
 
@@ -130,7 +130,7 @@ Four kinds exist. A kind that is not present is omitted. No kind is stored as fa
 | --- | --- | --- |
 | `same_tx` | 3 | The recipient has a transfer whose `(network, tx_hash)` is also a seed receipt. The public object keeps at most five hashes. The reason text uses the full shared-transaction count: "paid in the same transaction as a seed address (N transactions)". |
 | `same_asset` | 1 | The recipient received an asset key `(network, kind, contract)` that also appears in the seed receipts. |
-| `amount_band` | 1 | For the first matching asset key in sorted order, some non-null raw amount lies in the inclusive band from `min(seed) * 80 // 100` through `(max(seed) * 120 + 99) // 100`. Null raw amounts are skipped. At most five matched amounts are published. |
+| `amount_band` | 1 | Shared asset keys are tried in sorted order; the first key with at least one in-band amount is published, and the band uses that key's seed amounts. The inclusive band is `min(seed) * 80 // 100` through `(max(seed) * 120 + 99) // 100`. Null raw amounts are skipped. At most five matched amounts are published. |
 | `cadence` | 1 | Both sides have at least two distinct timestamps. The median gap on each side is at least 3600 seconds, and the two medians differ by at most 20 percent of the larger one. A gap of exactly 20 percent is kept. A wider gap is omitted. |
 
 `score` is the sum of the weights of the kinds that are present. The maximum is 6. `confidence` is `high` when the score is at least 4, `medium` when it is at least 2, and `low` otherwise, including 0. Kinds in the `evidence` list stay in the order `same_tx`, `same_asset`, `amount_band`, `cadence`.
@@ -171,7 +171,7 @@ On a result row, a private-file match sets `label`, `label_kind`, and `label_sou
 
 ## Output files
 
-JSON is always written. Markdown is written only with `--markdown`. Both live under `<state_dir>/relations/`. The JSON name is `{stamp}-{command}.json`, where `stamp` is UTC `YYYYMMDDTHHMMSS` plus microseconds and `Z`. If that name exists, the next file is `{stamp}-{command}-2.json`, then `-3`, and so on. The Markdown path is the same stem with a `.md` suffix. Without `--markdown` there is no Markdown file and no `markdown_path`.
+JSON and Markdown are written only for a run whose status is `dry_run`, `consent_required`, `complete`, or `partial`. Markdown is written only with `--markdown`. An error exit writes neither file: `ConfigError` exits 2, a `SecurityError` whose reason is not `redirect_host` exits 4 and a request may already have been sent, and any other error exits 1. Both live under `<state_dir>/relations/`. The JSON name is `{stamp}-{command}.json`, where `stamp` is UTC `YYYYMMDDTHHMMSS` plus microseconds and `Z`. If that name exists, the next file is `{stamp}-{command}-2.json`, then `-3`, and so on. The Markdown path is the same stem with a `.md` suffix. Without `--markdown` there is no Markdown file and no `markdown_path`.
 
 `result_path` is set on the printed object. On POSIX, a newly created `relations` directory is mode `0700`, and an existing directory that is group- or world-accessible is changed to `0700`. Each result file is written at mode `0600`.
 
@@ -185,13 +185,13 @@ A null `counterparties`, `co_recipients`, `merged_addresses`, or `seed_receipts`
 
 ## Limits
 
-- BSC stays a gap until a source is chosen outside this command. `bsc-mainnet` is always `gap` / `bsc_source_gated` / `credential_missing`, and it sends nothing, including when a NodeReal source is configured.
+- Which source reads BSC is the user's choice (a NodeReal key or 48club). Until that choice is made, `bsc-mainnet` is a `credential_missing` gap, reason `bsc_source_gated`, and it sends nothing. Relations ignores configured sources for that network.
 - Solana and Bitcoin are parsed as addresses and then returned as `unsupported`. No request is sent. Sui, Aptos, TON, and Cosmos are the same.
-- Etherscan is not called. A network that only has an enabled routed `etherscan_v2` source is `gap` / `source_gated` / `etherscan_deferred`, even when a key is present. Relations does not treat a registered key, by itself, as a live-verified Etherscan path.
-- `optimism.blockscout.com` answers HTTP 301 to another host (`explorer.optimism.io`, recorded since at least 2026-10-09). A redirect whose host differs from the registered host is refused. Relations stores that as a `redirect_host` gap and does not follow it.
+- Etherscan is added only after the user has registered a key and live verification is finished. Until both are done, relations does not call Etherscan. A network that only has an enabled routed `etherscan_v2` source is `gap` / `source_gated` / `etherscan_deferred` and sends nothing, even when a key is present.
+- `optimism.blockscout.com` answers HTTP 301 to another host (`explorer.optimism.io`, recorded since at least 2026-10-09). This recorded `redirect_host` gap appears only when the endpoint is set to `optimism.blockscout.com`. The default and the recommended origin are in `docs/api-keys.md`. A redirect whose host differs from the registered host is refused. Relations stores that as a `redirect_host` gap and does not follow it.
 - Keyless public Blockscout for Base (`base.blockscout.com`), Arbitrum (`arbitrum.blockscout.com`), and Polygon (`polygon.blockscout.com`) has returned HTTP 403 with a Cloudflare page (`Just a moment`) to the recorded Linux host. That result is host-specific. Relations stores the reason `bot_challenge` as a `gap`. The Blockscout call does not set a User-Agent, and this command does not invent one to pass the challenge.
 - TRON reads TRC-20 transfers only. There is no native TRX read.
-- `--max-pages` stops a walk and the read is `partial` (`page_cap`, or TRON `request_cap` at 48 requests). Each Blockscout tail also stops at 5000 items (`item_cap`) and that part is `partial`. `--max-nodes` above the query count exits 2 and sends nothing. `--max-nodes` above the output row count keeps the first rows, sets `truncated.reason` to `node_cap`, and the command status is `partial` when it would otherwise have been `complete`.
+- `--max-pages` stops a walk and the read is `partial` with reason `page_cap`. The TRON client has a fixed cap of 48 requests (`request_cap`); that cap is not `--max-pages`. Each Blockscout tail also stops at 5000 items (`item_cap`) and that part is `partial`. A query count above `--max-nodes` exits 2 and sends nothing. An output row count above `--max-nodes` keeps the first `--max-nodes` rows and the status becomes `partial`. The cut sets `truncated.reason` to `node_cap`. If the status would have been `complete`, it becomes `partial`.
 - A hub's extra recipients are high noise. The field is `noise` `high`, and only when `--expand-hub` is set. The default hub report does not list them.
 - Shared transactions, assets, amounts, or timing do not show that two addresses are controlled by the same party. Matching by amount does not show that either. An equal amount is not control of both addresses.
 - The command reads public chain data for the addresses it was given. It does not query ENS. It does not query off-chain records.
