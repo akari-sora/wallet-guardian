@@ -9,7 +9,9 @@ const schema = JSON.parse(readFileSync(PATHS.SCHEMA_PATH, "utf8"));
 const origins = JSON.parse(readFileSync(PATHS.ORIGINS_PATH, "utf8"));
 
 test("deploy doc does not recommend vercel --prod", () => {
+  assert.equal(existsSync(new URL("../vercel.json", import.meta.url)), false);
   assert.equal(deployDoc.includes("vercel --prod"), false);
+  assert.equal(deployDoc.includes("gitlab.io"), false);
   assert.match(deployDoc, /wallet-guardian-action-client/);
   assert.match(deployDoc, /fixed_https_origin/);
   assert.match(deployDoc, /5a09b4e6\.wallet-guardian-action-client\.pages\.dev/);

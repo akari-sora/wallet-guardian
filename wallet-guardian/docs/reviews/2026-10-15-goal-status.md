@@ -1,6 +1,6 @@
 # Goal status for the 2026-10-14 review (2026-10-15)
 
-Handoff for the packages in [2026-10-14-review-summary.md](2026-10-14-review-summary.md). `main` at the time of writing is `f6c8b57d22bf929daa4543d519d0542f0d4f75a9` (`Merge !88 into main`). SHAs below are the merge commits on `main` unless noted.
+Handoff for the packages in [2026-10-14-review-summary.md](2026-10-14-review-summary.md). `main` at the time of writing is `d7a1657c68be4887b221a3c72374a3bb0f68a313` (`Merge !89 into main`). SHAs below are the merge commits on `main` unless noted.
 
 This file records what landed and what did not. It does not say the monitor covers all chains, that it is production ready, or that a 72-hour shadow was verified.
 
@@ -25,7 +25,7 @@ The 2026-10-14 review itself is !60, merge `c25892563a5a9149e23f33290790028a8caf
 | 1-6 | Three LaunchAgent plists can be printed. They were not loaded. | [!74](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/74) | `9d83d0ffb6a9fcd7e0bdbc05fd4b49ac22b91d1d` |
 | 1-7 | Shadow detection latency and an outbox-versus-threshold check are recorded in code. A 72-hour shadow was not run. | [!73](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/73) | `05735c43838a31fcf9047365ad59a13d808f55c6` |
 | Phase-2 docs | Honest limits for merged behaviour, and wording that a key does not unlock DeBank or Zerion. This does not close every item 2-1 through 2-6 in the review summary. | [!71](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/71), [!72](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/72) | `827835133616c55ffe0c28364f325500c4cc5c27`, `0e0a952def656b000f990129082e45aa98e2a7d7` |
-| WP-1 | Artifact inventory without a deploy. `action-client/deploy/releases.json` `releases` is still `[]`. Old hash deployments were not deleted. `vercel.json` and the GitLab `pages` job were not deleted. | [!64](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/64) | `32d7eac89117e80f7aa3ae6683840737b7f1c9d9` |
+| WP-1 | Artifact inventory without a deploy. `action-client/deploy/releases.json` `releases` is still `[]`. Old hash deployments were not deleted. !64 left `vercel.json` and the GitLab `pages` job in place. D-11 later deleted both. That deletion is not a deploy. | [!64](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/64) | `32d7eac89117e80f7aa3ae6683840737b7f1c9d9` |
 | WP-2 | Private-task routes come from one origin policy. `issue_task_link` does not issue a caller origin. `fixed_https_origin` stays false. `data_path` stays in the policy. | [!82](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/82) | `47197c4c1264727a6b2631c85510cc51a719c98b` |
 | WP-3 | Send construction stays out of the default send-off bundle. !69 makes the send-off artifact test build `dist` itself. CI does not build a send variant beside the default build. | [!66](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/66), [!69](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/69) | `44c3e3512f205d051da23a2aac9d9776b08184c6`, `ef3c19c3fb76b76ac25f64ba77182674d71e34e7` |
 | WP-4 | Fail-closed session and membership revocation. The 12h / 30min / 15min constants are suggestions, not a D-9 decision. !88, merge `f6c8b57d22bf929daa4543d519d0542f0d4f75a9`, makes the sender ignore its own logout broadcast. A switch still revokes, and other tabs still log out. | [!85](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/85), [!88](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/88) | `76ad84299c7ea6fb510cac73a689ad0d76423197`, `f6c8b57d22bf929daa4543d519d0542f0d4f75a9` |
@@ -35,18 +35,18 @@ The 2026-10-14 review itself is !60, merge `c25892563a5a9149e23f33290790028a8caf
 
 WP-8 (real wallet) was not started.
 
-CI follow-up, not one of the review packages: !87, merge `a84f7caa258989b27f0892273dd50cfbadc0e223`. `python-tests` timeout stays 20 minutes. The job prints durations, uses a 60-second pytest timeout, writes JUnit as it goes, and refuses live DNS and non-loopback connects. `pages` on `main` is `when: manual` and `allow_failure: true`. The job was not deleted. `test_client_gate_matches_python` does not skip and does not spawn Node. It checks that `client-tests` runs `npm run test:gate` and that `action-client/src/gate.test.mjs` exists.
+CI follow-up, not one of the review packages: !87, merge `a84f7caa258989b27f0892273dd50cfbadc0e223`. `python-tests` timeout stays 20 minutes. The job prints durations, uses a 60-second pytest timeout, writes JUnit as it goes, and refuses live DNS and non-loopback connects. D-11 deleted the `pages` job. `test_client_gate_matches_python` does not skip and does not spawn Node. It checks that `client-tests` runs `npm run test:gate` and that `action-client/src/gate.test.mjs` exists.
 
 ## What was verified
 
 - Local pytest during the package work. In this environment the only product-unrelated failure is `tests/install/test_installable_monitor.py::test_mcm_share_s4_03_pinned_install_uv_pip` because `python -m ensurepip` is missing. A local run is not a CI pass.
-- The **800 passed, 0 skipped** CI result is MR pipeline 2948700941 on the !87 head `b6b09a4266d7708d78fdae64c103a8aa26875825`, before !84 merged. No main-branch pipeline ran after the `[skip ci]` merges `95a94f5a40206f2e2cd1887b021ecccdc47d2531`, `a84f7caa258989b27f0892273dd50cfbadc0e223`, and `f6c8b57d22bf929daa4543d519d0542f0d4f75a9`.
+- The **800 passed, 0 skipped** CI result is MR pipeline 2948700941 on the !87 head `b6b09a4266d7708d78fdae64c103a8aa26875825`, before !84 merged.
+- Main pipeline 2948863306 on 67e758b passed on wg-9700x (python-tests 800 passed, client-tests passed).
 - No merge before !87 had a passing CI run. `python-tests` timed out on `wg-9700x` for the MR pipelines of !81–!86 and also !88. Every merge rested on the local gate: a trial merge, full pytest, and the Node suites.
 - `client-tests` on pipeline 2948700941 runs the Node unit scripts and `npm run build`. It does not run `test:wallets:artifact`.
 
 ## What was not verified
 
-- No main-branch CI since the `[skip ci]` merges (`95a94f5a40206f2e2cd1887b021ecccdc47d2531`, `a84f7caa258989b27f0892273dd50cfbadc0e223`, `f6c8b57d22bf929daa4543d519d0542f0d4f75a9`).
 - `test:wallets:artifact` is local-only. It needs Chrome.
 - No live keys (Blockscout PRO, Alchemy, NodeReal, or any other).
 - No real wallet, and no WalletConnect send.
@@ -57,7 +57,11 @@ CI follow-up, not one of the review packages: !87, merge `a84f7caa258989b27f0892
 
 ## Decisions still with the operator
 
-The 2026-10-14 Mode A table defines D-1, D-2, D-3, D-4, D-5, D-9, D-10, D-11, and D-12. D-1 is also called H-1. It does not define D-6, D-7, or D-8. None of the defined items below were decided by these merges.
+The 2026-10-14 Mode A table defines D-1, D-2, D-3, D-4, D-5, D-9, D-10, D-11, and D-12. D-1 is also called H-1. It does not define D-6, D-7, or D-8.
+
+D-11 is decided and done. The operator approved deleting `action-client/vercel.json` and the GitLab `pages` job. Both are deleted. This change does not deploy, tag, or edit Cloudflare config. H-4 stays undecided.
+
+None of the other defined items below were decided by the earlier package merges.
 
 | ID | Still open |
 | --- | --- |
@@ -68,7 +72,6 @@ The 2026-10-14 Mode A table defines D-1, D-2, D-3, D-4, D-5, D-9, D-10, D-11, an
 | D-5 | Phase B rehearsal choice (local testnet variant versus not). WP-8 has not started. |
 | D-9 | Session absolute TTL, idle timeout, and Mode A `auth_time` window. The 12h / 30min / 15min numbers are suggestions only. |
 | D-10 | Whether logout clears a local pending outcome. The code does not clear it. |
-| D-11 | Whether to delete `action-client/vercel.json` and the GitLab `pages` job. Both remain. `pages` on `main` is manual and does not publish on merge. |
 | D-12 | Scope after a first successful claim. There has been no mainnet send. |
 | H-4 | Cloudflare dashboard work: delete old deployments, confirm 2FA and token scope. Not done by an agent. |
 | H-6 | Whether synthetic-key negative tests may write the production D1. Not done. |

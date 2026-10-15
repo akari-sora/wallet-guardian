@@ -20,16 +20,16 @@ npm run build
 
 正式靜態目標是 Cloudflare Pages 專案 `wallet-guardian-action-client`。逐檔雜湊清冊是 `action-client/deploy/releases.json`。它不在 Python 套件或 wheel 裡。這份清冊目前的 `releases` 是空的：沒有填入沒有實際雜湊過的檔案，也不把任何 origin 標成這次變更部署過的 active release。
 
-GitLab Pages 與 Vercel 不是這個固定來源。`action-client/vercel.json` 與根目錄 `.gitlab-ci.yml` 的 `pages` job 仍在 repo 裡，因為刪除它們要等 D-11。不要把那兩個殘留設定當成部署步驟。
+D-11 已決定並完成。`action-client/vercel.json` 與根目錄 `.gitlab-ci.yml` 的 GitLab `pages` job 已刪除。GitLab Pages 與 Vercel 不是 Action Client 的託管方式。這份變更沒有部署，也沒有改 Cloudflare 設定。
 
 部署與刪除既有預覽由擁有者在 Cloudflare 執行。這份文件變更沒有執行部署，也沒有刪除任何預覽。
 
 ## 部署現況（2026-10-07，本機核對）
 
-- 公開碼已在 GitLab `main`：`07e02cf`（含確認閘門、Pages/Vercel 設定、Etherscan SSRF 允許 WARP DNS）。
+- 公開碼已在 GitLab `main`：`07e02cf`（含確認閘門、Etherscan SSRF 允許 WARP DNS）。當時 repo 裡還有 GitLab Pages 與 Vercel 設定；D-11 已把它們刪除。
 - 離線：`pytest` **180 passed**；`action-client` build／gate／canonical **通過**。
-- GitLab CI／Pages：**失敗**，原因 `ci_quota_exceeded`（共享 runner 額度）。在額度恢復前，預期 Pages 網址 `https://aa22396584.gitlab.io/wallet-guardian/` **不是**已上線來源。
-- Vercel MCP：讀專案列表可用；**建立專案／部署**需要 team scope `aa22396584-6131s-projects` 的寫入授權。目前被 403，需擁有者在聊天裡完成 Vercel 重新授權後再部署。
+- 2026-10-07 的 GitLab 共享 runner 因 `ci_quota_exceeded` 失敗。GitLab Pages 不是已上線來源。`pages` job 已刪除，這份變更沒有部署。
+- Vercel 不是 Action Client 的託管目標。`vercel.json` 已刪除。這份變更沒有建立或部署 Vercel 專案。
 - （歷史）部署當下曾標 false；之後已驗證 Cloudflare Pages origin，見下一節。主網送出預設關閉；這不是主網交易授權。
 
 ## 已驗證固定 HTTPS（2026-10-07）
