@@ -732,3 +732,61 @@ options:
   --offset-minutes OFFSET_MINUTES
   --legacy-executable LEGACY_EXECUTABLE
 ```
+
+## `guardian relations`
+
+```text
+usage: guardian relations [-h] [--db DB] [--tenant TENANT] [--json] {inbound,expand} ...
+
+positional arguments:
+  {inbound,expand}
+
+options:
+  -h, --help        show this help message and exit
+  --db DB           sqlite path
+  --tenant TENANT   local tenant scope (required when ambiguous)
+  --json            print JSON (this is always on)
+```
+
+## `guardian relations inbound`
+
+```text
+usage: guardian relations inbound [-h] [--db DB] [--tenant TENANT] [--json] --mcm-config MCM_CONFIG [--seed SEED] [--network NETWORK] [--since-days SINCE_DAYS] [--max-pages MAX_PAGES] [--dry-run]
+                                  [--yes]
+
+options:
+  -h, --help            show this help message and exit
+  --db DB               sqlite path
+  --tenant TENANT       local tenant scope (required when ambiguous)
+  --json                print JSON (this is always on)
+  --mcm-config MCM_CONFIG
+  --seed SEED           address to read; repeat to add another
+  --network NETWORK     limit the read to this network; repeat to add another
+  --since-days SINCE_DAYS
+  --max-pages MAX_PAGES
+  --dry-run             print the disclosure plan and do not send
+  --yes                 send the disclosed reads
+```
+
+## `guardian relations expand`
+
+```text
+usage: guardian relations expand [-h] [--db DB] [--tenant TENANT] [--json] --mcm-config MCM_CONFIG --payer PAYER --network NETWORK [--seed SEED] [--since-days SINCE_DAYS] [--max-pages MAX_PAGES]
+                                 [--hub-threshold HUB_THRESHOLD] [--expand-hub] [--dry-run] [--yes]
+
+options:
+  -h, --help            show this help message and exit
+  --db DB               sqlite path
+  --tenant TENANT       local tenant scope (required when ambiguous)
+  --json                print JSON (this is always on)
+  --mcm-config MCM_CONFIG
+  --payer PAYER
+  --network NETWORK
+  --seed SEED           address to exclude; repeat to add another
+  --since-days SINCE_DAYS
+  --max-pages MAX_PAGES
+  --hub-threshold HUB_THRESHOLD
+  --expand-hub
+  --dry-run             print the disclosure plan and do not send
+  --yes                 send the disclosed reads
+```

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from guardian.errors import SecurityError
@@ -299,6 +300,9 @@ class BlockscoutClient:
         previous_cursor: str | None = None,
         page_cap: int = 10,
         item_cap: int = 5_000,
+        query: Mapping[str, str] | None = None,
+        keep_partial: bool = False,
+        stop_timestamp: int | None = None,
     ) -> HistoryRead:
         """Newest-first ``/api/v2/addresses/{address}/{tail}``.
 
@@ -307,6 +311,14 @@ class BlockscoutClient:
         block is at or below ``stop_block``. The request never sends ``limit``.
         A configured credential is ``Authorization: Bearer`` on this same path.
         The base URL stays on the source. This method does not embed a key.
+
+        ``query`` is optional and applies only to the first page. The only
+        allowed key is ``filter``, and the only values are ``from`` and ``to``.
+        ``keep_partial`` defaults to false. When it is true, a page or item cap
+        returns the rows already read, with ``complete`` false and category
+        ``partial``. ``stop_timestamp`` stops on an earlier row and treats the
+        time window as read. Callers that omit these arguments keep the
+        previous result.
         """
         name = _V2_TAILS.get(tail)
         if capability is None:
@@ -320,20 +332,29 @@ class BlockscoutClient:
             return _kept(capability, previous_cursor, "bad_page")
         if page_cap < 1 or item_cap < 1:
             return _kept(capability, previous_cursor, "bad_page")
+        if stop_timestamp is not None and (
+            isinstance(stop_timestamp, bool) or not isinstance(stop_timestamp, int) or stop_timestamp < 0
+        ):
+            return _kept(capability, previous_cursor, "bad_page")
+        try:
+            first_query = _first_filter(query)
+        except ValueError:
+            return _kept(capability, previous_cursor, "bad_page")
         kept: list[Any] = []
         token: dict[str, Any] | None = None
         pages = 0
         while pages < page_cap:
-            query = None
             headers = ("authorization",) if self._credential else None
             if token is not None:
                 try:
-                    query = self.page_query(token)
+                    request_query = self.page_query(token)
                 except ValueError:
                     return _kept(capability, previous_cursor, "bad_page")
-                if "limit" in query:
+                if "limit" in request_query:
                     return _kept(capability, previous_cursor, "bad_page")
-            operation = self.operation(path, query, headers)
+            else:
+                request_query = first_query
+            operation = self.operation(path, request_query, headers)
             try:
                 result = read_with_retry(
                     lambda operation=operation: self.transport.request(self.source_id, operation),
@@ -373,8 +394,17 @@ class BlockscoutClient:
                 if stop_block is not None and block <= stop_block:
                     stop = True
                     break
+                if stop_timestamp is not None:
+                    stamp = _item_timestamp(item)
+                    if stamp is None:
+                        return _kept(capability, previous_cursor, "missing_timestamp")
+                    if stamp < stop_timestamp:
+                        stop = True
+                        break
                 kept.append(item)
                 if len(kept) >= item_cap:
+                    if keep_partial:
+                        return _partial(capability, kept, previous_cursor, "item_cap")
                     return _kept(capability, previous_cursor, "item_cap")
             pages += 1
             if stop or nxt is None:
@@ -383,6 +413,8 @@ class BlockscoutClient:
                     capability, tuple(kept), True, True, (), previous_cursor, category, False, "", (), "",
                 )
             token = nxt
+        if keep_partial:
+            return _partial(capability, kept, previous_cursor, "page_cap")
         return _kept(capability, previous_cursor, "page_cap")
 
 
@@ -394,6 +426,34 @@ def _address_path(path: str) -> bool:
     rest = path[len(_PREFIX):]
     address, _sep, tail = rest.partition("/")
     return bool(address) and bool(tail)
+
+
+def _first_filter(query: Mapping[str, str] | None) -> dict[str, str] | None:
+    """First-page filter only. Later pages use ``next_page_params`` as sent."""
+    if query is None:
+        return None
+    if not isinstance(query, Mapping) or set(query) != {"filter"}:
+        raise ValueError("bad_page")
+    value = query.get("filter")
+    if value not in {"from", "to"}:
+        raise ValueError("bad_page")
+    return {"filter": value}
+
+
+def _partial(capability: str, items: list[Any], previous: str | None, reason: str) -> HistoryRead:
+    return HistoryRead(
+        capability,
+        tuple(items),
+        False,
+        False,
+        (),
+        previous,
+        "partial",
+        False,
+        reason,
+        (reason,) if reason else (),
+        "",
+    )
 
 
 def _kept(capability: str, previous: str | None, reason: str) -> HistoryRead:
@@ -457,6 +517,48 @@ def _indexer_lag(body: Mapping[str, Any]) -> bool:
         if isinstance(value, str):
             parts.append(value.lower())
     return "not yet been processed" in " ".join(parts)
+
+
+def _item_timestamp(item: Any) -> int | None:
+    """Unix seconds for one row. Milliseconds and ISO-8601 are accepted."""
+    if not isinstance(item, Mapping):
+        return None
+    for key in ("timestamp", "timeStamp", "block_timestamp"):
+        stamp = _timestamp_seconds(item.get(key))
+        if stamp is not None:
+            return stamp
+    return None
+
+
+def _timestamp_seconds(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return _epoch_seconds(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return _epoch_seconds(int(text))
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp())
+    return None
+
+
+def _epoch_seconds(value: int) -> int | None:
+    if value < 0:
+        return None
+    if value >= 1_000_000_000_000:
+        return value // 1000
+    return value
 
 
 def _item_block(item: Any) -> int | None:

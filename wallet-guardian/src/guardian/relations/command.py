@@ -1,0 +1,297 @@
+"""`guardian relations` inbound and expand."""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from guardian.configuration import ConfigError, load_public_config, resolve_private_inputs
+from guardian.identities import parse_address
+from guardian.locations import secure_write_text
+from guardian.network_registry import load_registry
+from guardian.pipeline import _secrets, _transport, default_backend
+from guardian.relations.fetch import Outcome, read_blockscout, read_etherscan, read_tron
+from guardian.relations.report import expand_report, inbound_report, overall
+from guardian.relations.select import Job, build_jobs, plan_for
+from guardian.resources import resource_path
+from guardian.security.redact import redact
+from guardian.sources.etherscan import resolve_credential
+from guardian.sources.transport import build_endpoint_registry
+
+_MAX_PAGES = 50
+
+
+def execute(
+    args: Any,
+    *,
+    backend: Any = None,
+    clock: Callable[[], float] | None = None,
+) -> tuple[dict, int]:
+    command = getattr(args, "relations_command", None)
+    if command not in {"inbound", "expand"}:
+        raise ConfigError("unknown command")
+    since_days = _bounded_int(getattr(args, "since_days", 90), "since_days", 1, 3650)
+    max_pages = _bounded_int(getattr(args, "max_pages", 10), "max_pages", 1, _MAX_PAGES)
+    hub_threshold = _bounded_int(getattr(args, "hub_threshold", 200), "hub_threshold", 0, 1_000_000)
+    now = time.time if clock is None else clock
+    moment = float(now())
+    public = load_public_config(args.mcm_config)
+    private = resolve_private_inputs(public, os.environ)
+    registry = load_registry(resource_path("config", "chains"))
+    secrets = _secrets(public)
+    endpoints = build_endpoint_registry(public.document, secrets=secrets, environ=os.environ)
+    try:
+        seeds = _seeds(args, private, command)
+        payer = _payer(args, command)
+        jobs = build_jobs(
+            command=command,
+            seeds=seeds,
+            payer=payer,
+            explicit_networks=getattr(args, "network", None) if command == "inbound" else None,
+            expand_network=getattr(args, "network", None) if command == "expand" else None,
+            enabled=list(public.document["enabled_networks"]),
+            document=public.document,
+            status_map=private.source_status,
+            endpoints=endpoints,
+            registry=registry,
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc) or "bad_address") from None
+    if not jobs:
+        raise ConfigError("seed_required")
+    plan = plan_for(jobs)
+    dry_run = bool(getattr(args, "dry_run", False))
+    accepted = bool(getattr(args, "yes", False))
+    if dry_run or not accepted:
+        payload = _envelope(
+            command, "dry_run" if dry_run else "consent_required", since_days, max_pages, moment, plan, [],
+        )
+        payload = _store(private.state_dir, command, payload, moment, secrets)
+        return payload, 0 if dry_run else 2
+    transport = _transport(public, default_backend() if backend is None else backend, now)
+    reads, edges, payer_contract = _perform(
+        jobs, transport, public.document, secrets, registry, max_pages, _stop(moment, since_days), now,
+    )
+    if command == "inbound":
+        body = inbound_report(edges, reads)
+    else:
+        family, canonical = payer or ("", "")
+        body = expand_report(
+            edges,
+            reads,
+            payer=canonical,
+            network=str(getattr(args, "network", "")),
+            seeds=[item[1] for item in seeds],
+            family=family,
+            hub_threshold=hub_threshold,
+            expand_hub=bool(getattr(args, "expand_hub", False)),
+            payer_is_contract=payer_contract,
+        )
+    payload = _envelope(command, overall(reads), since_days, max_pages, moment, plan, reads)
+    payload.update(body)
+    payload = _store(private.state_dir, command, payload, moment, secrets)
+    _drop(secrets)
+    return payload, 0
+
+
+def _perform(jobs, transport, document, secrets, registry, page_cap, stop_timestamp, clock):
+    reads: list[dict] = []
+    edges = []
+    payer_contract: bool | None = None
+    sources = document["sources"]
+    for job in jobs:
+        fallback = any(choice.role == "fallback" for choice in job.choices)
+        primary_status = None
+        for choice in job.choices:
+            if choice.role == "fallback" and primary_status in {"complete", "partial"}:
+                continue
+            if choice.role == "skip":
+                outcome = Outcome(choice.read_status or "gap", choice.reason, [])
+                reads.append(_read_row(job, choice, outcome))
+                continue
+            outcome = _run_choice(
+                job, choice, transport, sources, secrets, registry, page_cap, stop_timestamp, clock,
+            )
+            if outcome.payer_is_contract is True:
+                payer_contract = True
+            if choice.role == "primary":
+                primary_status = outcome.status
+                use_edges = outcome.status != "gap" or not fallback
+            else:
+                use_edges = True
+            if use_edges:
+                edges.extend(outcome.edges)
+            reads.append(_read_row(job, choice, outcome))
+    return reads, edges, payer_contract
+
+
+def _run_choice(job: Job, choice, transport, sources, secrets, registry, page_cap, stop_timestamp, clock) -> Outcome:
+    source = sources.get(choice.source_id) or {}
+    entry = registry[job.network]
+    family = entry["family"]
+    if choice.adapter == "blockscout":
+        return read_blockscout(
+            transport,
+            choice.source_id,
+            credential=_credential(source, secrets),
+            address=job.address,
+            direction=job.direction,
+            network=job.network,
+            family=family,
+            page_cap=page_cap,
+            stop_timestamp=stop_timestamp,
+            entry=entry,
+            clock=clock,
+        )
+    if choice.adapter == "etherscan_v2":
+        return read_etherscan(
+            transport,
+            choice.source_id,
+            source,
+            secrets=secrets,
+            address=job.address,
+            direction=job.direction,
+            network=job.network,
+            family=family,
+            page_cap=page_cap,
+            stop_timestamp=stop_timestamp,
+            entry=entry,
+            clock=clock,
+        )
+    if choice.adapter == "tron_grid":
+        return read_tron(
+            transport,
+            choice.source_id,
+            address=job.address,
+            direction=job.direction,
+            network=job.network,
+            page_cap=page_cap,
+            stop_timestamp=stop_timestamp,
+            clock=clock,
+        )
+    return Outcome("gap", "endpoint_missing", [])
+
+
+def _credential(source: Mapping[str, Any], secrets: Mapping[str, str]) -> str | None:
+    name = source.get("credential_env")
+    if not isinstance(name, str) or not name:
+        return None
+    try:
+        return resolve_credential({}, name, secrets)
+    except ValueError:
+        return None
+
+
+def _read_row(job: Job, choice, outcome: Outcome) -> dict:
+    row = {
+        "address": job.address,
+        "direction": job.direction,
+        "network": job.network,
+        "read_status": outcome.status,
+        "reason": outcome.reason,
+        "source_id": choice.source_id,
+    }
+    if choice.gap:
+        row["gap"] = choice.gap
+    return row
+
+
+def _seeds(args, private, command: str) -> list[tuple[str, str]]:
+    raw = getattr(args, "seed", None)
+    if raw:
+        texts = list(raw)
+    else:
+        texts = [record.normalized.canonical for record in private.accounts.accounts]
+    if not texts and command == "inbound":
+        raise ConfigError("seed_required")
+    found: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for text in texts:
+        item = _classify(text)
+        if item not in seen:
+            seen.add(item)
+            found.append(item)
+    return found
+
+
+def _payer(args, command: str) -> tuple[str, str] | None:
+    if command != "expand":
+        return None
+    return _classify(getattr(args, "payer", ""))
+
+
+def _classify(text: str) -> tuple[str, str]:
+    if not isinstance(text, str) or not text.strip():
+        raise ConfigError("bad_address")
+    raw = text.strip()
+    if raw.startswith("0x") and len(raw) == 42:
+        return _parsed("evm", raw)
+    if raw.startswith("T") and len(raw) == 34:
+        return _parsed("tron", raw)
+    if raw.lower().startswith(("bc1", "tb1", "bcrt1")):
+        return _parsed("bitcoin", raw)
+    if raw[:1] in {"1", "3"}:
+        try:
+            return _parsed("bitcoin", raw)
+        except ConfigError:
+            return _parsed("solana", raw)
+    return _parsed("solana", raw)
+
+
+def _parsed(family: str, raw: str) -> tuple[str, str]:
+    try:
+        parsed = parse_address(family, raw)
+    except ValueError as exc:
+        raise ConfigError(getattr(exc, "reason", "bad_address")) from None
+    return family, parsed.canonical
+
+
+def _envelope(command, status, since_days, max_pages, moment, plan, reads) -> dict:
+    return {
+        "command": command,
+        "generated_at": datetime.fromtimestamp(moment, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "max_pages": max_pages,
+        "plan": plan,
+        "reads": reads,
+        "since_days": since_days,
+        "status": status,
+    }
+
+
+def _store(state_dir: Path, command: str, payload: dict, moment: float, secrets: Mapping[str, str]) -> dict:
+    directory = Path(state_dir) / "relations"
+    stamp = datetime.fromtimestamp(moment, timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    path = directory / f"{stamp}-{command}.json"
+    suffix = 2
+    while path.exists():
+        path = directory / f"{stamp}-{command}-{suffix}.json"
+        suffix += 1
+    payload["result_path"] = str(path)
+    extra = [value for value in secrets.values() if isinstance(value, str) and len(value) >= 6]
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    cleaned = redact(text, extra)
+    if cleaned != text:
+        payload = json.loads(cleaned)
+        text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    secure_write_text(path, text)
+    return payload
+
+
+def _bounded_int(value: Any, name: str, low: int, high: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < low or value > high:
+        raise ConfigError(name)
+    return value
+
+
+def _stop(moment: float, since_days: int) -> int:
+    stamp = int(moment) - since_days * 86400
+    return stamp if stamp > 0 else 0
+
+
+def _drop(secrets: dict) -> None:
+    secrets.clear()

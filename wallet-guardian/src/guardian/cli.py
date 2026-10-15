@@ -240,6 +240,28 @@ def build_parser() -> argparse.ArgumentParser:
     service.add_argument("--user", default="guardian-monitor")
     service.add_argument("--offset-minutes", type=int, default=5)
     service.add_argument("--legacy-executable", default=None)
+
+    relations = sub.add_parser("relations", parents=[common])
+    relations_sub = relations.add_subparsers(dest="relations_command", required=True)
+    inbound = relations_sub.add_parser("inbound", parents=[common])
+    inbound.add_argument("--mcm-config", required=True)
+    inbound.add_argument("--seed", action="append", default=None, help="address to read; repeat to add another")
+    inbound.add_argument("--network", action="append", default=None, help="limit the read to this network; repeat to add another")
+    inbound.add_argument("--since-days", type=int, default=90)
+    inbound.add_argument("--max-pages", type=int, default=10)
+    inbound.add_argument("--dry-run", action="store_true", help="print the disclosure plan and do not send")
+    inbound.add_argument("--yes", action="store_true", help="send the disclosed reads")
+    expand = relations_sub.add_parser("expand", parents=[common])
+    expand.add_argument("--mcm-config", required=True)
+    expand.add_argument("--payer", required=True)
+    expand.add_argument("--network", required=True)
+    expand.add_argument("--seed", action="append", default=None, help="address to exclude; repeat to add another")
+    expand.add_argument("--since-days", type=int, default=90)
+    expand.add_argument("--max-pages", type=int, default=10)
+    expand.add_argument("--hub-threshold", type=int, default=200)
+    expand.add_argument("--expand-hub", action="store_true")
+    expand.add_argument("--dry-run", action="store_true", help="print the disclosure plan and do not send")
+    expand.add_argument("--yes", action="store_true", help="send the disclosed reads")
     return parser
 
 
@@ -380,6 +402,10 @@ def dispatch(
             schedule_mode=getattr(args, "schedule_mode", None),
         )
         return payload, 0 if payload.get("installed") else 1
+    if args.command == "relations":
+        from guardian.relations import execute
+
+        return execute(args, backend=backend, clock=clock)
     raise GuardianError("unknown command")
 
 
