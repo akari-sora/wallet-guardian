@@ -74,7 +74,7 @@ options:
   --trigger {run-once,none}
 ```
 
-`--no-send` is the only delivery mode. Omitting it exits 2. The probe reads one head, checks Multicall3 code, then reads native balances and two topic-OR `eth_getLogs` filters. It writes no alerts and does not advance `history.*` cursors. `--trigger none` records a change and does not start `run-once`. The default `run-once` starts at most one `run-once --no-send` when a new change is still outstanding. A second probe, or a `run-once` that already holds its own lock, is skipped and recorded. This command does not change the three-hour `run-once` interval or the shadow lock.
+`--no-send` is the only delivery mode. Omitting it exits 2. The probe reads one head, checks Multicall3 code, then reads native balances and two topic-OR `eth_getLogs` filters. It writes no alerts and does not advance `history.*` cursors. When the log route is a gap, a native balance change already read in that round still records a `balance_change` trigger for that chain; the row stays `failure: logs` and the probe cursor does not advance. `--trigger none` records a change and does not start `run-once`. The default `run-once` starts at most one `run-once --no-send` when a new change is still outstanding. A second probe, or a `run-once` that already holds its own lock, is skipped and recorded. This command does not change the three-hour `run-once` interval or the shadow lock.
 
 ## `guardian snapshot`
 

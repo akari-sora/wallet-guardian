@@ -12,7 +12,7 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 
 ### Added
 
-- `guardian balance-probe --mcm-config --probe-state --no-send` reads Multicall3 native balances and topic-OR logs, and starts `run-once` only when a balance or a Transfer or approval log changed. It writes no alerts and does not advance `history.*` cursors. `--no-send` is required. The three-hour `run-once` and the shadow lock are unchanged. Live latency measurement was not run.
+- `guardian balance-probe --mcm-config --probe-state --no-send` reads Multicall3 native balances and topic-OR logs, and starts `run-once` only when a balance or a Transfer or approval log changed. When logs cannot be read, a native balance change already read in that round still records `balance_change` for that chain: the row stays `failure: logs`, the probe cursor does not advance, a same-balance or first observation is not committed, and nothing is written as zero. Token transfers and approvals still need a log source that accepts block ranges. It writes no alerts and does not advance `history.*` cursors. `--no-send` is required. The three-hour `run-once` and the shadow lock are unchanged. On 2026-10-15, one round against public contract addresses, publicnode (Ethereum, BSC, Base, Optimism) accepted a topic-only `eth_getLogs` for a single block and returned JSON-RPC `-32701` for two or more blocks; one round, not a 24-hour measurement. Live latency measurement was not run.
 
 ### Changed
 

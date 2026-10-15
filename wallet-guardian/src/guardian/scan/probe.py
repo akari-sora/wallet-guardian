@@ -99,7 +99,7 @@ def run_balance_probe(
     trigger: str,
     run_once: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
-    """One round. Writes probe rows and, on a quiet balance, the shared baseline.
+    """One round. Writes probe rows and, on a quiet balance in a round whose logs were read, the shared baseline.
 
     A changed balance is left for ``run-once`` so this function does not alert.
     ``trigger`` ``none`` records the change and does not call ``run-once``.
@@ -234,7 +234,47 @@ def _probe_chain(
         public_config, private_inputs, transport, network, addresses, start, end, meter,
     )
     if log_failure or log_changes is None:
-        return _chain_row(network, meter, wallets, failure="logs", balance_source=balance_source)
+        policy = confirmation_policy(network, entry)
+        asset, decimals, symbol = _asset(entry, network)
+        changes: list[dict[str, Any]] = []
+        for account, raw in zip(accounts, balances):
+            if raw is None:
+                return _chain_row(network, meter, wallets, failure="logs", balance_source=balance_source)
+            plan = _plan_balance(
+                database,
+                account,
+                raw,
+                network=network,
+                asset=asset,
+                decimals=decimals,
+                symbol=symbol,
+                source_id=source_id,
+                policy=policy,
+                number=number,
+                block_hash=block_hash,
+                timestamp=timestamp,
+                tenant=tenant,
+                started=started,
+                native_eth=native_eth,
+                usd_threshold=usd_threshold,
+                units=units,
+            )
+            if plan["action"] == "failed":
+                return _chain_row(network, meter, wallets, failure="logs", balance_source=balance_source)
+            if plan["action"] == "change":
+                changes.append(plan)
+        inserted = _insert_triggers(probe_db, tenant, network, number, block_hash, changes, started, trigger)
+        names = sorted({item["reason"] for item in changes})
+        return _chain_row(
+            network,
+            meter,
+            wallets,
+            failure="logs",
+            triggered=inserted,
+            reasons=names if inserted else [],
+            cursor_advanced=False,
+            balance_source=balance_source,
+        )
     policy = confirmation_policy(network, entry)
     asset, decimals, symbol = _asset(entry, network)
     plans: list[dict[str, Any]] = []
