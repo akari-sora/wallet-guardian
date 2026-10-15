@@ -66,10 +66,13 @@ class MemoryBroadcastChannel {
     logoutPeers.get(this.name).add(this);
   }
   postMessage(data) {
-    for (const peer of [...logoutPeers.get(this.name)]) {
-      if (peer === this || typeof peer.onmessage !== 'function') continue;
-      peer.onmessage({ data });
-    }
+    const peers = [...logoutPeers.get(this.name)];
+    setTimeout(() => {
+      for (const peer of peers) {
+        if (peer === this || typeof peer.onmessage !== 'function') continue;
+        peer.onmessage({ data });
+      }
+    }, 0);
   }
   close() { logoutPeers.get(this.name)?.delete(this); }
 }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ADDRESS, harness, jsonResponse, session } from './client-review-harness.mjs';
+import { ADDRESS, harness, jsonResponse, session, tick } from './client-review-harness.mjs';
 
 test('successful login remembers only the address that was signed and verified', async () => {
   const stored = [];
@@ -64,8 +64,12 @@ test('logout in one tab clears the other tab login address', async () => {
   assert.equal(left.app.getState().loginAddress, ADDRESS);
   assert.equal(right.app.getState().loginAddress, ADDRESS);
   await left.app.logout();
+  await tick();
   assert.equal(left.app.getState().loginAddress, null);
+  assert.match(left.elements.get('banner').textContent, /已登出/);
+  assert.equal(left.elements.get('banner').textContent.includes('其他分頁已登出'), false);
   assert.equal(right.app.getState().loginAddress, null);
   assert.equal(right.app.getState().csrfToken, null);
   assert.equal(right.app.getState().sessionAddress, null);
+  assert.match(right.elements.get('banner').textContent, /其他分頁已登出/);
 });

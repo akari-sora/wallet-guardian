@@ -1790,6 +1790,16 @@ function logoutChannelName(): string {
     : "wg-session-logout";
 }
 
+// A new BroadcastChannel in this tab still receives this tab's post. The id lets the sender
+// ignore that echo. Other tabs have a different id and still apply the logout.
+function logoutTabId(): string {
+  const webCrypto = globalThis.crypto;
+  if (webCrypto && typeof webCrypto.randomUUID === "function") return webCrypto.randomUUID();
+  return `tab-${Math.random().toString(16).slice(2)}-${Date.now().toString(16)}`;
+}
+
+const LOGOUT_TAB_ID = logoutTabId();
+
 function openLogoutChannel(): BroadcastChannel | null {
   if (typeof BroadcastChannel !== "function") return null;
   try {
@@ -1819,8 +1829,9 @@ function listenForRemoteLogout(): void {
   logoutChannel = openLogoutChannel();
   if (!logoutChannel) return;
   logoutChannel.onmessage = (event: MessageEvent) => {
-    const data = event?.data as { type?: unknown } | null;
+    const data = event?.data as { type?: unknown; tab?: unknown } | null;
     if (!data || data.type !== "wg-logout") return;
+    if (data.tab === LOGOUT_TAB_ID) return;
     applyRemoteLogout();
   };
 }
@@ -1829,7 +1840,7 @@ function publishLogout(): void {
   const channel = openLogoutChannel();
   if (!channel) return;
   try {
-    channel.postMessage({ type: "wg-logout" });
+    channel.postMessage({ type: "wg-logout", tab: LOGOUT_TAB_ID });
   } catch {
     // This tab already cleared its own session. Other tabs keep their listener.
   } finally {

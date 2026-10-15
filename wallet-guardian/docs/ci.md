@@ -12,6 +12,7 @@ Runner profile: `ci/profile/wg-box-ondemand.md`. Example config (placeholders on
 - The runner stays paused except while an approved SHA is running. After the job, pause it again and record cleanup.
 - A persistent host runs only an approved explicit SHA. Arbitrary fork merge-request code does not run next to private monitoring data.
 - Shared-runner jobs `python-tests` and `client-tests` keep their current rules. `pages` stays in the file (D-11). On `main` it is `when: manual` and `allow_failure: true`, so a merge does not publish and does not block the pipeline.
+- `npm run test:wallets:artifact` is not part of `client-tests` or `box-client-tests`. Those tests launch headless Chrome through `playwright-core` and need `WG_CHROME` or a Chrome/Chromium binary. The client job image is `node:22.16.0-bookworm-slim`, which has no browser, and `playwright-core` does not download one.
 
 Own runners do not spend GitLab.com minutes. A failed GitLab pipeline is never treated as green.
 
