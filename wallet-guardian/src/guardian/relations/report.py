@@ -14,9 +14,13 @@ def overall(reads: list[dict]) -> str:
     return "partial"
 
 
-def inbound_report(edges: list[Edge], reads: list[dict]) -> dict:
+def inbound_report(edges: list[Edge], reads: list[dict], *, max_nodes: int = 500) -> dict:
     rows = _groups(edges, "sender", {})
-    return {"counterparties": _list_or_null(rows, reads)}
+    shown, truncated = _cap_rows(rows, max_nodes)
+    body: dict = {"counterparties": _list_or_null(shown, reads)}
+    if truncated is not None and isinstance(body["counterparties"], list):
+        body["truncated"] = truncated
+    return body
 
 
 def expand_report(
@@ -30,41 +34,53 @@ def expand_report(
     hub_threshold: int,
     expand_hub: bool,
     payer_is_contract: bool | None,
+    max_nodes: int = 500,
 ) -> dict:
     seed_txs = {
         (edge.network, edge.tx_hash)
         for edge in edges
         if any(_same(family, edge.recipient, seed) for seed in seeds)
     }
-    kept = [
+    counted = [
         edge for edge in edges
         if edge.network == network and not _same(family, edge.recipient, payer)
-        and not any(_same(family, edge.recipient, seed) for seed in seeds)
     ]
-    rows = _groups(kept, "recipient", seed_txs)
-    rows.sort(key=lambda row: (
-        not row["same_tx_as_seed"],
-        -row["count"],
-        -row["_last"],
-        row["address"],
-    ))
-    for row in rows:
-        row.pop("_last", None)
-    reasons: list[str] = []
-    if payer_is_contract is True:
-        reasons.append("contract")
-    found = lookup(network, payer)
-    if found is not None:
-        reasons.append("label")
+    rows = _groups(counted, "recipient", seed_txs)
     known = any(row.get("read_status") in {"complete", "partial"} for row in reads)
     count: int | None
     if not known and not rows:
         count = None
     else:
         count = len(rows)
+    reasons: list[str] = []
+    if payer_is_contract is True:
+        reasons.append("contract")
+    found = lookup(network, payer)
+    if found is not None:
+        reasons.append("label")
     if count is not None and count > hub_threshold:
         reasons.append("recipient_count")
-    hub = bool(reasons)
+    complete = bool(reads) and all(row.get("read_status") == "complete" for row in reads)
+    hub: bool | None
+    if reasons:
+        hub = True
+    elif complete:
+        hub = False
+    else:
+        hub = None
+    visible = [
+        row for row in rows
+        if not any(_same(family, row["address"], seed) for seed in seeds)
+    ]
+    visible.sort(key=lambda row: (
+        not row["same_tx_as_seed"],
+        -row["count"],
+        -row["_last"],
+        row["address"],
+    ))
+    for row in visible:
+        row.pop("_last", None)
+    shown, truncated = _cap_rows(visible, max_nodes)
     body: dict = {
         "hub": hub,
         "hub_reasons": reasons,
@@ -72,10 +88,14 @@ def expand_report(
         "payer": payer,
         "recipient_count": count,
     }
-    if hub and expand_hub:
+    if hub is None:
+        body["recipient_count_complete"] = False
+    if hub is True and expand_hub:
         body["noise"] = "high"
-    if not (hub and not expand_hub):
-        body["co_recipients"] = _list_or_null(rows, reads)
+    if not (hub is True and not expand_hub):
+        body["co_recipients"] = _list_or_null(shown, reads)
+        if truncated is not None and isinstance(body["co_recipients"], list):
+            body["truncated"] = truncated
     return body
 
 
@@ -167,6 +187,12 @@ def _transfer(item: Edge) -> dict:
         "timestamp": _iso(item.timestamp),
         "tx_hash": item.tx_hash,
     }
+
+
+def _cap_rows(rows: list[dict], max_nodes: int) -> tuple[list[dict], dict | None]:
+    if len(rows) > max_nodes:
+        return rows[:max_nodes], {"reason": "node_cap", "total": len(rows)}
+    return rows, None
 
 
 def _list_or_null(rows: list[dict], reads: list[dict]):

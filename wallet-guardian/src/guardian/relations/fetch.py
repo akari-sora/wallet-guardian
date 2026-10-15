@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
+from guardian.errors import SecurityError
 from guardian.identities import parse_address
 from guardian.sources.blockscout import BlockscoutClient
-from guardian.sources.etherscan import EtherscanClient, plan_not_supported, resolve_credential
+from guardian.sources.budget import BudgetExhausted
+from guardian.sources.etherscan import EtherscanClient, HistoryRead, plan_not_supported, resolve_credential
 from guardian.sources.retry import read_with_retry
 from guardian.sources.transport import TransportError
 
 _TAILS = ("token-transfers", "transactions", "internal-transactions")
 _ETHERSCAN_ACTIONS = ("txlist", "tokentx", "txlistinternal")
-_ETHERSCAN_END_BLOCK = 99_999_999
 _ETHERSCAN_OFFSET = 1000
+_ETHERSCAN_PAGE_LIMIT = 10
+_ETHERSCAN_END_BLOCK = "9999999999"
 _NFT = frozenset({"ERC-721", "ERC-1155", "ERC721", "ERC1155"})
 
 
@@ -43,7 +47,8 @@ class Outcome:
     reason: str
     edges: list[Edge]
     payer_is_contract: bool | None = None
-    include_edges: bool = True
+    parts: list[dict[str, str]] | None = None
+    ignored_zero_value: int = 0
 
 
 def read_blockscout(
@@ -70,14 +75,23 @@ def read_blockscout(
     )
     reads = []
     for tail in _TAILS:
-        reads.append((tail, client.read_v2(
-            address,
-            tail,
-            query={"filter": direction},
-            keep_partial=True,
-            stop_timestamp=stop_timestamp,
-            page_cap=page_cap,
-        )))
+        try:
+            read = client.read_v2(
+                address,
+                tail,
+                query={"filter": direction},
+                keep_partial=True,
+                stop_timestamp=stop_timestamp,
+                page_cap=page_cap,
+                skip_pending=True,
+            )
+        except BudgetExhausted as exc:
+            read = _gap_history(str(getattr(exc, "reason", "") or "") or "budget_exhausted")
+        except SecurityError as exc:
+            if getattr(exc, "reason", "") != "redirect_host":
+                raise
+            read = _gap_history("redirect_host")
+        reads.append((tail, read))
     return _from_history(reads, address, direction, network, family, source_id, entry, stop_timestamp)
 
 
@@ -103,7 +117,7 @@ def read_etherscan(
     if not isinstance(env_name, str) or not env_name:
         return Outcome("gap", "credential_missing", [])
     try:
-        credential = resolve_credential({}, env_name, secrets)
+        credential = resolve_credential(os.environ, env_name, secrets)
     except ValueError as exc:
         return Outcome("gap", str(exc) or "credential_missing", [])
     client = EtherscanClient(
@@ -118,7 +132,7 @@ def read_etherscan(
     parts: list[tuple[str, Any]] = []
     for action in _ETHERSCAN_ACTIONS:
         parts.append((action, _etherscan_action(
-            client, transport, source_id, chain_id, action, address, page_cap, clock,
+            client, transport, source_id, chain_id, action, address, page_cap, stop_timestamp, clock,
         )))
     return _from_history(parts, address, direction, network, family, source_id, entry, stop_timestamp, etherscan=True)
 
@@ -159,47 +173,120 @@ def read_tron(
     else:
         window["only_to"] = "true"
     path = f"/v1/accounts/{address}/transactions/trc20"
-    walk = client.history(path, window, None, page_cap=page_cap)
+    try:
+        walk = client.history(path, window, None, page_cap=page_cap)
+    except BudgetExhausted as exc:
+        return _part_outcome("gap", str(getattr(exc, "reason", "") or "") or "budget_exhausted", "trc20")
+    except SecurityError as exc:
+        if getattr(exc, "reason", "") != "redirect_host":
+            raise
+        return _part_outcome("gap", "redirect_host", "trc20")
     if walk.complete and not walk.error:
         status, reason = "complete", ""
-    elif walk.reason == "page_cap":
-        status, reason = "partial", "page_cap"
+    elif walk.reason in {"page_cap", "request_cap"}:
+        status, reason = "partial", walk.reason
     else:
         status, reason = "gap", walk.reason or "read_error"
+    if status == "gap":
+        return _part_outcome(status, reason, "trc20")
     edges: list[Edge] = []
     unreadable = False
+    zeros = 0
     contract: bool | None = None
     for row in walk.rows:
         parsed = _tron_edge(row, address, direction, network, source_id, stop_timestamp)
         if parsed == "bad":
             unreadable = True
             continue
-        if parsed is None:
+        if parsed == "zero":
+            zeros += 1
+            continue
+        if parsed is None or not isinstance(parsed, Edge):
             continue
         edges.append(parsed)
         if direction == "from" and parsed.sender_contract is True:
             contract = True
     if unreadable and status == "complete":
         status, reason = "partial", "unreadable_row"
-    return Outcome(status, reason, edges, contract)
+    return _part_outcome(status, reason, "trc20", edges, contract, zeros)
 
 
-def _etherscan_action(client, transport, source_id, chain_id, action, address, page_cap, clock):
-    from guardian.sources.etherscan import HistoryRead
+def _part_outcome(status: str, reason: str, part: str, edges: list[Edge] | None = None, contract: bool | None = None, zeros: int = 0) -> Outcome:
+    return Outcome(
+        status,
+        reason,
+        edges or [],
+        contract,
+        [{"part": part, "read_status": status, "reason": reason}],
+        zeros,
+    )
 
+
+def _gap_history(reason: str, capability: str = "unspecified") -> HistoryRead:
+    text = reason or "upstream_error"
+    return HistoryRead(capability, (), False, False, (), None, "error", False, text, (text,), "")
+
+
+def _newest_first(operation):
+    query = dict(operation.query or {})
+    query["sort"] = "desc"
+    query["endblock"] = _ETHERSCAN_END_BLOCK
+    return replace(operation, query=query)
+
+
+def _etherscan_page(result: Any) -> tuple[str, str]:
+    """Classify one account page as empty, gap, or rows."""
+    body = getattr(result, "body", None)
+    if isinstance(body, dict) and str(body.get("status")) == "0":
+        if _etherscan_absent(body):
+            return "empty", ""
+        return "gap", "upstream_error"
+    category = str(getattr(result, "category", "") or "")
+    if category == "empty":
+        return "empty", ""
+    if category != "ok":
+        return "gap", str(getattr(result, "reason", "") or "") or "upstream_error"
+    if not getattr(result, "ok", False):
+        return "gap", str(getattr(result, "reason", "") or "") or "upstream_error"
+    return "rows", ""
+
+
+def _etherscan_absent(body: Mapping[str, Any]) -> bool:
+    texts: list[str] = []
+    for key in ("message", "result"):
+        value = body.get(key)
+        if isinstance(value, str):
+            texts.append(value.lower())
+    blob = " ".join(texts)
+    return "no transactions found" in blob or "no records found" in blob
+
+
+def _within_window(rows: list[Any], stop_timestamp: int) -> tuple[list[Any], bool]:
+    kept: list[Any] = []
+    for row in rows:
+        stamp = _stamp(row) if isinstance(row, Mapping) else None
+        if stamp is not None and stamp < stop_timestamp:
+            return kept, True
+        kept.append(row)
+    return kept, False
+
+
+def _etherscan_action(client, transport, source_id, chain_id, action, address, page_cap, stop_timestamp, clock):
     capability = {"txlist": "history.native_external", "txlistinternal": "history.native_internal", "tokentx": "history.fungible"}.get(action, "unspecified")
+    # page * offset must stay within 10000. Offset is 1000, so at most 10 pages.
+    limit = page_cap if page_cap < _ETHERSCAN_PAGE_LIMIT else _ETHERSCAN_PAGE_LIMIT
     items: list[Any] = []
-    for page in range(1, page_cap + 1):
-        operation = client.operation(
+    for page in range(1, limit + 1):
+        operation = _newest_first(client.operation(
             chain_id=chain_id,
             module="account",
             action=action,
             address=address,
             start_block=0,
-            end_block=_ETHERSCAN_END_BLOCK,
+            end_block=0,
             page=page,
             offset=_ETHERSCAN_OFFSET,
-        )
+        ))
         try:
             result = read_with_retry(
                 lambda operation=operation: transport.request(source_id, operation),
@@ -208,73 +295,89 @@ def _etherscan_action(client, transport, source_id, chain_id, action, address, p
                 random=lambda: 0.0,
                 clock=clock,
             )
+        except BudgetExhausted as exc:
+            return _gap_history(str(getattr(exc, "reason", "") or "") or "budget_exhausted", capability)
+        except SecurityError as exc:
+            if getattr(exc, "reason", "") != "redirect_host":
+                raise
+            return _gap_history("redirect_host", capability)
         except TransportError as exc:
             if exc.reason == "fixture_miss":
                 raise
-            return HistoryRead(capability, tuple(items), False, False, (), None, "error", False, exc.reason, (exc.reason,), "")
+            return _gap_history(exc.reason or "error", capability)
         except Exception:
-            return HistoryRead(capability, tuple(items), False, False, (), None, "error", False, "error", ("error",), "")
+            return _gap_history("error", capability)
         if plan_not_supported(getattr(result, "body", None)):
             return HistoryRead(capability, (), False, False, (), None, "error", True, "plan_not_supported", ("plan_not_supported",), "")
-        if getattr(result, "category", "") == "empty":
+        decision, why = _etherscan_page(result)
+        if decision == "gap":
+            return _gap_history(why, capability)
+        if decision == "empty":
             break
-        if not getattr(result, "ok", False):
-            reason = str(getattr(result, "reason", "") or "error")
-            return HistoryRead(capability, tuple(items), False, False, (), None, "error", False, reason, (reason,), "")
         body = getattr(result, "body", None)
         rows = body.get("result") if isinstance(body, dict) else None
         if isinstance(rows, str):
             lowered = rows.lower()
             if "no transactions found" in lowered or "no records found" in lowered:
                 break
-            return HistoryRead(capability, tuple(items), False, False, (), None, "error", False, "malformed", ("malformed",), "")
+            return _gap_history("malformed", capability)
         if not isinstance(rows, list):
-            return HistoryRead(capability, tuple(items), False, False, (), None, "error", False, "malformed", ("malformed",), "")
-        items.extend(rows)
-        if len(rows) < _ETHERSCAN_OFFSET:
+            return _gap_history("malformed", capability)
+        kept, window_hit = _within_window(rows, stop_timestamp)
+        items.extend(kept)
+        if window_hit or len(rows) < _ETHERSCAN_OFFSET:
             break
     else:
-        return HistoryRead(capability, tuple(items), False, False, (), None, "partial", False, "page_cap", ("page_cap",), "")
+        return HistoryRead(
+            capability, tuple(items), False, False, (), None, "partial", False, "result_window", ("result_window",), "",
+        )
     category = "empty" if not items else "ok"
     return HistoryRead(capability, tuple(items), True, True, (), None, category, False, "", (), "")
 
 
 def _from_history(parts, address, direction, network, family, source_id, entry, stop_timestamp, *, etherscan: bool = False) -> Outcome:
-    statuses: list[str] = []
-    reason = ""
     edges: list[Edge] = []
+    recorded: list[dict[str, str]] = []
+    zeros = 0
     unreadable = False
     contract: bool | None = None
     symbol, decimals = _native(entry)
     for kind, read in parts:
         state, why = _history_status(read)
-        statuses.append(state)
-        if state != "complete" and not reason:
-            reason = why
-        if state == "gap" and not getattr(read, "items", ()):
-            continue
-        for item in read.items:
-            parsed = _evm_edge(
-                item, kind, address, direction, network, family, source_id, stop_timestamp,
-                symbol, decimals, etherscan=etherscan,
-            )
-            if parsed == "bad":
-                unreadable = True
-                continue
-            if parsed is None:
-                continue
-            edges.append(parsed)
-            if direction == "from" and parsed.sender_contract is True:
-                contract = True
-    if "gap" in statuses:
-        status = "gap"
-        reason = reason or "error"
-    elif "partial" in statuses or unreadable:
-        status = "partial"
-        reason = reason or ("unreadable_row" if unreadable else "partial")
+        if state != "gap":
+            part_bad = False
+            for item in read.items:
+                parsed = _evm_edge(
+                    item, kind, address, direction, network, family, source_id, stop_timestamp,
+                    symbol, decimals, etherscan=etherscan,
+                )
+                if parsed == "bad":
+                    part_bad = True
+                    unreadable = True
+                    continue
+                if parsed == "zero":
+                    zeros += 1
+                    continue
+                if parsed is None or not isinstance(parsed, Edge):
+                    continue
+                edges.append(parsed)
+                if direction == "from" and parsed.sender_contract is True:
+                    contract = True
+            if state == "complete" and part_bad:
+                state, why = "partial", "unreadable_row"
+        recorded.append({"part": kind, "read_status": state, "reason": why})
+    gap = next((row for row in recorded if row["read_status"] == "gap"), None)
+    if gap is not None:
+        status, reason = "gap", gap["reason"] or "upstream_error"
     else:
-        status, reason = "complete", ""
-    return Outcome(status, reason, edges, contract)
+        partial = next((row for row in recorded if row["read_status"] == "partial"), None)
+        if partial is not None:
+            status, reason = "partial", partial["reason"] or ("unreadable_row" if unreadable else "partial")
+        elif unreadable:
+            status, reason = "partial", "unreadable_row"
+        else:
+            status, reason = "complete", ""
+    return Outcome(status, reason, edges, contract, recorded, zeros)
 
 
 def _history_status(read: Any) -> tuple[str, str]:
@@ -292,15 +395,24 @@ def _evm_edge(item, kind, address, direction, network, family, source_id, stop_t
         return "bad"
     if _failed(item):
         return None
+    raw_to = item.get("to")
+    if raw_to is None or raw_to == "":
+        return None
     sender, sender_contract = _party(item.get("from"))
-    recipient, recipient_contract = _party(item.get("to"))
+    recipient, recipient_contract = _party(raw_to)
     sender = _canonical(family, sender)
     recipient = _canonical(family, recipient)
-    if not sender or not recipient:
-        return "bad"
-    if direction == "to" and not _same(family, recipient, address):
-        return None
-    if direction == "from" and not _same(family, sender, address):
+    if direction == "to":
+        if not recipient or not _same(family, recipient, address):
+            return None
+        if not sender:
+            return "bad"
+    elif direction == "from":
+        if not sender or not _same(family, sender, address):
+            return None
+        if not recipient:
+            return "bad"
+    else:
         return None
     stamp = _stamp(item)
     if stamp is None:
@@ -314,9 +426,13 @@ def _evm_edge(item, kind, address, direction, network, family, source_id, stop_t
         asset = _etherscan_asset(kind, item, family, native_symbol, native_decimals)
     else:
         asset = _blockscout_asset(kind, item, family, native_symbol, native_decimals)
+    if asset == "bad":
+        return "bad"
     if asset is None:
         return None
     kind_name, contract, symbol, decimals, raw = asset
+    if raw == 0:
+        return "zero"
     return Edge(
         network, tx_hash, _block(item), stamp, source_id, sender, recipient,
         sender_contract, recipient_contract, kind_name, contract, symbol, decimals, raw,
@@ -328,8 +444,6 @@ def _tron_edge(row, address, direction, network, source_id, stop_timestamp):
         return "bad"
     label = row.get("type")
     if isinstance(label, str) and label.casefold() not in {"transfer", ""}:
-        return None
-    if isinstance(label, str) and label.casefold() == "approval":
         return None
     sender = _canonical("tron", row.get("from") if isinstance(row.get("from"), str) else "")
     recipient = _canonical("tron", row.get("to") if isinstance(row.get("to"), str) else "")
@@ -350,9 +464,12 @@ def _tron_edge(row, address, direction, network, source_id, stop_timestamp):
     if not contract:
         return "bad"
     symbol = token.get("symbol") if isinstance(token.get("symbol"), str) and token.get("symbol") else None
+    raw = _amount(row.get("value"))
+    if raw == 0:
+        return "zero"
     return Edge(
         network, tx_hash, _block(row), stamp, source_id, sender, recipient, None, None,
-        "token", contract, symbol, _decimals(token.get("decimals")), _amount(row.get("value")),
+        "token", contract, symbol, _decimals(token.get("decimals")), raw,
     )
 
 
@@ -364,7 +481,7 @@ def _blockscout_asset(kind, item, family, native_symbol, native_decimals):
             return None
         contract = _canonical(family, str(token.get("address") or token.get("address_hash") or ""))
         if not contract:
-            return None
+            return "bad"
         total = item.get("total") if isinstance(item.get("total"), Mapping) else {}
         raw = _amount(total.get("value") if "value" in total else item.get("value"))
         decimals = _decimals(token.get("decimals"))
@@ -380,7 +497,7 @@ def _etherscan_asset(kind, item, family, native_symbol, native_decimals):
     if kind == "tokentx":
         contract = _canonical(family, str(item.get("contractAddress") or ""))
         if not contract:
-            return None
+            return "bad"
         symbol = item.get("tokenSymbol") if isinstance(item.get("tokenSymbol"), str) and item.get("tokenSymbol") else None
         return "token", contract, symbol, _decimals(item.get("tokenDecimal")), _amount(item.get("value"))
     return "native", None, native_symbol, native_decimals, _amount(item.get("value"))

@@ -303,6 +303,7 @@ class BlockscoutClient:
         query: Mapping[str, str] | None = None,
         keep_partial: bool = False,
         stop_timestamp: int | None = None,
+        skip_pending: bool = False,
     ) -> HistoryRead:
         """Newest-first ``/api/v2/addresses/{address}/{tail}``.
 
@@ -317,8 +318,10 @@ class BlockscoutClient:
         ``keep_partial`` defaults to false. When it is true, a page or item cap
         returns the rows already read, with ``complete`` false and category
         ``partial``. ``stop_timestamp`` stops on an earlier row and treats the
-        time window as read. Callers that omit these arguments keep the
-        previous result.
+        time window as read. ``skip_pending`` defaults to false. When it is
+        true, a row with no block number and ``result`` ``pending`` is skipped
+        instead of ``missing_block``. Callers that omit these arguments keep
+        the previous result.
         """
         name = _V2_TAILS.get(tail)
         if capability is None:
@@ -390,6 +393,8 @@ class BlockscoutClient:
             for item in body["items"]:
                 block = _item_block(item)
                 if block is None:
+                    if skip_pending is True and _pending_item(item):
+                        continue
                     return _kept(capability, previous_cursor, "missing_block")
                 if stop_block is not None and block <= stop_block:
                     stop = True
@@ -559,6 +564,10 @@ def _epoch_seconds(value: int) -> int | None:
     if value >= 1_000_000_000_000:
         return value // 1000
     return value
+
+
+def _pending_item(item: Any) -> bool:
+    return isinstance(item, Mapping) and item.get("result") == "pending"
 
 
 def _item_block(item: Any) -> int | None:

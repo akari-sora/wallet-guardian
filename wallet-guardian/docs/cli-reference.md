@@ -748,11 +748,13 @@ options:
   --json            print JSON (this is always on)
 ```
 
+`inbound` is layer 1 and `expand` is layer 2 for a payer named on the command line; nothing is expanded automatically and there is no third layer.
+
 ## `guardian relations inbound`
 
 ```text
-usage: guardian relations inbound [-h] [--db DB] [--tenant TENANT] [--json] --mcm-config MCM_CONFIG [--seed SEED] [--network NETWORK] [--since-days SINCE_DAYS] [--max-pages MAX_PAGES] [--dry-run]
-                                  [--yes]
+usage: guardian relations inbound [-h] [--db DB] [--tenant TENANT] [--json] --mcm-config MCM_CONFIG [--seed SEED] [--network NETWORK] [--since-days SINCE_DAYS] [--max-pages MAX_PAGES]
+                                  [--max-nodes MAX_NODES] [--dry-run] [--yes]
 
 options:
   -h, --help            show this help message and exit
@@ -764,6 +766,8 @@ options:
   --network NETWORK     limit the read to this network; repeat to add another
   --since-days SINCE_DAYS
   --max-pages MAX_PAGES
+  --max-nodes MAX_NODES
+                        cap queried addresses and output rows
   --dry-run             print the disclosure plan and do not send
   --yes                 send the disclosed reads
 ```
@@ -772,7 +776,7 @@ options:
 
 ```text
 usage: guardian relations expand [-h] [--db DB] [--tenant TENANT] [--json] --mcm-config MCM_CONFIG --payer PAYER --network NETWORK [--seed SEED] [--since-days SINCE_DAYS] [--max-pages MAX_PAGES]
-                                 [--hub-threshold HUB_THRESHOLD] [--expand-hub] [--dry-run] [--yes]
+                                 [--max-nodes MAX_NODES] [--hub-threshold HUB_THRESHOLD] [--expand-hub] [--dry-run] [--yes]
 
 options:
   -h, --help            show this help message and exit
@@ -785,6 +789,8 @@ options:
   --seed SEED           address to exclude; repeat to add another
   --since-days SINCE_DAYS
   --max-pages MAX_PAGES
+  --max-nodes MAX_NODES
+                        cap queried addresses and output rows
   --hub-threshold HUB_THRESHOLD
   --expand-hub
   --dry-run             print the disclosure plan and do not send

@@ -37,6 +37,7 @@ def execute(
         raise ConfigError("unknown command")
     since_days = _bounded_int(getattr(args, "since_days", 90), "since_days", 1, 3650)
     max_pages = _bounded_int(getattr(args, "max_pages", 10), "max_pages", 1, _MAX_PAGES)
+    max_nodes = _bounded_int(getattr(args, "max_nodes", 500), "max_nodes", 1, 5000)
     hub_threshold = _bounded_int(getattr(args, "hub_threshold", 200), "hub_threshold", 0, 1_000_000)
     now = time.time if clock is None else clock
     moment = float(now())
@@ -64,6 +65,8 @@ def execute(
         raise ConfigError(str(exc) or "bad_address") from None
     if not jobs:
         raise ConfigError("seed_required")
+    if _queried_nodes(jobs) > max_nodes:
+        raise ConfigError("max_nodes")
     plan = plan_for(jobs)
     dry_run = bool(getattr(args, "dry_run", False))
     accepted = bool(getattr(args, "yes", False))
@@ -71,14 +74,14 @@ def execute(
         payload = _envelope(
             command, "dry_run" if dry_run else "consent_required", since_days, max_pages, moment, plan, [],
         )
-        payload = _store(private.state_dir, command, payload, moment, secrets)
+        payload = _store(private.state_dir, command, payload, moment, secrets, public.document)
         return payload, 0 if dry_run else 2
     transport = _transport(public, default_backend() if backend is None else backend, now)
     reads, edges, payer_contract = _perform(
         jobs, transport, public.document, secrets, registry, max_pages, _stop(moment, since_days), now,
     )
     if command == "inbound":
-        body = inbound_report(edges, reads)
+        body = inbound_report(edges, reads, max_nodes=max_nodes)
     else:
         family, canonical = payer or ("", "")
         body = expand_report(
@@ -91,10 +94,13 @@ def execute(
             hub_threshold=hub_threshold,
             expand_hub=bool(getattr(args, "expand_hub", False)),
             payer_is_contract=payer_contract,
+            max_nodes=max_nodes,
         )
     payload = _envelope(command, overall(reads), since_days, max_pages, moment, plan, reads)
     payload.update(body)
-    payload = _store(private.state_dir, command, payload, moment, secrets)
+    if payload.get("truncated") and payload.get("status") == "complete":
+        payload["status"] = "partial"
+    payload = _store(private.state_dir, command, payload, moment, secrets, public.document)
     _drop(secrets)
     return payload, 0
 
@@ -182,7 +188,7 @@ def _credential(source: Mapping[str, Any], secrets: Mapping[str, str]) -> str | 
     if not isinstance(name, str) or not name:
         return None
     try:
-        return resolve_credential({}, name, secrets)
+        return resolve_credential(os.environ, name, secrets)
     except ValueError:
         return None
 
@@ -191,7 +197,9 @@ def _read_row(job: Job, choice, outcome: Outcome) -> dict:
     row = {
         "address": job.address,
         "direction": job.direction,
+        "ignored_zero_value": outcome.ignored_zero_value,
         "network": job.network,
+        "parts": list(outcome.parts or []),
         "read_status": outcome.status,
         "reason": outcome.reason,
         "source_id": choice.source_id,
@@ -203,16 +211,15 @@ def _read_row(job: Job, choice, outcome: Outcome) -> dict:
 
 def _seeds(args, private, command: str) -> list[tuple[str, str]]:
     raw = getattr(args, "seed", None)
-    if raw:
-        texts = list(raw)
-    else:
-        texts = [record.normalized.canonical for record in private.accounts.accounts]
-    if not texts and command == "inbound":
-        raise ConfigError("seed_required")
     found: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
-    for text in texts:
-        item = _classify(text)
+    if raw:
+        items = [_classify(text) for text in raw]
+    else:
+        items = [(record.family, record.normalized.canonical) for record in private.accounts.accounts]
+    if not items and command == "inbound":
+        raise ConfigError("seed_required")
+    for item in items:
         if item not in seen:
             seen.add(item)
             found.append(item)
@@ -232,7 +239,10 @@ def _classify(text: str) -> tuple[str, str]:
     if raw.startswith("0x") and len(raw) == 42:
         return _parsed("evm", raw)
     if raw.startswith("T") and len(raw) == 34:
-        return _parsed("tron", raw)
+        try:
+            return _parsed("tron", raw)
+        except ConfigError:
+            return _parsed("solana", raw)
     if raw.lower().startswith(("bc1", "tb1", "bcrt1")):
         return _parsed("bitcoin", raw)
     if raw[:1] in {"1", "3"}:
@@ -263,7 +273,7 @@ def _envelope(command, status, since_days, max_pages, moment, plan, reads) -> di
     }
 
 
-def _store(state_dir: Path, command: str, payload: dict, moment: float, secrets: Mapping[str, str]) -> dict:
+def _store(state_dir: Path, command: str, payload: dict, moment: float, secrets: Mapping[str, str], document: Mapping[str, Any]) -> dict:
     directory = Path(state_dir) / "relations"
     stamp = datetime.fromtimestamp(moment, timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     path = directory / f"{stamp}-{command}.json"
@@ -272,7 +282,7 @@ def _store(state_dir: Path, command: str, payload: dict, moment: float, secrets:
         path = directory / f"{stamp}-{command}-{suffix}.json"
         suffix += 1
     payload["result_path"] = str(path)
-    extra = [value for value in secrets.values() if isinstance(value, str) and len(value) >= 6]
+    extra = _extra_secrets(secrets, document)
     text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     cleaned = redact(text, extra)
     if cleaned != text:
@@ -280,6 +290,36 @@ def _store(state_dir: Path, command: str, payload: dict, moment: float, secrets:
         text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     secure_write_text(path, text)
     return payload
+
+
+def _queried_nodes(jobs) -> int:
+    seen: set[tuple[str, str]] = set()
+    for job in jobs:
+        if any(choice.role != "skip" for choice in job.choices):
+            seen.add((job.network, job.address))
+    return len(seen)
+
+
+def _extra_secrets(secrets: Mapping[str, str], document: Mapping[str, Any]) -> list[str]:
+    extra = [value for value in secrets.values() if isinstance(value, str) and len(value) >= 6]
+    seen = set(extra)
+    sources = document.get("sources") if isinstance(document, Mapping) else None
+    if not isinstance(sources, Mapping):
+        return extra
+    for source in sources.values():
+        if not isinstance(source, Mapping):
+            continue
+        name = source.get("credential_env")
+        if not isinstance(name, str) or not name:
+            continue
+        try:
+            value = resolve_credential(os.environ, name, secrets)
+        except ValueError:
+            continue
+        if isinstance(value, str) and len(value) >= 6 and value not in seen:
+            seen.add(value)
+            extra.append(value)
+    return extra
 
 
 def _bounded_int(value: Any, name: str, low: int, high: int) -> int:

@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
+from guardian.errors import ConfigError
+
 DISCLOSURE = "Responses include other addresses. Those addresses are not queried."
 
 BLOCKSCOUT_NETWORKS = frozenset({
@@ -30,6 +32,16 @@ _HISTORY = (
     "history.fungible",
     "history.token",
 )
+_HOME = {
+    "aptos": "aptos-mainnet",
+    "bitcoin": "bitcoin-mainnet",
+    "cosmos": "cosmos-hub",
+    "evm": "ethereum-mainnet",
+    "solana": "solana-mainnet",
+    "sui": "sui-mainnet",
+    "ton": "ton-mainnet",
+    "tron": "tron-mainnet",
+}
 
 
 @dataclass
@@ -61,7 +73,7 @@ def host_of(url: str) -> str:
 def endpoint_text(endpoints: Any, source_id: str) -> str:
     try:
         source = endpoints.get(source_id)
-    except Exception:
+    except (KeyError, ConfigError, ValueError):
         return ""
     text = getattr(source, "endpoint", "")
     return text.strip() if isinstance(text, str) else ""
@@ -88,11 +100,29 @@ def build_jobs(
         _require_family(expand_network, family, registry, explicit=True, enabled=enabled)
         choices = choices_for(expand_network, document, status_map, endpoints, registry)
         return [Job(expand_network, canonical, "from", choices)]
+    explicit = list(explicit_networks) if explicit_networks else None
+    if explicit:
+        _validate_explicit(explicit, registry, enabled)
     jobs: list[Job] = []
+    matched = 0
     for family, canonical in seeds:
-        for network in networks_for(family, explicit_networks, enabled, registry):
+        chosen = networks_for(family, explicit, enabled, registry)
+        if explicit and not chosen:
+            jobs.append(Job(
+                _HOME.get(family, ""),
+                canonical,
+                "to",
+                [Choice("skip", read_status="unsupported", reason="network_family_mismatch")],
+            ))
+            continue
+        if not chosen:
+            continue
+        matched += 1
+        for network in chosen:
             choices = choices_for(network, document, status_map, endpoints, registry)
             jobs.append(Job(network, canonical, "to", choices))
+    if explicit and seeds and matched == 0:
+        raise ValueError("network_family")
     return jobs
 
 
@@ -105,19 +135,16 @@ def networks_for(
     if explicit:
         found: list[str] = []
         for network in explicit:
-            _require_network(network, registry)
-            _require_family(network, family, registry, explicit=True, enabled=enabled)
+            if registry[network]["family"] != family:
+                continue
             if network not in found:
                 found.append(network)
         return found
     if family == "evm":
         return [network for network in enabled if registry[network]["family"] == "evm"]
-    if family == "tron":
-        return ["tron-mainnet"]
-    if family == "solana":
-        return ["solana-mainnet"]
-    if family == "bitcoin":
-        return ["bitcoin-mainnet"]
+    home = _HOME.get(family)
+    if home:
+        return [home]
     raise ValueError("family")
 
 
@@ -200,6 +227,18 @@ def plan_for(jobs: Sequence[Job]) -> dict[str, Any]:
     queries.sort(key=lambda row: (row["network"], row["source_id"], row["direction"], row["host"]))
     unqueried.sort(key=lambda row: (row["network"], row["address"], row["reason"]))
     return {"note": DISCLOSURE, "queries": queries, "unqueried": unqueried}
+
+
+def _validate_explicit(explicit: Sequence[str], registry: Mapping[str, Any], enabled: Sequence[str]) -> None:
+    allowed = set(enabled)
+    for network in explicit:
+        if network not in registry:
+            raise ValueError("unknown_network")
+        family = registry[network]["family"]
+        if family in {"solana", "bitcoin"}:
+            continue
+        if network not in allowed:
+            raise ValueError("network_disabled")
 
 
 def _require_network(network: str, registry: Mapping[str, Any]) -> None:
