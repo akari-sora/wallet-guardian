@@ -21,7 +21,7 @@ from guardian.relations.fetch import Outcome, read_blockscout, read_tron
 from guardian.relations.labels import load_user_labels
 from guardian.relations.markdown import render_markdown
 from guardian.relations.report import expand_report, inbound_report, overall
-from guardian.relations.select import Job, build_jobs, plan_for
+from guardian.relations.select import Job, _expand_targets, build_jobs, plan_for
 from guardian.resources import resource_path
 from guardian.security.redact import redact
 from guardian.sources.transport import build_endpoint_registry
@@ -52,7 +52,7 @@ def execute(
     secrets = _secrets(public)
     endpoints = build_endpoint_registry(public.document, secrets=secrets, environ=os.environ)
     labels = load_user_labels(private.state_dir, registry)
-    expand_networks = _expand_networks(args) if command == "expand" else None
+    expand_networks = _expand_targets(getattr(args, "network", None)) if command == "expand" else None
     try:
         seeds = _seeds(args, private, command)
         payer = _payer(args, command)
@@ -83,7 +83,9 @@ def execute(
         )
         payload = _store(
             private.state_dir, command, payload, moment, secrets, public.document,
-            markdown=_markdown(args, payload, command, seeds, max_nodes),
+            markdown=bool(getattr(args, "markdown", False)),
+            seeds=seeds,
+            max_nodes=max_nodes,
         )
         return payload, 0 if dry_run else 2
     transport = _transport(public, default_backend() if backend is None else backend, now)
@@ -115,7 +117,9 @@ def execute(
         payload["status"] = "partial"
     payload = _store(
         private.state_dir, command, payload, moment, secrets, public.document,
-        markdown=_markdown(args, payload, command, seeds, max_nodes),
+        markdown=bool(getattr(args, "markdown", False)),
+        seeds=seeds,
+        max_nodes=max_nodes,
     )
     _drop(secrets)
     return payload, 0
@@ -284,7 +288,10 @@ def _store(
     moment: float,
     secrets: Mapping[str, str],
     document: Mapping[str, Any],
-    markdown: str | None = None,
+    *,
+    markdown: bool = False,
+    seeds: list | None = None,
+    max_nodes: int = 500,
 ) -> dict:
     directory = Path(state_dir) / "relations"
     stamp = datetime.fromtimestamp(moment, timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -293,46 +300,29 @@ def _store(
     while path.exists():
         path = directory / f"{stamp}-{command}-{suffix}.json"
         suffix += 1
+    md_path = path.with_suffix(".md")
     payload["result_path"] = str(path)
+    if markdown:
+        payload["markdown_path"] = str(md_path)
     extra = _extra_secrets(secrets, document)
-    if markdown is not None:
-        rendered = redact(markdown, extra)
+    payload = _redact_payload(payload, extra)
+    if markdown:
+        seed_text = [item[1] for item in (seeds or [])] if command == "expand" else []
+        rendered = render_markdown(payload, seeds=seed_text, max_nodes=max_nodes)
         if not rendered.endswith("\n"):
             rendered += "\n"
-        md_path = path.with_suffix(".md")
         secure_write_text(md_path, rendered)
-        payload["markdown_path"] = str(md_path)
     text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    cleaned = redact(text, extra)
-    if cleaned != text:
-        payload = json.loads(cleaned)
-        text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     secure_write_text(path, text)
     return payload
 
 
-def _markdown(args, payload: dict, command: str, seeds, max_nodes: int) -> str | None:
-    if not bool(getattr(args, "markdown", False)):
-        return None
-    seed_text = [item[1] for item in seeds] if command == "expand" else []
-    return render_markdown(payload, seeds=seed_text, max_nodes=max_nodes)
-
-
-def _expand_networks(args) -> list[str]:
-    raw = getattr(args, "network", None)
-    if raw is None:
-        items: list = []
-    elif isinstance(raw, str):
-        items = [raw]
-    elif isinstance(raw, list):
-        items = list(raw)
-    else:
-        items = []
-    found: list[str] = []
-    for item in items:
-        if isinstance(item, str) and item and item not in found:
-            found.append(item)
-    return found
+def _redact_payload(payload: dict, extra: list[str]) -> dict:
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    cleaned = redact(text, extra)
+    if cleaned == text:
+        return payload
+    return json.loads(cleaned)
 
 
 def _queried_nodes(jobs) -> int:

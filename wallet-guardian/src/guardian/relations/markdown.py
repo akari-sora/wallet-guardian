@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
+
+from guardian.relations.evidence import display_symbol
 
 CLOSING = (
     "This report lists addresses and heuristic evidence only. "
@@ -10,6 +13,8 @@ CLOSING = (
     "are controlled by the same party."
 )
 _ALLOWED = set("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\u2026: ")
+_MD_SPECIAL = set("\\ *_[]()<>!#|~")
+_URL = re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://\S+")
 
 
 def render_markdown(
@@ -38,24 +43,30 @@ def render_markdown(
     lines.extend(_plan_lines(payload.get("plan") or {}))
     if payload.get("status") in {"dry_run", "consent_required"}:
         lines.extend(["", CLOSING, ""])
-        return "\n".join(lines).replace("https://", "").replace("http://", "")
+        return _strip_urls("\n".join(lines))
     lines.extend(["", "## Reads"])
     lines.extend(_reads_table(payload.get("reads") or []))
     title = "Co-recipients" if command == "expand" else "Counterparties"
     key = "co_recipients" if command == "expand" else "counterparties"
-    rows = payload.get(key)
-    if not isinstance(rows, list):
-        rows = []
-    lines.extend(["", f"## {title}"])
-    lines.extend(_main_table(rows, expand=command == "expand"))
-    if command == "expand" and rows:
-        lines.extend(["", *_mermaid(payload, rows, seeds, max_nodes)])
-    lines.extend(["", "## Merged addresses"])
-    lines.extend(_merged_lines(payload.get("merged_addresses") or []))
+    if key in payload:
+        rows = payload.get(key)
+        lines.extend(["", f"## {title}"])
+        if isinstance(rows, list):
+            lines.extend(_main_table(rows, expand=command == "expand"))
+            if command == "expand" and rows:
+                lines.extend(["", *_mermaid(payload, rows, seeds, max_nodes)])
+        else:
+            lines.append("unknown")
+    lines.extend(_seed_lines(payload))
+    lines.extend(_merged_section(payload))
     lines.extend(["", "## Gaps"])
     lines.extend(_gap_lines(payload))
     lines.extend(["", CLOSING, ""])
-    return "\n".join(lines).replace("https://", "").replace("http://", "")
+    return _strip_urls("\n".join(lines))
+
+
+def _strip_urls(text: str) -> str:
+    return _URL.sub("[url removed]", text)
 
 
 def _plan_lines(plan: Mapping) -> list[str]:
@@ -92,11 +103,11 @@ def _reads_table(reads: Sequence) -> list[str]:
 
 def _main_table(rows: Sequence[Mapping], *, expand: bool) -> list[str]:
     if expand:
-        header = "| address | network | count | assets | confidence | score | reasons | tx_hashes |"
-        rule = "| --- | --- | --- | --- | --- | --- | --- | --- |"
+        header = "| address | network | count | assets | confidence | score | reasons | tx_hashes | label |"
+        rule = "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     else:
-        header = "| address | network | count | assets | reasons | tx_hashes |"
-        rule = "| --- | --- | --- | --- | --- | --- |"
+        header = "| address | network | count | assets | reasons | tx_hashes | label |"
+        rule = "| --- | --- | --- | --- | --- | --- | --- |"
     lines = [header, rule]
     for row in rows:
         hashes = ", ".join(str(item) for item in list(row.get("tx_hashes") or [])[:3])
@@ -113,10 +124,38 @@ def _main_table(rows: Sequence[Mapping], *, expand: bool) -> list[str]:
                 _cell(row.get("score")),
                 _cell(reasons),
                 _cell(hashes),
+                _cell(row.get("label")),
             ])
         else:
-            base.extend([_cell(reasons), _cell(hashes)])
+            base.extend([_cell(reasons), _cell(hashes), _cell(row.get("label"))])
         lines.append("| " + " | ".join(base) + " |")
+    return lines
+
+
+def _seed_lines(payload: Mapping) -> list[str]:
+    if "seed_receipts" not in payload and "evidence_note" not in payload:
+        return []
+    lines = ["", "## Seed receipts"]
+    receipts = payload.get("seed_receipts")
+    if not isinstance(receipts, Mapping):
+        lines.append("unknown")
+    else:
+        lines.append(f"Count: {receipts.get('count')}")
+    note = payload.get("evidence_note")
+    if isinstance(note, str) and note:
+        lines.append(f"Note: {note}")
+    return lines
+
+
+def _merged_section(payload: Mapping) -> list[str]:
+    if "merged_addresses" not in payload:
+        return []
+    lines = ["", "## Merged addresses"]
+    rows = payload.get("merged_addresses")
+    if not isinstance(rows, list):
+        lines.append("unknown")
+        return lines
+    lines.extend(_merged_lines(rows))
     return lines
 
 
@@ -129,7 +168,7 @@ def _merged_lines(rows: Sequence) -> list[str]:
             continue
         networks = ", ".join(str(item) for item in (row.get("networks") or []))
         text = (
-            f"- {row.get('address')} on {networks}; count {row.get('count')}; "
+            f"- {_cell(row.get('address'))} on {networks}; count {row.get('count')}; "
             f"first {row.get('first_timestamp')}; last {row.get('last_timestamp')}; "
             f"tx_hash_count {row.get('tx_hash_count')}; is_contract {row.get('is_contract')}"
         )
@@ -201,7 +240,7 @@ def _assets_text(assets: Sequence) -> str:
     for asset in assets:
         if not isinstance(asset, Mapping):
             continue
-        name = asset.get("symbol") or asset.get("contract") or asset.get("kind") or ""
+        name = display_symbol(asset.get("symbol"), asset.get("contract"))
         parts.append(f"{name} raw {asset.get('raw_amount')} decimals {asset.get('decimals')}")
     return "; ".join(parts)
 
@@ -219,7 +258,9 @@ def _label(text: str) -> str:
 def _cell(value: object) -> str:
     if value is None:
         return ""
-    return str(value).replace("|", " ").replace("\n", " ").replace("\r", " ")
+    text = str(value).replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return "".join("\\" + char if char in _MD_SPECIAL else char for char in text)
 
 
 def _same(left: str, right: str) -> bool:

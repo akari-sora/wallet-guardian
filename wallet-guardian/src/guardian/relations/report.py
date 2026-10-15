@@ -27,10 +27,12 @@ def inbound_report(
 ) -> dict:
     rows = _groups(edges, "sender", {}, labels or [], registry or {})
     shown, truncated = _cap_rows(rows, max_nodes)
-    body: dict = {
-        "counterparties": _list_or_null(shown, reads),
-        "merged_addresses": _merged(rows, with_score=False),
-    }
+    listed = _list_or_null(shown, reads)
+    body: dict = {"counterparties": listed}
+    if listed is None:
+        body["merged_addresses"] = None
+    else:
+        body["merged_addresses"] = _merged(shown, with_score=False)
     if truncated is not None and isinstance(body["counterparties"], list):
         body["truncated"] = truncated
     return body
@@ -119,32 +121,37 @@ def expand_report(
     for row in visible:
         row.pop("_last", None)
     shown, truncated = _cap_rows(visible, max_nodes)
+    receipts, note = _seed_fields(reads, summary)
     body: dict = {
         "hub": hub,
         "hub_reasons": reasons,
-        "merged_addresses": _merged(visible, with_score=True),
         "networks": network_list,
         "payer": payer,
         "recipient_count": count,
         "recipient_count_complete": source_complete,
-        "seed_receipts": {"assets": summary["assets"], "count": summary["count"]},
+        "seed_receipts": receipts,
     }
     if len(network_list) == 1:
         body["network"] = network_list[0]
-    if summary["count"] == 0:
-        body["evidence_note"] = "no_seed_receipts"
+    if note:
+        body["evidence_note"] = note
     body.update(_payer_label(network_list, payer, user_labels, chain_registry))
     if hub is True and expand_hub:
         body["noise"] = "high"
-    if not (hub is True and not expand_hub):
-        if shown:
-            body["co_recipients"] = shown
-        elif source_complete:
-            body["co_recipients"] = []
-        else:
-            body["co_recipients"] = None
-        if truncated is not None and isinstance(body["co_recipients"], list):
-            body["truncated"] = truncated
+    if hub is True and not expand_hub:
+        return body
+    if shown:
+        body["co_recipients"] = shown
+    elif source_complete:
+        body["co_recipients"] = []
+    else:
+        body["co_recipients"] = None
+    if isinstance(body["co_recipients"], list):
+        body["merged_addresses"] = _merged(shown, with_score=True)
+    else:
+        body["merged_addresses"] = None
+    if truncated is not None and isinstance(body["co_recipients"], list):
+        body["truncated"] = truncated
     return body
 
 
@@ -321,6 +328,19 @@ def _transfer(item: Edge) -> dict:
         "timestamp": _iso(item.timestamp),
         "tx_hash": item.tx_hash,
     }
+
+
+def _seed_fields(reads: list[dict], summary: dict) -> tuple[dict | None, str | None]:
+    statuses = [row.get("read_status") for row in reads]
+    count = summary["count"]
+    known = {"assets": summary["assets"], "count": count}
+    if statuses and all(status in {"gap", "unsupported"} for status in statuses):
+        return None, "seed_receipts_unknown"
+    if count == 0 and any(status == "partial" for status in statuses):
+        return known, "no_seed_receipts_in_partial_read"
+    if count == 0:
+        return known, "no_seed_receipts"
+    return known, None
 
 
 def _cap_rows(rows: list[dict], max_nodes: int) -> tuple[list[dict], dict | None]:

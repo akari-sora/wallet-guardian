@@ -86,7 +86,7 @@ def _one(row: Any, registry: Mapping[str, Any]) -> dict[str, Any]:
     address = row.get("address")
     label = row.get("label")
     kind = row.get("kind")
-    if not isinstance(network, str) or not isinstance(address, str) or kind not in _KINDS:
+    if not isinstance(network, str) or not isinstance(address, str) or not isinstance(kind, str) or kind not in _KINDS:
         raise ConfigError("labels_file")
     if not isinstance(label, str) or not _printable(label):
         raise ConfigError("labels_file")

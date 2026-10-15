@@ -87,12 +87,12 @@ def build_jobs(
     endpoints: Any,
     registry: Mapping[str, Any],
 ) -> list[Job]:
+    jobs: list[Job] = []
     if command == "expand":
         chosen = _expand_targets(expand_network)
         if payer is None or not chosen:
             raise ValueError("payer")
         family, canonical = payer
-        jobs: list[Job] = []
         for network in chosen:
             _require_network(network, registry)
             _require_family(network, family, registry, explicit=True, enabled=enabled)
@@ -102,7 +102,6 @@ def build_jobs(
     explicit = list(explicit_networks) if explicit_networks else None
     if explicit:
         _validate_explicit(explicit, registry, enabled)
-    jobs: list[Job] = []
     matched = 0
     for family, canonical in seeds:
         chosen = networks_for(family, explicit, enabled, registry)
@@ -223,12 +222,17 @@ def plan_for(jobs: Sequence[Job]) -> dict[str, Any]:
 
 
 def _expand_targets(value: str | Sequence[str] | None) -> list[str]:
+    """Dedupe expand networks. Strings stay one item; other values contribute nothing."""
     if value is None:
         return []
     if isinstance(value, str):
-        return [value] if value else []
+        items: Sequence[object] = [value]
+    elif isinstance(value, Sequence):
+        items = value
+    else:
+        return []
     found: list[str] = []
-    for item in value:
+    for item in items:
         if isinstance(item, str) and item and item not in found:
             found.append(item)
     return found

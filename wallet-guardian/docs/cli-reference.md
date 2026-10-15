@@ -773,7 +773,7 @@ options:
   --markdown            also write a Markdown report next to the JSON result
 ```
 
-Repeat `--network` on `expand` to read more than one network in the payer's family. `--markdown` writes a redacted report next to the JSON result.
+`--markdown` writes a redacted report next to the JSON result.
 
 ## `guardian relations expand`
 
@@ -788,7 +788,7 @@ options:
   --json                print JSON (this is always on)
   --mcm-config MCM_CONFIG
   --payer PAYER
-  --network NETWORK
+  --network NETWORK     network to read; repeat to add another network in the same family
   --seed SEED           address to exclude; repeat to add another
   --since-days SINCE_DAYS
   --max-pages MAX_PAGES
@@ -800,3 +800,5 @@ options:
   --yes                 send the disclosed reads
   --markdown            also write a Markdown report next to the JSON result
 ```
+
+Repeat `--network` on `expand` to read more than one network in the payer's family.

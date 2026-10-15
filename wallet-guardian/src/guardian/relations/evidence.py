@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 from guardian.relations.fetch import Edge
 
 _ORDER = ("same_tx", "same_asset", "amount_band", "cadence")
 _WEIGHTS = {"same_tx": 3, "same_asset": 1, "amount_band": 1, "cadence": 1}
+_SYMBOL = re.compile(r"^[0-9A-Za-z._-]{1,16}$")
 
 
 def seed_summary(edges: Sequence[Edge]) -> dict:
@@ -122,30 +124,37 @@ def _cadence(seed_stamps: Sequence[int], own_stamps: Sequence[int]) -> dict | No
     own_unique = sorted(set(own_stamps))
     if len(seed_unique) < 2 or len(own_unique) < 2:
         return None
-    seed_median = _median_gap(seed_unique)
-    own_median = _median_gap(own_unique)
-    if seed_median is None or own_median is None:
+    seed_m2 = _double_median(seed_unique)
+    own_m2 = _double_median(own_unique)
+    if seed_m2 is None or own_m2 is None:
         return None
-    if seed_median < 3600 or own_median < 3600:
+    if seed_m2 < 7200 or own_m2 < 7200:
         return None
-    if abs(seed_median - own_median) * 100 > 20 * max(seed_median, own_median):
+    if abs(seed_m2 - own_m2) * 100 > 20 * max(seed_m2, own_m2):
         return None
     return {
         "kind": "cadence",
-        "median_seconds": own_median,
-        "seed_median_seconds": seed_median,
+        "median_seconds": _json_median(own_m2),
+        "seed_median_seconds": _json_median(seed_m2),
     }
 
 
-def _median_gap(unique_stamps: Sequence[int]) -> int | None:
+def _double_median(unique_stamps: Sequence[int]) -> int | None:
+    """Twice the median gap. Odd counts use the middle gap times two."""
     if len(unique_stamps) < 2:
         return None
     gaps = [unique_stamps[index + 1] - unique_stamps[index] for index in range(len(unique_stamps) - 1)]
     gaps.sort()
     mid = len(gaps) // 2
     if len(gaps) % 2 == 1:
-        return gaps[mid]
-    return (gaps[mid - 1] + gaps[mid]) // 2
+        return gaps[mid] * 2
+    return gaps[mid - 1] + gaps[mid]
+
+
+def _json_median(doubled: int) -> int | float:
+    if doubled % 2 == 0:
+        return doubled // 2
+    return doubled / 2
 
 
 def _scored(items: list[dict]) -> dict:
@@ -189,14 +198,17 @@ def _reason(item: dict) -> str:
     return f"median interval {median}s is within 20% of the seed median {seed_median}s"
 
 
-def _asset_name(asset: dict) -> str:
-    symbol = asset.get("symbol")
-    if isinstance(symbol, str) and symbol:
+def display_symbol(symbol: object, contract: object) -> str:
+    """Whitelist for sentences and Markdown. Source fields keep the raw symbol."""
+    if isinstance(symbol, str) and _SYMBOL.fullmatch(symbol):
         return symbol
-    contract = asset.get("contract")
     if isinstance(contract, str) and contract:
         return contract
-    return str(asset.get("kind") or "")
+    return "native"
+
+
+def _asset_name(asset: dict) -> str:
+    return display_symbol(asset.get("symbol"), asset.get("contract"))
 
 
 def _asset_key(edge: Edge) -> tuple[str, str, str]:
