@@ -754,7 +754,7 @@ options:
 
 ```text
 usage: guardian relations inbound [-h] [--db DB] [--tenant TENANT] [--json] --mcm-config MCM_CONFIG [--seed SEED] [--network NETWORK] [--since-days SINCE_DAYS] [--max-pages MAX_PAGES]
-                                  [--max-nodes MAX_NODES] [--dry-run] [--yes]
+                                  [--max-nodes MAX_NODES] [--dry-run] [--yes] [--markdown]
 
 options:
   -h, --help            show this help message and exit
@@ -770,13 +770,16 @@ options:
                         cap queried addresses and output rows
   --dry-run             print the disclosure plan and do not send
   --yes                 send the disclosed reads
+  --markdown            also write a Markdown report next to the JSON result
 ```
+
+Repeat `--network` on `expand` to read more than one network in the payer's family. `--markdown` writes a redacted report next to the JSON result.
 
 ## `guardian relations expand`
 
 ```text
 usage: guardian relations expand [-h] [--db DB] [--tenant TENANT] [--json] --mcm-config MCM_CONFIG --payer PAYER --network NETWORK [--seed SEED] [--since-days SINCE_DAYS] [--max-pages MAX_PAGES]
-                                 [--max-nodes MAX_NODES] [--hub-threshold HUB_THRESHOLD] [--expand-hub] [--dry-run] [--yes]
+                                 [--max-nodes MAX_NODES] [--hub-threshold HUB_THRESHOLD] [--expand-hub] [--dry-run] [--yes] [--markdown]
 
 options:
   -h, --help            show this help message and exit
@@ -795,4 +798,5 @@ options:
   --expand-hub
   --dry-run             print the disclosure plan and do not send
   --yes                 send the disclosed reads
+  --markdown            also write a Markdown report next to the JSON result
 ```

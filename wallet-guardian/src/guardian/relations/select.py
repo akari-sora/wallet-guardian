@@ -80,7 +80,7 @@ def build_jobs(
     seeds: Sequence[tuple[str, str]],
     payer: tuple[str, str] | None,
     explicit_networks: Sequence[str] | None,
-    expand_network: str | None,
+    expand_network: str | Sequence[str] | None,
     enabled: Sequence[str],
     document: Mapping[str, Any],
     status_map: Mapping[str, Any],
@@ -88,13 +88,17 @@ def build_jobs(
     registry: Mapping[str, Any],
 ) -> list[Job]:
     if command == "expand":
-        if payer is None or not expand_network:
+        chosen = _expand_targets(expand_network)
+        if payer is None or not chosen:
             raise ValueError("payer")
-        _require_network(expand_network, registry)
         family, canonical = payer
-        _require_family(expand_network, family, registry, explicit=True, enabled=enabled)
-        choices = choices_for(expand_network, document, status_map, endpoints, registry)
-        return [Job(expand_network, canonical, "from", choices)]
+        jobs: list[Job] = []
+        for network in chosen:
+            _require_network(network, registry)
+            _require_family(network, family, registry, explicit=True, enabled=enabled)
+            choices = choices_for(network, document, status_map, endpoints, registry)
+            jobs.append(Job(network, canonical, "from", choices))
+        return jobs
     explicit = list(explicit_networks) if explicit_networks else None
     if explicit:
         _validate_explicit(explicit, registry, enabled)
@@ -216,6 +220,18 @@ def plan_for(jobs: Sequence[Job]) -> dict[str, Any]:
     queries.sort(key=lambda row: (row["network"], row["source_id"], row["direction"], row["host"]))
     unqueried.sort(key=lambda row: (row["network"], row["address"], row["reason"]))
     return {"note": DISCLOSURE, "queries": queries, "unqueried": unqueried}
+
+
+def _expand_targets(value: str | Sequence[str] | None) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value else []
+    found: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item and item not in found:
+            found.append(item)
+    return found
 
 
 def _validate_explicit(explicit: Sequence[str], registry: Mapping[str, Any], enabled: Sequence[str]) -> None:

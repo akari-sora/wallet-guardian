@@ -252,10 +252,11 @@ def build_parser() -> argparse.ArgumentParser:
     inbound.add_argument("--max-nodes", type=int, default=500, help="cap queried addresses and output rows")
     inbound.add_argument("--dry-run", action="store_true", help="print the disclosure plan and do not send")
     inbound.add_argument("--yes", action="store_true", help="send the disclosed reads")
+    inbound.add_argument("--markdown", action="store_true", help="also write a Markdown report next to the JSON result")
     expand = relations_sub.add_parser("expand", parents=[common])
     expand.add_argument("--mcm-config", required=True)
     expand.add_argument("--payer", required=True)
-    expand.add_argument("--network", required=True)
+    expand.add_argument("--network", action="append", required=True, help="network to read; repeat to add another network in the same family")
     expand.add_argument("--seed", action="append", default=None, help="address to exclude; repeat to add another")
     expand.add_argument("--since-days", type=int, default=90)
     expand.add_argument("--max-pages", type=int, default=10)
@@ -264,6 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     expand.add_argument("--expand-hub", action="store_true")
     expand.add_argument("--dry-run", action="store_true", help="print the disclosure plan and do not send")
     expand.add_argument("--yes", action="store_true", help="send the disclosed reads")
+    expand.add_argument("--markdown", action="store_true", help="also write a Markdown report next to the JSON result")
     return parser
 
 
