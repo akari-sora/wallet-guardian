@@ -144,23 +144,30 @@ class TronGridClient:
         resume: str | None,
         *,
         accept_page: Any = None,
+        page_cap: int | None = None,
     ) -> HistoryWalk:
         """Walk one frozen filter set.
 
         ``accept_page(rows)`` returns false when this page is not fully
         processed. The walk then stops on the fingerprint that fetched the
-        page and does not request the next one.
+        page and does not request the next one. ``page_cap`` defaults to
+        ``PAGE_CAP``. Omitting it keeps the previous walk length.
         """
         if resume is not None and _FINGERPRINT.fullmatch(resume) is None:
             return HistoryWalk((), False, None, "bad_cursor", False, True)
         if not path.startswith("/v1/accounts/") or any(token in path for token in ("..", "%", "//", "?", "#")):
             return HistoryWalk((), False, None, "bad_path", True, True)
+        cap = PAGE_CAP
+        if page_cap is not None:
+            if isinstance(page_cap, bool) or not isinstance(page_cap, int) or page_cap < 1:
+                return HistoryWalk((), False, None, "bad_page", False, True)
+            cap = page_cap
         frozen_query = _freeze_query(frozen, self.clock)
         requested = resume
         seen: set[str] = set()
         rows: list[Mapping[str, Any]] = []
         pages = 0
-        while pages < PAGE_CAP:
+        while pages < cap:
             query = dict(frozen_query)
             if requested:
                 query["fingerprint"] = requested
