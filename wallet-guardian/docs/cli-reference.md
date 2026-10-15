@@ -750,6 +750,8 @@ options:
 
 `inbound` is layer 1 and `expand` is layer 2 for a payer named on the command line; nothing is expanded automatically and there is no third layer.
 
+With `--yes` and without `--dry-run`, the same plan is written to stderr as one JSON line `{"disclosure_plan": …}` before the first request; stdout still carries only the final result.
+
 ## `guardian relations inbound`
 
 ```text

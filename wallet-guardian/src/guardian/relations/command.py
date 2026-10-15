@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -93,6 +94,7 @@ def execute(
         )
         return payload, 0 if dry_run else 2
     transport = _transport(public, default_backend() if backend is None else backend, now)
+    _write_disclosure(plan, secrets, public.document)
     reads, edges, payer_contract, source_complete = _perform(
         jobs, transport, public.document, secrets, registry, max_pages, _stop(moment, since_days), now,
     )
@@ -310,8 +312,7 @@ def _store(
         payload["markdown_path"] = str(md_path)
     if command == "expand":
         payload["seeds"] = [item[1] for item in (seeds or [])]
-    extra = _extra_secrets(secrets, document)
-    payload = _redact_payload(payload, extra)
+    payload = _redact_mapping(payload, secrets, document)
     if markdown:
         rendered = render_markdown(payload, max_nodes=max_nodes)
         if not rendered.endswith("\n"):
@@ -320,6 +321,16 @@ def _store(
     text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     secure_write_text(path, text)
     return payload
+
+
+def _redact_mapping(payload: dict, secrets: Mapping[str, str], document: Mapping[str, Any]) -> dict:
+    return _redact_payload(payload, _extra_secrets(secrets, document))
+
+
+def _write_disclosure(plan: dict, secrets: Mapping[str, str], document: Mapping[str, Any]) -> None:
+    masked = _redact_mapping(plan, secrets, document)
+    sys.stderr.write(json.dumps({"disclosure_plan": masked}, ensure_ascii=False) + "\n")
+    sys.stderr.flush()
 
 
 def _redact_payload(payload: dict, extra: list[str]) -> dict:

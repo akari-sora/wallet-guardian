@@ -26,6 +26,8 @@ With `--dry-run`, the status is `dry_run`, the exit code is 0, `reads` is `[]`, 
 
 With `--yes` and without `--dry-run`, only the planned queries are sent. A skip choice sends nothing for that address.
 
+With `--yes` (and without `--dry-run`), the same plan is written to stderr as one JSON line `{"disclosure_plan": …}` before the first request; stdout still carries only the final result.
+
 ## Flags
 
 `build_parser()` accepts the flags below on `inbound`, `expand`, or both. A non-integer value for `--since-days`, `--max-pages`, `--max-nodes`, or `--hub-threshold` is rejected by argparse: the process exits 2, stderr prints usage, and stdout has no JSON. An integer outside a bound is `ConfigError` and exit 2 before any request. Bounds are inclusive.
