@@ -1,6 +1,6 @@
 # Relations status (2026-10-16)
 
-Handoff for the address-relations goal: `guardian relations inbound` and `guardian relations expand`. `main` at the time of writing is `7a446152cb732d23cb0d150da7757850b4154d55` (`Merge branch 'feat/relations-r3' into 'main'`). SHAs in the package table are merge commits on `main`.
+Handoff for the address-relations goal: `guardian relations inbound` and `guardian relations expand`. `main` at the time of writing is `94d851c2e6f4a70fae59eac4f88a3d78c415d957` (`Merge branch 'fix/relations-disclose-before-send' into 'main'`). SHAs in the package table are merge commits on `main`.
 
 This file records what landed, what was checked, and what was not. It does not say that relations covers every chain, that its evidence names who controls an address, or that any of it is live-qualified. Semantics and limits are in [docs/relations.md](../relations.md).
 
@@ -8,19 +8,21 @@ This file records what landed, what was checked, and what was not. It does not s
 
 | Package | What landed | MR | Merge SHA | Pipeline |
 | --- | --- | --- | --- | --- |
-| R-1 | Manual, read-only `relations inbound` and `relations expand`. A disclosure plan is built before any request. Without `--yes`, or with `--dry-run`, only the plan is printed and nothing is sent. With `--yes`, the plan is printed in the result after the reads, not before them; see Open core gate. Each read reports `complete`, `partial`, `gap` or `unsupported` with its parts. A cut or failed read never becomes an empty list. Hub rule (contract, a static registry label, recipient count above `--hub-threshold`), `--max-pages`, `--max-nodes`, private 0600 result files. EVM reads use Blockscout v2 only. TRON reads TronGrid TRC-20 only. BSC is `credential_missing` (`bsc_source_gated`); Solana and Bitcoin are `unsupported`. | [!93](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/93) | `bb83bb73a808f97e57016356ef5777412e98395e` | [2950353197](https://gitlab.com/aa22396584/wallet-guardian/-/pipelines/2950353197) success |
+| R-1 | Manual, read-only `relations inbound` and `relations expand`. A disclosure plan is built before any request. Without `--yes`, or with `--dry-run`, only the plan is printed and nothing is sent. With `--yes`, R-1 printed the plan only in the result after the reads; R-4 closed that gap. Each read reports `complete`, `partial`, `gap` or `unsupported` with its parts. A cut or failed read never becomes an empty list. Hub rule (contract, a static registry label, recipient count above `--hub-threshold`), `--max-pages`, `--max-nodes`, private 0600 result files. EVM reads use Blockscout v2 only. TRON reads TronGrid TRC-20 only. BSC is `credential_missing` (`bsc_source_gated`); Solana and Bitcoin are `unsupported`. | [!93](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/93) | `bb83bb73a808f97e57016356ef5777412e98395e` | [2950353197](https://gitlab.com/aa22396584/wallet-guardian/-/pipelines/2950353197) success |
 | R-2 | Heuristic evidence on co-recipients (`same_tx`, `same_asset`, `amount_band`, `cadence`), a bounded score and a confidence level with reasons. Evidence that cannot be computed is left out, not reported as false. `expand` takes repeated `--network` values in the payer's family. `merged_addresses` lists the same EVM address on two or more EVM networks. A private labels file under the state directory is checked before any request; only its `exchange`, `protocol` and `bridge` kinds make a payer a hub. `--markdown` writes a redacted owner-only report. | [!94](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/94) | `3d393b8706f21a657ce9db7aa50e227f09cca434` | [2951622909](https://gitlab.com/aa22396584/wallet-guardian/-/pipelines/2951622909) success |
 | R-3 | `docs/relations.md`, one README status line, a pointer from `docs/cli-reference.md`, and a docs test that checks the documented flags and defaults against the parser and the wording against overclaiming. No `src/` change. | [!95](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/95) | `7a446152cb732d23cb0d150da7757850b4154d55` | [2952062452](https://gitlab.com/aa22396584/wallet-guardian/-/pipelines/2952062452) success |
+| R-4 | With `--yes` and without `--dry-run`, the transport is built (no I/O), then the disclosure plan is written to stderr as one JSON line `{"disclosure_plan": ...}` and flushed, then the reads start. The plan is the same object the dry-run prints, with the same redaction. A `ConfigError` exits 2 before the line is written; a failed stderr write or flush exits 1 with no request. stdout still carries only the final result. | [!96](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/96) | `94d851c2e6f4a70fae59eac4f88a3d78c415d957` | [2952549670](https://gitlab.com/aa22396584/wallet-guardian/-/pipelines/2952549670) success |
 
 Branch commits:
 
 - R-1: `d4db2dd1e6bfe58fafb03d5c03a58b6d8ff0dc61` (feature), `a76531d2ab854f3d80a274087a23db738b99bc1b` and `4df57871e0996d7bc4cc332c1a0eceef8d606cee` (review fixes), `31731086bb8fb0fd784ba5db937572a472c9b827` (Etherscan fallback removed), `401d32f9e805a09f3dd95cb440943c0f9cfbb9ab` (coverage restored after the removal).
 - R-2: `a1a57973441e40429ac9166907e032023ca435d4` (feature), `8a3e5af2126e34769c174da2631f7b53e5b2b9d4` and `e1f65ebfde6dc918ebdccdfe1a7d37487f5f05e9` (review fixes).
 - R-3: `f32451192bc8f46f886dc9307a46f99721ec015e` (docs), `3058a8d9697d3d2c9431a53019fe16b9745d3175` (review fixes).
+- R-4: `66f19ec0900fafaf98b42c2b323fd2cdd30b7cad` (fix), `146ac17f1e5684f8be736cbdd62ff1e90c896f0f` (review fix: disclose after the transport is built).
 
 ## Reviews
 
-Reviewers were Codex GPT-6.1-Sol (max), Claude Opus 5.5 (xhigh) and a third model. agy Gemini 4 Argon high reviewed R-1 rounds 1 and 2. In R-1 round 3 the agy call and a flash-model probe both returned HTTP 429 (`AI credits balance is too low`), and the R-2 round 1 call returned the same; agy was not run in the other rounds because the account had no quota. DeepSeek V4.1 Flash Free (OpenCode) was added as a third reviewer on 2026-10-15 at the operator's request. It ran four times and returned no verdict each time: R-2 round 3 ran 90 minutes without one, R-3 round 1 ended without one, R-3 round 2 and the first review of this file hit a 25-minute timeout. It is recorded as skipped for those rounds. The merge gate that was applied is therefore two reviewers, Codex and Opus, both approving, with any reviewer that returned no report skipped. That is fewer than the three approvals the goal asked for.
+Reviewers were Codex GPT-6.1-Sol (max), Claude Opus 5.5 (xhigh) and a third model. agy Gemini 4 Argon high reviewed R-1 rounds 1 and 2. In R-1 round 3 the agy call and a flash-model probe both returned HTTP 429 (`AI credits balance is too low`), the R-2 round 1 call and a probe before R-4 returned the same; agy was not run in the other rounds because the account had no quota. DeepSeek V4.1 Flash Free (OpenCode) was added as a third reviewer on 2026-10-15 at the operator's request. It ran six times. The first four returned no verdict: R-2 round 3 ran 90 minutes without one, R-3 round 1 ended without one, and R-3 round 2 and the first review of this file hit a 25-minute timeout; it is recorded as skipped for those rounds. In R-4 it returned APPROVE in both rounds. The merge gate applied for R-1, R-2 and R-3 is therefore two reviewers, Codex and Opus, both approving, with any reviewer that returned no report skipped. That is fewer than the three approvals the goal asked for. R-4 merged with three approvals (Codex, Opus and DeepSeek).
 
 | Package | Round | Codex | Opus | Third reviewer |
 | --- | --- | --- | --- | --- |
@@ -34,6 +36,8 @@ Reviewers were Codex GPT-6.1-Sol (max), Claude Opus 5.5 (xhigh) and a third mode
 | R-2 | 3 | APPROVE | APPROVE (2 minor) | agy not run; DeepSeek: no verdict after 90 minutes, skipped |
 | R-3 | 1 (full) | REQUEST_CHANGES (1 major) | REQUEST_CHANGES (2 major) | agy not run; DeepSeek: no verdict, skipped |
 | R-3 | 2 | APPROVE (1 minor) | APPROVE (1 minor) | agy not run; DeepSeek: 25-minute timeout, skipped |
+| R-4 | 1 (full) | REQUEST_CHANGES (1 major: a transport `ConfigError` could follow the disclosure line) | APPROVE (4 minor) | agy 429 (quota probe before the round); DeepSeek APPROVE |
+| R-4 | 2 | APPROVE | APPROVE | DeepSeek APPROVE |
 
 Reviewer prompts after the operator's 2026-10-15 rule use repo-relative paths only. Before that rule, which arrived during R-2 round 3, prompts carried absolute scratch paths that include the local account name. In R-3 round 2 a first launch went ahead after the path guard had failed and sent the generic string `/private/tmp`; it was stopped within about a minute, the scrubber and the launch order were fixed, and the round was rerun. No key or private address was in any prompt.
 
@@ -46,8 +50,9 @@ Full `uv run pytest -q` on macOS, compared with a baseline taken at the start of
 | R-1 | 800 passed, 7 environmental failures (`85449c0`, after the rebase; 793 passed at the original base `d617ad8`) | 867 passed, same 7 (`401d32f`) |
 | R-2 | 867 passed, same 7 (`bb83bb7`) | 923 passed, same 7 (`e1f65eb`) |
 | R-3 | 923 passed, same 7 (`3d393b8`) | 929 passed, same 7 (`3058a8d`) |
+| R-4 | 929 passed, same 7 (`7a44615`) | 946 passed, same 7 (`146ac17`) |
 
-Implementation ran in Cursor on a Windows host, with tests in WSL (Ubuntu 24.04 and uv 0.7.21, per the coordinator's setup notes). Cursor reported its final WSL runs as 4 failed, 866 passed, 4 errors (R-1), 922 passed (R-2) and 928 passed (R-3), with only the allowed uv failures and two tests that need a `.git` directory the copied packet did not have. Those WSL numbers are the implementer's own report and were not independently verified; the macOS runs above are the gate.
+Implementation ran in Cursor on a Windows host, with tests in WSL (Ubuntu 24.04 and uv 0.7.21, per the coordinator's setup notes). Cursor reported its final WSL runs as 4 failed, 866 passed, 4 errors (R-1), 922 passed (R-2), 928 passed (R-3) and 940 passed before the R-4 review fix, with only the allowed uv failures and two tests that need a `.git` directory the copied packet did not have. Those WSL numbers are the implementer's own report and were not independently verified; the macOS runs above are the gate.
 
 End-to-end fixture tests cover the four usage cases: inbound across EVM networks and TRON, expand for a chosen payer with a transaction hash on every row, evidence ranking with confidence and reasons, and the same EVM address merged across chains. Negative tests cover zero requests without `--yes` and with `--dry-run`, isolation from `run-once`, `watchdog`, `balance-probe`, the scheduler and `install-service` (a static scan of all of `src/guardian` allows the `guardian.relations` import only in `cli.py`; the repository has no MCP module and no Grok Bot code that could call relations), `partial` on a page cap, a gap rather than an empty list on a failed read, hub rows hidden by default, BSC as `credential_missing`, Solana and Bitcoin as `unsupported`, forbidden wording in stdout, the JSON result and the Markdown report, and 0600 result files.
 
@@ -79,16 +84,10 @@ Command smoke runs on the same day. R-1 rows ran on `3173108`; R-2 rows ran on `
 - The Etherscan fallback was removed from R-1 after three review rounds kept finding defects in it, and because it needs a key the operator registers and could not be checked live. A network whose only routed history source is Etherscan reports `source_gated` (`etherscan_deferred`) and sends nothing.
 - The merge gate was two approving reviewers, not three. See Reviews.
 - The goal asked for the TronGrid keyless rate limit to be checked first. It was not measured: the responses carry no rate-limit headers and no limit was hit in these runs.
-- With `--yes`, the disclosure plan is not printed before the requests. See Open core gate.
 
-## Open core gate
+## Disclosure before send (closed by R-4)
 
-The goal's hard limit says the disclosure plan is printed before any network request. In the merged code (`src/guardian/relations/command.py`), a run without `--yes` or with `--dry-run` prints the plan and sends nothing, but a run with `--yes` builds the plan, sends the reads, and prints the plan only inside the final result. `docs/relations.md` says the plan is built before any request, which is accurate. This is open and needs an operator decision:
-
-- accept the two-step flow (a run without `--yes` shows the plan, then a run with `--yes` sends) as meeting the limit, and record that; or
-- add a follow-up that writes the plan to stderr as one JSON line before the first request when `--yes` is set, with a test that the write comes before the first backend call.
-
-This file is not merged until that decision is recorded here.
+The goal's hard limit says the disclosure plan is printed before any network request. R-1 through R-3 printed the plan and sent nothing without `--yes` or with `--dry-run`, but a run with `--yes` printed the plan only inside the final result. The first review of this file found that gap. The operator chose to fix it without changing the goal, and R-4 ([!96](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/96), merge `94d851c2e6f4a70fae59eac4f88a3d78c415d957`) writes the plan to stderr before the first request. `tests/unit/test_relations_r4.py` records stderr at the first request and checks that the line was written and flushed, that it equals the dry-run plan with the same redaction, and that no line is written on a `ConfigError`, without `--yes` or with `--dry-run`.
 
 ## Blocked on operator decisions
 
@@ -108,6 +107,9 @@ This file is not merged until that decision is recorded here.
 Cross-chain bridge pairing, exchange deposit-address clustering, Bitcoin common-input clustering, and any off-chain identity source. These carry high error rates and need a separate operator decision.
 
 ## Follow-ups (minor, not merge blockers)
+
+- R-4: the tests sample stderr at the fake backend's first send; in production the first network action is DNS inside the transport, which also runs only after the disclosure line. The observation point is later than it could be.
+- R-4: `tests/unit/test_relations_docs.py` has no assertion for the sentence R-4 added to `docs/cli-reference.md`.
 
 - R-1: the two round-5 test minors were done in R-2 (`a1a5797`): `test_etherscan_route_without_a_key_stays_deferred`, and a positive-control row in `test_mixed_route_expand_drops_a_sender_that_is_not_the_payer`.
 - R-2: `src/guardian/relations/markdown.py` reads `payload.get("seeds")` twice; the R-2 round-3 Opus review ran mypy and reported it as `union-attr`.
