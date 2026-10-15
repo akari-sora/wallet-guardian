@@ -94,7 +94,12 @@ def expand_report(
     if hub is True and expand_hub:
         body["noise"] = "high"
     if not (hub is True and not expand_hub):
-        body["co_recipients"] = _list_or_null(shown, reads)
+        if shown:
+            body["co_recipients"] = shown
+        elif source_complete:
+            body["co_recipients"] = []
+        else:
+            body["co_recipients"] = None
         if truncated is not None and isinstance(body["co_recipients"], list):
             body["truncated"] = truncated
     return body

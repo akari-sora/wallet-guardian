@@ -21,11 +21,6 @@ BLOCKSCOUT_NETWORKS = frozenset({
     "arbitrum-one",
     "polygon-pos",
 })
-ETHERSCAN_FALLBACK = frozenset({
-    "ethereum-mainnet",
-    "arbitrum-one",
-    "polygon-pos",
-})
 _HISTORY = (
     "history.native_external",
     "history.native_internal",
@@ -167,20 +162,10 @@ def choices_for(
     routed = _routed(document, network)
     sources = document.get("sources") or {}
     blockscout = _first_blockscout(routed, sources, status_map, endpoints)
-    etherscan = None
-    if network in ETHERSCAN_FALLBACK:
-        etherscan = _first_etherscan(routed, sources, status_map, endpoints)
-    if blockscout is not None and etherscan is not None:
-        return [blockscout, Choice(
-            "fallback",
-            source_id=etherscan.source_id,
-            adapter="etherscan_v2",
-            host=etherscan.host,
-        )]
     if blockscout is not None:
         return [blockscout]
-    if etherscan is not None:
-        return [etherscan]
+    if any((sources.get(source_id) or {}).get("adapter") == "etherscan_v2" for source_id in routed):
+        return [Choice("skip", read_status="gap", reason="source_gated", gap="etherscan_deferred")]
     reason = "credential_missing" if _keyed_but_locked(routed, sources, status_map) else "endpoint_missing"
     gap = "credential_missing" if reason == "credential_missing" else ""
     return [Choice("skip", read_status="gap", reason=reason, gap=gap)]
@@ -291,20 +276,6 @@ def _first_blockscout(routed, sources, status_map, endpoints) -> Choice | None:
     return None
 
 
-def _first_etherscan(routed, sources, status_map, endpoints) -> Choice | None:
-    for source_id in routed:
-        source = sources.get(source_id) or {}
-        if source.get("adapter") != "etherscan_v2" or source.get("enabled") is not True:
-            continue
-        if not _present(status_map, source_id):
-            continue
-        host = host_of(endpoint_text(endpoints, source_id))
-        if not host:
-            continue
-        return Choice("primary", source_id=source_id, adapter="etherscan_v2", host=host)
-    return None
-
-
 def _tron_choice(document: Mapping[str, Any], endpoints: Any) -> list[Choice]:
     sources = document.get("sources") or {}
     preferred: list[str] = []
@@ -333,7 +304,7 @@ def _keyed_but_locked(routed, sources, status_map) -> bool:
         source = sources.get(source_id) or {}
         if source.get("enabled") is not True:
             continue
-        if source.get("adapter") not in {"blockscout", "etherscan_v2"}:
+        if source.get("adapter") != "blockscout":
             continue
         if isinstance(source.get("credential_env"), str) and source.get("credential_env") and not _present(status_map, source_id):
             return True

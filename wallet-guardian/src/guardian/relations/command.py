@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
@@ -11,17 +12,19 @@ from pathlib import Path
 from typing import Any
 
 from guardian.configuration import ConfigError, load_public_config, resolve_private_inputs
+from guardian.credentials import resolve_named
 from guardian.identities import parse_address
 from guardian.locations import secure_write_text
 from guardian.network_registry import load_registry
 from guardian.pipeline import _secrets, _transport, default_backend
-from guardian.relations.fetch import Outcome, read_blockscout, read_etherscan, read_tron
+from guardian.relations.fetch import Outcome, read_blockscout, read_tron
 from guardian.relations.report import expand_report, inbound_report, overall
 from guardian.relations.select import Job, build_jobs, plan_for
 from guardian.resources import resource_path
 from guardian.security.redact import redact
-from guardian.sources.etherscan import resolve_credential
 from guardian.sources.transport import build_endpoint_registry
+
+_CREDENTIAL_ENV = re.compile(r"^[A-Z][A-Z0-9_]{0,95}$")
 
 _MAX_PAGES = 50
 
@@ -113,11 +116,7 @@ def _perform(jobs, transport, document, secrets, registry, page_cap, stop_timest
     adopted: list[bool] = []
     sources = document["sources"]
     for job in jobs:
-        has_fallback = any(choice.role == "fallback" for choice in job.choices)
-        primary: Outcome | None = None
         for choice in job.choices:
-            if choice.role == "fallback" and primary is not None and primary.status in {"complete", "partial"}:
-                continue
             if choice.role == "skip":
                 outcome = Outcome(choice.read_status or "gap", choice.reason, [])
                 reads.append(_read_row(job, choice, outcome))
@@ -129,56 +128,9 @@ def _perform(jobs, transport, document, secrets, registry, page_cap, stop_timest
             if outcome.payer_is_contract is True:
                 payer_contract = True
             reads.append(_read_row(job, choice, outcome))
-            if choice.role == "primary":
-                primary = outcome
-                # A gap with a fallback still keeps edges from the parts that were read.
-                if has_fallback and outcome.status == "gap":
-                    continue
-                edges.extend(outcome.edges)
-                adopted.append(outcome.status == "complete")
-                continue
-            if choice.role == "fallback" and primary is not None:
-                edges.extend(_merge_edges(primary.edges, outcome.edges))
-                adopted.append(outcome.status == "complete")
-                continue
             edges.extend(outcome.edges)
             adopted.append(outcome.status == "complete")
     return reads, edges, payer_contract, bool(adopted) and all(adopted)
-
-
-def _edge_key(edge) -> tuple:
-    return (
-        edge.network,
-        edge.tx_hash,
-        edge.kind,
-        edge.contract or "",
-        edge.sender.lower(),
-        edge.recipient.lower(),
-        edge.raw_amount,
-    )
-
-
-def _merge_edges(primary: list, fallback: list) -> list:
-    """Multiset union. The same transfer key keeps the larger of the two counts."""
-    primary_counts: dict[tuple, int] = {}
-    fallback_counts: dict[tuple, int] = {}
-    for edge in primary:
-        key = _edge_key(edge)
-        primary_counts[key] = primary_counts.get(key, 0) + 1
-    for edge in fallback:
-        key = _edge_key(edge)
-        fallback_counts[key] = fallback_counts.get(key, 0) + 1
-    seen: dict[tuple, int] = {}
-    merged = []
-    for source in (primary, fallback):
-        for edge in source:
-            key = _edge_key(edge)
-            limit = max(primary_counts.get(key, 0), fallback_counts.get(key, 0))
-            used = seen.get(key, 0)
-            if used < limit:
-                merged.append(edge)
-                seen[key] = used + 1
-    return merged
 
 
 def _run_choice(job: Job, choice, transport, sources, secrets, registry, page_cap, stop_timestamp, clock) -> Outcome:
@@ -190,21 +142,6 @@ def _run_choice(job: Job, choice, transport, sources, secrets, registry, page_ca
             transport,
             choice.source_id,
             credential=_credential(source, secrets),
-            address=job.address,
-            direction=job.direction,
-            network=job.network,
-            family=family,
-            page_cap=page_cap,
-            stop_timestamp=stop_timestamp,
-            entry=entry,
-            clock=clock,
-        )
-    if choice.adapter == "etherscan_v2":
-        return read_etherscan(
-            transport,
-            choice.source_id,
-            source,
-            secrets=secrets,
             address=job.address,
             direction=job.direction,
             network=job.network,
@@ -233,9 +170,19 @@ def _credential(source: Mapping[str, Any], secrets: Mapping[str, str]) -> str | 
     if not isinstance(name, str) or not name:
         return None
     try:
-        return resolve_credential(os.environ, name, secrets)
+        return _profile_credential(name, secrets)
     except ValueError:
         return None
+
+
+def _profile_credential(name: str, secrets: Mapping[str, str]) -> str:
+    """Profile value first, then the process environment."""
+    if not isinstance(name, str) or _CREDENTIAL_ENV.fullmatch(name) is None:
+        raise ValueError("credential_env")
+    found = resolve_named(name, secrets, os.environ)
+    if not found.present:
+        raise ValueError("credential_missing")
+    return found.reveal()
 
 
 def _read_row(job: Job, choice, outcome: Outcome) -> dict:
@@ -358,7 +305,7 @@ def _extra_secrets(secrets: Mapping[str, str], document: Mapping[str, Any]) -> l
         if not isinstance(name, str) or not name:
             continue
         try:
-            value = resolve_credential(os.environ, name, secrets)
+            value = _profile_credential(name, secrets)
         except ValueError:
             continue
         if isinstance(value, str) and len(value) >= 6 and value not in seen:
