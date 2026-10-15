@@ -7,19 +7,25 @@ import os
 import re
 import time
 from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from guardian.configuration import ConfigError, load_public_config, resolve_private_inputs
+from guardian.configuration import (
+    ConfigError,
+    load_public_config,
+    resolve_private_inputs,
+)
 from guardian.credentials import resolve_named
 from guardian.identities import parse_address
 from guardian.locations import secure_write_text
 from guardian.network_registry import load_registry
 from guardian.pipeline import _secrets, _transport, default_backend
 from guardian.relations.fetch import Outcome, read_blockscout, read_tron
+from guardian.relations.labels import load_user_labels
+from guardian.relations.markdown import render_markdown
 from guardian.relations.report import expand_report, inbound_report, overall
-from guardian.relations.select import Job, build_jobs, plan_for
+from guardian.relations.select import Job, _expand_targets, build_jobs, plan_for
 from guardian.resources import resource_path
 from guardian.security.redact import redact
 from guardian.sources.transport import build_endpoint_registry
@@ -49,6 +55,8 @@ def execute(
     registry = load_registry(resource_path("config", "chains"))
     secrets = _secrets(public)
     endpoints = build_endpoint_registry(public.document, secrets=secrets, environ=os.environ)
+    labels = load_user_labels(private.state_dir, registry)
+    expand_networks = _expand_targets(getattr(args, "network", None)) if command == "expand" else None
     try:
         seeds = _seeds(args, private, command)
         payer = _payer(args, command)
@@ -57,7 +65,7 @@ def execute(
             seeds=seeds,
             payer=payer,
             explicit_networks=getattr(args, "network", None) if command == "inbound" else None,
-            expand_network=getattr(args, "network", None) if command == "expand" else None,
+            expand_network=expand_networks,
             enabled=list(public.document["enabled_networks"]),
             document=public.document,
             status_map=private.source_status,
@@ -77,21 +85,26 @@ def execute(
         payload = _envelope(
             command, "dry_run" if dry_run else "consent_required", since_days, max_pages, moment, plan, [],
         )
-        payload = _store(private.state_dir, command, payload, moment, secrets, public.document)
+        payload = _store(
+            private.state_dir, command, payload, moment, secrets, public.document,
+            markdown=bool(getattr(args, "markdown", False)),
+            seeds=seeds,
+            max_nodes=max_nodes,
+        )
         return payload, 0 if dry_run else 2
     transport = _transport(public, default_backend() if backend is None else backend, now)
     reads, edges, payer_contract, source_complete = _perform(
         jobs, transport, public.document, secrets, registry, max_pages, _stop(moment, since_days), now,
     )
     if command == "inbound":
-        body = inbound_report(edges, reads, max_nodes=max_nodes)
+        body = inbound_report(edges, reads, max_nodes=max_nodes, labels=labels, registry=registry)
     else:
         family, canonical = payer or ("", "")
         body = expand_report(
             edges,
             reads,
             payer=canonical,
-            network=str(getattr(args, "network", "")),
+            networks=expand_networks or [],
             seeds=[item[1] for item in seeds],
             family=family,
             hub_threshold=hub_threshold,
@@ -99,12 +112,19 @@ def execute(
             payer_is_contract=payer_contract,
             max_nodes=max_nodes,
             source_complete=source_complete,
+            labels=labels,
+            registry=registry,
         )
     payload = _envelope(command, overall(reads), since_days, max_pages, moment, plan, reads)
     payload.update(body)
     if payload.get("truncated") and payload.get("status") == "complete":
         payload["status"] = "partial"
-    payload = _store(private.state_dir, command, payload, moment, secrets, public.document)
+    payload = _store(
+        private.state_dir, command, payload, moment, secrets, public.document,
+        markdown=bool(getattr(args, "markdown", False)),
+        seeds=seeds,
+        max_nodes=max_nodes,
+    )
     _drop(secrets)
     return payload, 0
 
@@ -256,7 +276,7 @@ def _parsed(family: str, raw: str) -> tuple[str, str]:
 def _envelope(command, status, since_days, max_pages, moment, plan, reads) -> dict:
     return {
         "command": command,
-        "generated_at": datetime.fromtimestamp(moment, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated_at": datetime.fromtimestamp(moment, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "max_pages": max_pages,
         "plan": plan,
         "reads": reads,
@@ -265,23 +285,49 @@ def _envelope(command, status, since_days, max_pages, moment, plan, reads) -> di
     }
 
 
-def _store(state_dir: Path, command: str, payload: dict, moment: float, secrets: Mapping[str, str], document: Mapping[str, Any]) -> dict:
+def _store(
+    state_dir: Path,
+    command: str,
+    payload: dict,
+    moment: float,
+    secrets: Mapping[str, str],
+    document: Mapping[str, Any],
+    *,
+    markdown: bool = False,
+    seeds: list | None = None,
+    max_nodes: int = 500,
+) -> dict:
     directory = Path(state_dir) / "relations"
-    stamp = datetime.fromtimestamp(moment, timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    stamp = datetime.fromtimestamp(moment, UTC).strftime("%Y%m%dT%H%M%S%fZ")
     path = directory / f"{stamp}-{command}.json"
     suffix = 2
     while path.exists():
         path = directory / f"{stamp}-{command}-{suffix}.json"
         suffix += 1
+    md_path = path.with_suffix(".md")
     payload["result_path"] = str(path)
+    if markdown:
+        payload["markdown_path"] = str(md_path)
+    if command == "expand":
+        payload["seeds"] = [item[1] for item in (seeds or [])]
     extra = _extra_secrets(secrets, document)
+    payload = _redact_payload(payload, extra)
+    if markdown:
+        rendered = render_markdown(payload, max_nodes=max_nodes)
+        if not rendered.endswith("\n"):
+            rendered += "\n"
+        secure_write_text(md_path, rendered)
     text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    cleaned = redact(text, extra)
-    if cleaned != text:
-        payload = json.loads(cleaned)
-        text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     secure_write_text(path, text)
     return payload
+
+
+def _redact_payload(payload: dict, extra: list[str]) -> dict:
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    cleaned = redact(text, extra)
+    if cleaned == text:
+        return payload
+    return json.loads(cleaned)
 
 
 def _queried_nodes(jobs) -> int:
@@ -322,7 +368,7 @@ def _bounded_int(value: Any, name: str, low: int, high: int) -> int:
 
 def _stop(moment: float, since_days: int) -> int:
     stamp = int(moment) - since_days * 86400
-    return stamp if stamp > 0 else 0
+    return max(0, stamp)
 
 
 def _drop(secrets: dict) -> None:

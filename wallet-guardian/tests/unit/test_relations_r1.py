@@ -1880,14 +1880,17 @@ def test_mixed_route_challenge_stays_off_etherscan(tmp_path: Path, monkeypatch: 
 def test_mixed_route_expand_drops_a_sender_that_is_not_the_payer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     sources, routes, secrets = mixed_arbitrum()
     backend = install_arbitrum(tmp_path, monkeypatch, sources, routes, secrets)
-    fill_tails(backend, [], [native_item(LEFT, RIGHT, 4, STAMP, tx(3))])
+    fill_tails(backend, [], [
+        native_item(LEFT, RIGHT, 4, STAMP, tx(3)),
+        native_item(PAYER, LEFT, 8, STAMP, tx(4)),
+    ])
     code, body = invoke(capsys, expand_argv(
         tmp_path / "monitor.json", "--yes", "--payer", PAYER, "--network", "arbitrum-one", "--seed", SEED,
     ), backend)
     assert code == 0, body
     assert body["reads"][0]["source_id"] == ARB_BLOCKSCOUT
     assert body["reads"][0]["read_status"] == "complete"
-    assert body["co_recipients"] == []
+    assert [row["address"] for row in body["co_recipients"]] == [LEFT]
     assert all(urlsplit(call.url).hostname == ARB_BLOCKSCOUT_HOST for call in backend.calls)
 
 
@@ -2072,6 +2075,33 @@ def test_disabled_etherscan_route_is_endpoint_missing(tmp_path: Path, monkeypatc
     assert len(unqueried) == 1
     assert unqueried[0]["reason"] == "endpoint_missing"
     assert "gap" not in unqueried[0]
+
+
+def test_etherscan_route_without_a_key_stays_deferred(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.delenv("ETHERSCAN_API_KEY", raising=False)
+    sources = {
+        "etherscan": _source("etherscan_v2", "ETHERSCAN_API_BASE", "etherscan-account", "ETHERSCAN_API_KEY"),
+    }
+    backend = install_arbitrum(
+        tmp_path, monkeypatch, sources, history_routes("arbitrum-one", ["etherscan"]),
+        {"ETHERSCAN_API_BASE": f"https://{ETHERSCAN_HOST}"},
+    )
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "arbitrum-one",
+    ), backend)
+    assert code == 0, body
+    assert backend.calls == []
+    assert body["counterparties"] is None
+    assert body["plan"]["queries"] == []
+    row = body["reads"][0]
+    assert row["read_status"] == "gap"
+    assert row["reason"] == "source_gated"
+    assert row["gap"] == "etherscan_deferred"
+    assert row["reason"] != "credential_missing"
+    unqueried = body["plan"]["unqueried"]
+    assert len(unqueried) == 1
+    assert unqueried[0]["reason"] == "source_gated"
+    assert unqueried[0]["gap"] == "etherscan_deferred"
 
 
 def call_query(call) -> dict:
