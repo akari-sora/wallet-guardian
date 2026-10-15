@@ -164,11 +164,15 @@ def choices_for(
     blockscout = _first_blockscout(routed, sources, status_map, endpoints)
     if blockscout is not None:
         return [blockscout]
-    if any((sources.get(source_id) or {}).get("adapter") == "etherscan_v2" for source_id in routed):
+    if _keyed_but_locked(routed, sources, status_map):
+        return [Choice("skip", read_status="gap", reason="credential_missing", gap="credential_missing")]
+    if any(
+        (sources.get(source_id) or {}).get("adapter") == "etherscan_v2"
+        and (sources.get(source_id) or {}).get("enabled") is True
+        for source_id in routed
+    ):
         return [Choice("skip", read_status="gap", reason="source_gated", gap="etherscan_deferred")]
-    reason = "credential_missing" if _keyed_but_locked(routed, sources, status_map) else "endpoint_missing"
-    gap = "credential_missing" if reason == "credential_missing" else ""
-    return [Choice("skip", read_status="gap", reason=reason, gap=gap)]
+    return [Choice("skip", read_status="gap", reason="endpoint_missing")]
 
 
 def plan_for(jobs: Sequence[Job]) -> dict[str, Any]:

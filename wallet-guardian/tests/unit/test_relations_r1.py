@@ -275,6 +275,53 @@ def blockscout_profile(network: str, source_id: str, env: str, url: str) -> tupl
     return sources, routes, {env: url}
 
 
+_HISTORY = (
+    "history.native_external",
+    "history.native_internal",
+    "history.fungible",
+    "history.token",
+)
+ARB_BLOCKSCOUT = "blockscout-arbitrum"
+ARB_BLOCKSCOUT_HOST = "arb.blockscout.example.invalid"
+ETHERSCAN_HOST = "etherscan.example.invalid"
+ETHERSCAN_KEY = "synthetic-etherscan-key-r1"
+PROFILE_BLOCK_KEY = "profile-blockscout-key-r1"
+ENV_BLOCK_KEY = "environment-blockscout-key-r1"
+
+
+def history_routes(network: str, source_ids: list[str]) -> list[dict]:
+    return [
+        {"network": network, "capability": name, "source_ids": list(source_ids)}
+        for name in _HISTORY
+    ]
+
+
+def mixed_arbitrum() -> tuple[dict, list[dict], dict]:
+    sources = {
+        "etherscan": _source("etherscan_v2", "ETHERSCAN_API_BASE", "etherscan-account", "ETHERSCAN_API_KEY"),
+        ARB_BLOCKSCOUT: _source("blockscout", "BLOCKSCOUT_ARBITRUM_URL", "blockscout-arbitrum"),
+    }
+    secrets = {
+        "ETHERSCAN_API_BASE": f"https://{ETHERSCAN_HOST}",
+        "ETHERSCAN_API_KEY": ETHERSCAN_KEY,
+        "BLOCKSCOUT_ARBITRUM_URL": f"https://{ARB_BLOCKSCOUT_HOST}",
+    }
+    return sources, history_routes("arbitrum-one", ["etherscan", ARB_BLOCKSCOUT]), secrets
+
+
+def install_arbitrum(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sources: dict,
+    routes: list[dict],
+    secrets: dict,
+) -> PathBackend:
+    return install(
+        tmp_path, monkeypatch, networks=["arbitrum-one"], sources=sources, routes=routes, secrets=secrets,
+        address=SEED, family="evm", account_networks=["arbitrum-one"],
+    )
+
+
 def fill_tails(backend: PathBackend, transfers: list, transactions: list) -> None:
     backend.add(tail_is("token-transfers"), scout(transfers))
     backend.add(tail_is("transactions"), scout(transactions))
@@ -566,7 +613,6 @@ def test_cloudflare_challenge_is_a_gap(tmp_path: Path, monkeypatch: pytest.Monke
     assert body["counterparties"] is None
     assert body["reads"][0]["read_status"] == "gap"
     assert body["reads"][0]["reason"] == "bot_challenge"
-    assert all(row["host"] != "etherscan.example.invalid" for row in body["plan"]["queries"])
 
 
 def test_contract_payer_is_a_hub_until_expand_hub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1786,6 +1832,246 @@ def test_tron_shaped_text_falls_back_when_tron_parse_fails() -> None:
     with pytest.raises(ConfigError) as caught:
         _classify("T" + "1" * 33)
     assert str(caught.value).startswith("bad_solana")
+
+
+def test_mixed_route_inbound_keeps_only_the_inbound_side(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources, routes, secrets = mixed_arbitrum()
+    backend = install_arbitrum(tmp_path, monkeypatch, sources, routes, secrets)
+    fill_tails(backend, [], [
+        native_item(SEED, RIGHT, 9, STAMP, tx(1)),
+        native_item(LEFT, SEED, 4, STAMP, tx(2)),
+    ])
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "arbitrum-one",
+    ), backend)
+    assert code == 0, body
+    assert body["reads"][0]["source_id"] == ARB_BLOCKSCOUT
+    assert body["reads"][0]["read_status"] == "complete"
+    assert [row["address"] for row in body["counterparties"]] == [LEFT]
+    assert body["counterparties"][0]["tx_hashes"] == [tx(2)]
+    hosts = {row["host"] for row in body["plan"]["queries"]}
+    assert hosts == {ARB_BLOCKSCOUT_HOST}
+    assert backend.calls
+    assert all(urlsplit(call.url).hostname != ETHERSCAN_HOST for call in backend.calls)
+    rendered = json.dumps(body)
+    assert ETHERSCAN_KEY not in rendered
+    assert ETHERSCAN_HOST not in rendered
+
+
+def test_mixed_route_challenge_stays_off_etherscan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources, routes, secrets = mixed_arbitrum()
+    backend = install_arbitrum(tmp_path, monkeypatch, sources, routes, secrets)
+    backend.add(lambda _call: True, challenge())
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "arbitrum-one",
+    ), backend)
+    assert code == 0, body
+    row = body["reads"][0]
+    assert row["source_id"] == ARB_BLOCKSCOUT
+    assert row["read_status"] == "gap"
+    assert row["reason"] == "bot_challenge"
+    assert row["reason"] != "source_gated"
+    assert row.get("gap") != "etherscan_deferred"
+    assert body["counterparties"] is None
+    assert backend.calls
+    assert all(urlsplit(call.url).hostname != ETHERSCAN_HOST for call in backend.calls)
+
+
+def test_mixed_route_expand_drops_a_sender_that_is_not_the_payer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources, routes, secrets = mixed_arbitrum()
+    backend = install_arbitrum(tmp_path, monkeypatch, sources, routes, secrets)
+    fill_tails(backend, [], [native_item(LEFT, RIGHT, 4, STAMP, tx(3))])
+    code, body = invoke(capsys, expand_argv(
+        tmp_path / "monitor.json", "--yes", "--payer", PAYER, "--network", "arbitrum-one", "--seed", SEED,
+    ), backend)
+    assert code == 0, body
+    assert body["reads"][0]["source_id"] == ARB_BLOCKSCOUT
+    assert body["reads"][0]["read_status"] == "complete"
+    assert body["co_recipients"] == []
+    assert all(urlsplit(call.url).hostname == ARB_BLOCKSCOUT_HOST for call in backend.calls)
+
+
+def test_profile_blockscout_key_wins_over_the_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources = {
+        "blockscout-eth": _source("blockscout", "BLOCKSCOUT_ETH_URL", "blockscout-public", "BLOCKSCOUT_API_KEY"),
+    }
+    routes = history_routes("ethereum-mainnet", ["blockscout-eth"])
+    backend = install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes,
+        secrets={
+            "BLOCKSCOUT_ETH_URL": "https://eth.blockscout.example.invalid",
+            "BLOCKSCOUT_API_KEY": PROFILE_BLOCK_KEY,
+        },
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+    monkeypatch.setenv("BLOCKSCOUT_API_KEY", ENV_BLOCK_KEY)
+    fill_tails(backend, [token_item(LEFT, SEED, 4, STAMP, tx(1))], [])
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert [row["address"] for row in body["counterparties"]] == [LEFT]
+    assert backend.calls
+    for call in backend.calls:
+        headers = getattr(call, "credential_headers", ())
+        assert headers
+        name, secret = headers[0]
+        assert name.lower() == "authorization"
+        assert secret.reveal() == f"Bearer {PROFILE_BLOCK_KEY}"
+        assert ENV_BLOCK_KEY not in secret.reveal()
+        assert PROFILE_BLOCK_KEY not in call.url
+        assert ENV_BLOCK_KEY not in call.url
+    rendered = json.dumps(body)
+    stored = Path(body["result_path"]).read_text(encoding="utf-8")
+    assert PROFILE_BLOCK_KEY not in rendered
+    assert ENV_BLOCK_KEY not in rendered
+    assert PROFILE_BLOCK_KEY not in stored
+    assert ENV_BLOCK_KEY not in stored
+
+
+def test_illegal_credential_env_returns_none_and_sends_no_key() -> None:
+    from guardian.relations.command import _credential
+    from guardian.relations.fetch import read_blockscout
+
+    secret = "lower-case-blockscout-key-r1"
+    source = {"credential_env": "lower_case"}
+    found = _credential(source, {"lower_case": secret})
+    assert found is None
+    assert _credential(source, {}) is None
+    transport = _Pages([{"items": [], "next_page_params": None}] * 3)
+    outcome = read_blockscout(
+        transport,
+        "blockscout",
+        credential=found,
+        address=SEED,
+        direction="to",
+        network="ethereum-mainnet",
+        family="evm",
+        page_cap=1,
+        stop_timestamp=0,
+        entry={},
+        clock=lambda: CLOCK,
+    )
+    assert outcome.status == "complete"
+    assert transport.calls
+    for operation in transport.calls:
+        assert operation.headers is None
+        rendered = json.dumps({"path": operation.path, "query": operation.query, "headers": operation.headers})
+        assert secret not in rendered
+
+
+def test_expand_transaction_budget_leaves_the_recipient_list_null(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources, routes, secrets = blockscout_profile(
+        "ethereum-mainnet", "blockscout-eth", "BLOCKSCOUT_ETH_URL", "https://eth.blockscout.example.invalid",
+    )
+    backend = install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+    backend.add(tail_is("token-transfers"), empty_scout())
+    backend.add(tail_is("transactions"), BudgetExhausted("daily_cap"))
+    backend.add(tail_is("internal-transactions"), empty_scout())
+    code, body = invoke(capsys, expand_argv(
+        tmp_path / "monitor.json", "--yes", "--payer", PAYER, "--network", "ethereum-mainnet", "--seed", SEED,
+    ), backend)
+    assert code == 0, body
+    assert body["co_recipients"] is None
+    assert body["recipient_count_complete"] is False
+    assert body["hub"] is None
+
+
+def test_failed_blockscout_rows_do_not_become_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources, routes, secrets = blockscout_profile(
+        "ethereum-mainnet", "blockscout-eth", "BLOCKSCOUT_ETH_URL", "https://eth.blockscout.example.invalid",
+    )
+    backend = install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+    failed_tx = native_item(LEFT, SEED, 4, STAMP, tx(1))
+    failed_tx["status"] = "error"
+    failed_internal = native_item(RIGHT, SEED, 6, STAMP, tx(3))
+    failed_internal["success"] = False
+    backend.add(tail_is("token-transfers"), empty_scout())
+    backend.add(tail_is("transactions"), scout([failed_tx, native_item(OTHER, SEED, 5, STAMP, tx(2))]))
+    backend.add(tail_is("internal-transactions"), scout([
+        failed_internal,
+        native_item(PAYER, SEED, 7, STAMP, tx(4)),
+    ]))
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert body["status"] == "complete"
+    assert body["reads"][0]["read_status"] == "complete"
+    assert {row["address"] for row in body["counterparties"]} == {OTHER, PAYER}
+    hashes = [item for row in body["counterparties"] for item in row["tx_hashes"]]
+    assert tx(1) not in hashes
+    assert tx(3) not in hashes
+    assert tx(2) in hashes
+    assert tx(4) in hashes
+
+
+def test_locked_blockscout_is_credential_missing_beside_etherscan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.delenv("BLOCKSCOUT_API_KEY", raising=False)
+    sources = {
+        "etherscan": _source("etherscan_v2", "ETHERSCAN_API_BASE", "etherscan-account", "ETHERSCAN_API_KEY"),
+        ARB_BLOCKSCOUT: _source(
+            "blockscout", "BLOCKSCOUT_ARBITRUM_URL", "blockscout-arbitrum", "BLOCKSCOUT_API_KEY",
+        ),
+    }
+    backend = install_arbitrum(
+        tmp_path, monkeypatch, sources, history_routes("arbitrum-one", ["etherscan", ARB_BLOCKSCOUT]),
+        {
+            "ETHERSCAN_API_BASE": f"https://{ETHERSCAN_HOST}",
+            "ETHERSCAN_API_KEY": ETHERSCAN_KEY,
+            "BLOCKSCOUT_ARBITRUM_URL": f"https://{ARB_BLOCKSCOUT_HOST}",
+        },
+    )
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "arbitrum-one",
+    ), backend)
+    assert code == 0, body
+    assert backend.calls == []
+    assert body["counterparties"] is None
+    assert body["plan"]["queries"] == []
+    row = body["reads"][0]
+    assert row["read_status"] == "gap"
+    assert row["reason"] == "credential_missing"
+    assert row["gap"] == "credential_missing"
+    assert row["reason"] != "source_gated"
+    unqueried = body["plan"]["unqueried"]
+    assert len(unqueried) == 1
+    assert unqueried[0]["reason"] == "credential_missing"
+    assert unqueried[0]["gap"] == "credential_missing"
+
+
+def test_disabled_etherscan_route_is_endpoint_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    source = _source("etherscan_v2", "ETHERSCAN_API_BASE", "etherscan-account", "ETHERSCAN_API_KEY")
+    source["enabled"] = False
+    backend = install_arbitrum(
+        tmp_path, monkeypatch, {"etherscan": source}, history_routes("arbitrum-one", ["etherscan"]),
+        {
+            "ETHERSCAN_API_BASE": f"https://{ETHERSCAN_HOST}",
+            "ETHERSCAN_API_KEY": ETHERSCAN_KEY,
+        },
+    )
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "arbitrum-one",
+    ), backend)
+    assert code == 0, body
+    assert backend.calls == []
+    assert body["counterparties"] is None
+    assert body["plan"]["queries"] == []
+    row = body["reads"][0]
+    assert row["read_status"] == "gap"
+    assert row["reason"] == "endpoint_missing"
+    assert "gap" not in row
+    assert row["reason"] != "source_gated"
+    unqueried = body["plan"]["unqueried"]
+    assert len(unqueried) == 1
+    assert unqueried[0]["reason"] == "endpoint_missing"
+    assert "gap" not in unqueried[0]
 
 
 def call_query(call) -> dict:
