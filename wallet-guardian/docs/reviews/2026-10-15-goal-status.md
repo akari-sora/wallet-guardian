@@ -1,6 +1,6 @@
 # Goal status for the 2026-10-14 review (2026-10-15)
 
-Handoff for the packages in [2026-10-14-review-summary.md](2026-10-14-review-summary.md). `main` at the time of writing is `a84f7caa258989b27f0892273dd50cfbadc0e223` (`Merge !87 into main`). SHAs below are the merge commits on `main` unless noted.
+Handoff for the packages in [2026-10-14-review-summary.md](2026-10-14-review-summary.md). `main` at the time of writing is `f6c8b57d22bf929daa4543d519d0542f0d4f75a9` (`Merge !88 into main`). SHAs below are the merge commits on `main` unless noted.
 
 This file records what landed and what did not. It does not say the monitor covers all chains, that it is production ready, or that a 72-hour shadow was verified.
 
@@ -28,7 +28,7 @@ The 2026-10-14 review itself is !60, merge `c25892563a5a9149e23f33290790028a8caf
 | WP-1 | Artifact inventory without a deploy. `action-client/deploy/releases.json` `releases` is still `[]`. Old hash deployments were not deleted. `vercel.json` and the GitLab `pages` job were not deleted. | [!64](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/64) | `32d7eac89117e80f7aa3ae6683840737b7f1c9d9` |
 | WP-2 | Private-task routes come from one origin policy. `issue_task_link` does not issue a caller origin. `fixed_https_origin` stays false. `data_path` stays in the policy. | [!82](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/82) | `47197c4c1264727a6b2631c85510cc51a719c98b` |
 | WP-3 | Send construction stays out of the default send-off bundle. !69 makes the send-off artifact test build `dist` itself. CI does not build a send variant beside the default build. | [!66](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/66), [!69](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/69) | `44c3e3512f205d051da23a2aac9d9776b08184c6`, `ef3c19c3fb76b76ac25f64ba77182674d71e34e7` |
-| WP-4 | Fail-closed session and membership revocation. The 12h / 30min / 15min constants are suggestions, not a D-9 decision. On `a84f7ca` a switch still revokes, and the sender tab also applies its own logout broadcast. That banner bug is open in !88 and is not on `main`. | [!85](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/85) | `76ad84299c7ea6fb510cac73a689ad0d76423197` |
+| WP-4 | Fail-closed session and membership revocation. The 12h / 30min / 15min constants are suggestions, not a D-9 decision. !88, merge `f6c8b57d22bf929daa4543d519d0542f0d4f75a9`, makes the sender ignore its own logout broadcast. A switch still revokes, and other tabs still log out. | [!85](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/85), [!88](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/88) | `76ad84299c7ea6fb510cac73a689ad0d76423197`, `f6c8b57d22bf929daa4543d519d0542f0d4f75a9` |
 | WP-5 | Client-owned evidence checks. Empty Lista `deployment_approvals` stay unapproved. `effectsCheck` is a dry-run `eth_call`, not a trace. ADR 0001 was not revised. | [!83](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/83) | `af7d0b43878316e7da9f7ed298dba7076e0b81e7` |
 | WP-6 | One local outcome per task. A transaction hash is not completion. Logout does not clear a local pending record. Nothing is auto-resent. `requestUserSend` on the default page still throws. The page does not call `confirmModeAOutcome`. | [!86](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/86) | `5c75a9ca63a0e8fb0ea91bb4f7aa07ec751c6375` |
 | WP-7 | Fail-closed Mode A send variant. `vite.config.ts` calls the gate itself when `WG_SEND_VARIANT=mode_a` and throws if it fails. Output is `dist-mode-a`. No approved inventory entry was added. No successful send-variant build was run, and nothing was deployed. WalletConnect methods stay `["personal_sign"]`. | [!84](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/84) | `95a94f5a40206f2e2cd1887b021ecccdc47d2531` |
@@ -40,11 +40,14 @@ CI follow-up, not one of the review packages: !87, merge `a84f7caa258989b27f0892
 ## What was verified
 
 - Local pytest during the package work. In this environment the only product-unrelated failure is `tests/install/test_installable_monitor.py::test_mcm_share_s4_03_pinned_install_uv_pip` because `python -m ensurepip` is missing. A local run is not a CI pass.
-- The operator reports that self-hosted CI on runner `wg-9700x`, for `main` `a84f7ca` after !84 and !87, is **800 passed, 0 skipped**. That report is the CI result from !87 onward. This handoff did not re-run that runner. Older GitLab.com shared-runner jobs that ended in `ci_quota_exceeded` are not a pass.
-- `client-tests` on that CI runs the Node unit scripts and `npm run build`. It does not run `test:wallets:artifact`.
+- The **800 passed, 0 skipped** CI result is MR pipeline 2948700941 on the !87 head `b6b09a4266d7708d78fdae64c103a8aa26875825`, before !84 merged. No main-branch pipeline ran after the `[skip ci]` merges `95a94f5a40206f2e2cd1887b021ecccdc47d2531`, `a84f7caa258989b27f0892273dd50cfbadc0e223`, and `f6c8b57d22bf929daa4543d519d0542f0d4f75a9`.
+- No merge before !87 had a passing CI run. `python-tests` timed out on `wg-9700x` for the MR pipelines of !81–!86 and also !88. Every merge rested on the local gate: a trial merge, full pytest, and the Node suites.
+- `client-tests` on pipeline 2948700941 runs the Node unit scripts and `npm run build`. It does not run `test:wallets:artifact`.
 
 ## What was not verified
 
+- No main-branch CI since the `[skip ci]` merges (`95a94f5a40206f2e2cd1887b021ecccdc47d2531`, `a84f7caa258989b27f0892273dd50cfbadc0e223`, `f6c8b57d22bf929daa4543d519d0542f0d4f75a9`).
+- `test:wallets:artifact` is local-only. It needs Chrome.
 - No live keys (Blockscout PRO, Alchemy, NodeReal, or any other).
 - No real wallet, and no WalletConnect send.
 - No 24-hour balance-probe measurement.
@@ -54,11 +57,11 @@ CI follow-up, not one of the review packages: !87, merge `a84f7caa258989b27f0892
 
 ## Decisions still with the operator
 
-The 2026-10-14 Mode A table defines D-1, D-2, D-3, D-4, D-5, D-9, D-10, D-11, and D-12. It does not define D-6, D-7, or D-8. None of the defined items below were decided by these merges.
+The 2026-10-14 Mode A table defines D-1, D-2, D-3, D-4, D-5, D-9, D-10, D-11, and D-12. D-1 is also called H-1. It does not define D-6, D-7, or D-8. None of the defined items below were decided by these merges.
 
 | ID | Still open |
 | --- | --- |
-| D-1 | Approve a Lista implementation pin. The approval list is empty, so a re-read cannot pass. |
+| D-1 / H-1 | Approve a Lista implementation pin. The 2026-10-14 table also calls this H-1. The approval list is empty, so a re-read cannot pass. |
 | D-2 | Whether a client `eth_call` dry-run counts as simulation. ADR 0001 was not revised. |
 | D-3 | Whether Mode A v1 may send through WalletConnect. It does not. Methods stay `personal_sign`. |
 | D-4 | Whether to add a second RPC. None was added. |
@@ -79,7 +82,7 @@ The 2026-10-14 Mode A table defines D-1, D-2, D-3, D-4, D-5, D-9, D-10, D-11, an
 
 ## Known residuals
 
-- On `a84f7ca`, `npm run test:wallets:artifact` fails `WC-ARTIFACT-01/02 on` and `WA artifact`. A switch revokes, then this tab applies its own logout broadcast and the banner becomes 「其他分頁已登出…」 instead of the `revoked=true` switch text. Other tabs should still log out. [!88](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/88) fixes the sender so it ignores its own message. It is not merged.
+- !88 is merged as `f6c8b57d22bf929daa4543d519d0542f0d4f75a9`. The sender ignores its own logout broadcast. A switch still revokes, and other tabs still log out. The `test:wallets:artifact` check of that banner was local, because it needs Chrome. That MR pipeline timed out on `wg-9700x`, and no main-branch pipeline ran for this merge.
 - `test:wallets:artifact` needs Chrome through `playwright-core`. `client-tests` uses `node:22.16.0-bookworm-slim`, which has no browser, and `playwright-core` does not download one. That is why the job does not run the script. `docs/ci.md` says the same.
 - `deploy/releases.json` has no `approved_by_user` mode_a entry. A send-variant build stays refused. The default page does not send.
 - Lista deployment approvals are empty.
