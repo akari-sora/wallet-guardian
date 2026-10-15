@@ -28,13 +28,26 @@ TOKEN = "r4hostsecret"
 HOST = TOKEN + ".example.invalid"
 
 
-class _FirstSend:
-    """Remember stderr as it stood when the first request was handed over."""
+class _FlushLog(io.StringIO):
+    """Record each flush() and the buffer text at that call."""
 
-    def __init__(self, inner, stream: io.StringIO) -> None:
+    def __init__(self) -> None:
+        super().__init__()
+        self.flushes: list[str] = []
+
+    def flush(self) -> None:
+        self.flushes.append(self.getvalue())
+        super().flush()
+
+
+class _FirstSend:
+    """Remember stderr and the flush count when the first request was handed over."""
+
+    def __init__(self, inner, stream: _FlushLog) -> None:
         self._inner = inner
         self._stream = stream
         self.at_first: str | None = None
+        self.flushes_at_first: int | None = None
 
     def add(self, predicate, response) -> None:
         self._inner.add(predicate, response)
@@ -42,6 +55,7 @@ class _FirstSend:
     def send(self, call):
         if self.at_first is None:
             self.at_first = self._stream.getvalue()
+            self.flushes_at_first = len(self._stream.flushes)
         return self._inner.send(call)
 
     def __getattr__(self, name: str):
@@ -53,6 +67,13 @@ class _Blocked(io.StringIO):
         if "disclosure_plan" in text:
             raise OSError("disclosure_blocked")
         return super().write(text)
+
+
+class _FlushBlocked(io.StringIO):
+    def flush(self) -> None:
+        if "disclosure_plan" in self.getvalue():
+            raise OSError("disclosure_flush_blocked")
+        super().flush()
 
 
 def _clock() -> float:
@@ -131,7 +152,8 @@ def test_yes_writes_one_redacted_plan_before_the_first_request(
 ) -> None:
     config = tmp_path / "monitor.json"
     backend = _install(tmp_path, monkeypatch, token=TOKEN)
-    stderr = _stderr(monkeypatch)
+    stderr = _FlushLog()
+    monkeypatch.setattr(sys, "stderr", stderr)
     snap = _FirstSend(backend, stderr)
     r1.fill_tails(snap, [], [])
     code, body, text = _run(capsys, _argv(config, command, "--yes"), snap)
@@ -140,6 +162,9 @@ def test_yes_writes_one_redacted_plan_before_the_first_request(
     assert snap.calls
     assert snap.at_first is not None
     assert snap.at_first == stderr.getvalue()
+    assert snap.flushes_at_first is not None
+    assert snap.flushes_at_first >= 1
+    assert stderr.flushes[snap.flushes_at_first - 1] == snap.at_first
     disclosed = _plan_line(snap.at_first)
     assert list(disclosed) == ["note", "queries", "unqueried"]
     assert list(disclosed["queries"][0]) == ["addresses", "direction", "host", "network", "source_id"]
@@ -257,17 +282,57 @@ def test_label_file_mode_writes_no_disclosure_line(
     assert "disclosure_plan" not in stderr.getvalue()
 
 
+@pytest.mark.parametrize("command", ["inbound", "expand"])
+def test_resolver_doh_without_endpoints_writes_no_disclosure_line(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    backend = _install(tmp_path, monkeypatch)
+    stderr = _stderr(monkeypatch)
+    r1.fill_tails(backend, [], [])
+    monkeypatch.setenv("GUARDIAN_RESOLVER_MODE", "doh")
+    monkeypatch.delenv("GUARDIAN_DOH_ENDPOINTS", raising=False)
+    code, body, _text = _run(capsys, _argv(tmp_path / "monitor.json", command, "--yes"), backend)
+    assert code == 2
+    assert body["error_type"] == "ConfigError"
+    assert body["error"] == "doh mode requires endpoints"
+    assert backend.calls == []
+    assert "disclosure_plan" not in stderr.getvalue()
+
+
+@pytest.mark.parametrize("command", ["inbound", "expand"])
 def test_stderr_oserror_sends_nothing(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
+    command: str,
 ) -> None:
     backend = _install(tmp_path, monkeypatch)
     r1.fill_tails(backend, [], [])
     monkeypatch.setattr(sys, "stderr", _Blocked())
-    code, body, _text = _run(capsys, _argv(tmp_path / "monitor.json", "inbound", "--yes"), backend)
+    code, body, _text = _run(capsys, _argv(tmp_path / "monitor.json", command, "--yes"), backend)
     assert code == 1
     assert body["status"] == "error"
     assert body["error_type"] == "OSError"
     assert body["error"] == "disclosure_blocked"
+    assert backend.calls == []
+
+
+@pytest.mark.parametrize("command", ["inbound", "expand"])
+def test_stderr_flush_oserror_sends_nothing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    backend = _install(tmp_path, monkeypatch)
+    r1.fill_tails(backend, [], [])
+    monkeypatch.setattr(sys, "stderr", _FlushBlocked())
+    code, body, _text = _run(capsys, _argv(tmp_path / "monitor.json", command, "--yes"), backend)
+    assert code == 1
+    assert body["status"] == "error"
+    assert body["error_type"] == "OSError"
+    assert body["error"] == "disclosure_flush_blocked"
     assert backend.calls == []

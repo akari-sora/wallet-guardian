@@ -93,8 +93,8 @@ def execute(
             max_nodes=max_nodes,
         )
         return payload, 0 if dry_run else 2
-    _write_disclosure(plan, secrets, public.document)
     transport = _transport(public, default_backend() if backend is None else backend, now)
+    _write_disclosure(plan, secrets, public.document)
     reads, edges, payer_contract, source_complete = _perform(
         jobs, transport, public.document, secrets, registry, max_pages, _stop(moment, since_days), now,
     )
