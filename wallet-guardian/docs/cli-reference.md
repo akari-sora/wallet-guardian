@@ -802,3 +802,5 @@ options:
 ```
 
 Repeat `--network` on `expand` to read more than one network in the payer's family.
+
+See docs/relations.md for semantics and limits.
