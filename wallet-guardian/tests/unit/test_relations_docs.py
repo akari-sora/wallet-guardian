@@ -34,6 +34,8 @@ _REQUIRED = (
     "merged_addresses",
     "relations-labels.json",
     "0600",
+    "disclosure_plan",
+    "stderr",
 )
 _HEADINGS = (
     "## What it is",
