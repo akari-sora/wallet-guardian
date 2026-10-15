@@ -14,7 +14,7 @@ import pytest
 
 from guardian.cli import main
 from guardian.errors import SecurityError
-from guardian.identities import parse_address
+from guardian.identities import IdentityError, parse_address
 from guardian.service_install import CommandResult, execute_install_service
 from guardian.sources.blockscout import BlockscoutClient
 from guardian.sources.budget import BudgetExhausted
@@ -65,6 +65,9 @@ SOL = "11111111111111111111111111111111"
 BITCOIN = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
 LISTA = "0x1adb950d8bb3da4be104211d5ab038628e477fe6"
 ENV_KEY = "env-only-etherscan-key-r1"
+BLOCK_KEY = "env-only-blockscout-key-r1"
+# 34 base58 characters decode to at most 25 bytes, so none of them pass the 32-byte check.
+SOL_T = "T1o7YUcLByKaGt1V4MvPxvp88qvEhxDqyb27WcBq83e"
 
 
 class PathBackend:
@@ -328,6 +331,35 @@ def fill_tails(backend: PathBackend, transfers: list, transactions: list) -> Non
     backend.add(tail_is("token-transfers"), scout(transfers))
     backend.add(tail_is("transactions"), scout(transactions))
     backend.add(tail_is("internal-transactions"), empty_scout())
+
+
+def dual_ethereum(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> PathBackend:
+    sources = {
+        "blockscout-eth": _source("blockscout", "BLOCKSCOUT_ETH_URL", "blockscout-public"),
+        "etherscan": _source("etherscan_v2", "ETHERSCAN_API_BASE", "etherscan-account", "ETHERSCAN_API_KEY"),
+    }
+    routes = [
+        {"network": "ethereum-mainnet", "capability": name, "source_ids": ["blockscout-eth", "etherscan"]}
+        for name in ("history.native_external", "history.native_internal", "history.fungible", "history.token")
+    ]
+    secrets = {
+        "BLOCKSCOUT_ETH_URL": "https://eth.blockscout.example.invalid",
+        "ETHERSCAN_API_BASE": "https://etherscan.example.invalid",
+        "ETHERSCAN_API_KEY": KEY,
+    }
+    return install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+
+
+def gap_native_tails(backend: PathBackend) -> None:
+    backend.add(tail_is("transactions"), BudgetExhausted("daily_cap"))
+    backend.add(tail_is("internal-transactions"), BudgetExhausted("daily_cap"))
+
+
+def es_rows(start: int, count: int, stamp: int = STAMP, sender: str = LEFT) -> list:
+    return [es_native(sender, SEED, 1, stamp, tx(start + index)) for index in range(count)]
 
 
 def invoke(capsys: pytest.CaptureFixture[str], argv: list[str], backend: PathBackend) -> tuple[int, dict]:
@@ -920,7 +952,7 @@ def test_etherscan_reads_newest_first_and_stops_at_the_window(tmp_path: Path, mo
     queries = [call_query(call) for call in backend.calls if call_query(call).get("action") == ["txlist"]]
     assert queries
     assert all(item.get("sort") == ["desc"] for item in queries)
-    assert all(item.get("endblock") == ["9999999999"] for item in queries)
+    assert [item.get("endblock") for item in queries] == [["latest"], ["30"]]
     assert all(item.get("endblock") != ["99999999"] for item in queries)
     assert not any(item.get("page") == ["3"] for item in queries)
 
@@ -928,8 +960,7 @@ def test_etherscan_reads_newest_first_and_stops_at_the_window(tmp_path: Path, mo
 def test_etherscan_result_window_is_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from guardian.relations.fetch import read_etherscan
 
-    page = {"status": "1", "message": "OK", "result": [es_native(LEFT, SEED, 1, STAMP, tx(1))] * 1000}
-    transport = _WindowTransport(page)
+    transport = _WindowTransport()
     outcome = read_etherscan(
         transport,
         "etherscan",
@@ -1611,6 +1642,530 @@ def test_endpoint_text_does_not_hide_security_errors() -> None:
     assert endpoint_text(Bad(), "blockscout") == ""
 
 
+def test_classified_absent_pages_stay_gaps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    cases = (
+        {"status": "0", "message": "No transactions found", "result": [], "partial": True},
+        {"status": "0", "message": "No transactions found", "error": "lag"},
+        {"status": "0", "message": "No transactions found", "result": [], "error": "lag"},
+        {"status": "0", "message": "No transactions found", "result": [es_native(LEFT, SEED, 1, STAMP, tx(1))]},
+    )
+    for payload in cases:
+        sources, routes, secrets = etherscan_profile()
+        backend = install(
+            tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+            address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+        )
+        backend.add(action_is("txlist"), raw(payload))
+        backend.add(action_is("tokentx"), es_empty())
+        backend.add(action_is("txlistinternal"), es_empty())
+        code, body = invoke(capsys, inbound_argv(
+            tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+        ), backend)
+        assert code == 0, body
+        assert body["reads"][0]["read_status"] == "gap"
+        assert body["counterparties"] is None
+
+
+def test_tron_security_errors_other_than_redirect_fail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources = {"tron-grid": _source("tron_grid", "TRONGRID_API_URL", "tron-public")}
+    routes = [{"network": "tron-mainnet", "capability": "history.fungible", "source_ids": ["tron-grid"]}]
+    backend = install(
+        tmp_path, monkeypatch, networks=["tron-mainnet"], sources=sources, routes=routes,
+        secrets={"TRONGRID_API_URL": "https://tron.example.invalid"},
+        address=TRON_PAYER, family="tron", account_networks=["tron-mainnet"],
+    )
+    backend.add(lambda call: "transactions/trc20" in call.url, SecurityError("adapter_mismatch", reason="adapter_mismatch"))
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", TRON_PAYER, "--network", "tron-mainnet",
+    ), backend)
+    assert code == 4
+    assert body["error_type"] == "SecurityError"
+    assert body.get("counterparties") is None
+
+
+def test_tron_redirect_host_is_a_gap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources = {"tron-grid": _source("tron_grid", "TRONGRID_API_URL", "tron-public")}
+    routes = [{"network": "tron-mainnet", "capability": "history.fungible", "source_ids": ["tron-grid"]}]
+    backend = install(
+        tmp_path, monkeypatch, networks=["tron-mainnet"], sources=sources, routes=routes,
+        secrets={"TRONGRID_API_URL": "https://tron.example.invalid"},
+        address=TRON_PAYER, family="tron", account_networks=["tron-mainnet"],
+    )
+    backend.add(lambda call: "transactions/trc20" in call.url, SecurityError("redirect_host", reason="redirect_host"))
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", TRON_PAYER, "--network", "tron-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert body["reads"][0]["read_status"] == "gap"
+    assert body["reads"][0]["reason"] == "redirect_host"
+    assert body["counterparties"] is None
+
+
+def test_primary_edges_survive_an_empty_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    backend = dual_ethereum(tmp_path, monkeypatch)
+    backend.add(tail_is("token-transfers"), scout([token_item(LEFT, SEED, 4, STAMP, tx(1))]))
+    gap_native_tails(backend)
+    backend.add(action_is("txlist"), es_empty())
+    backend.add(action_is("tokentx"), es_empty())
+    backend.add(action_is("txlistinternal"), es_empty())
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert body["status"] == "partial"
+    assert [row["source_id"] for row in body["reads"]] == ["blockscout-eth", "etherscan"]
+    assert body["reads"][0]["read_status"] == "gap"
+    assert body["reads"][1]["read_status"] == "complete"
+    parts = {part["part"]: part for part in body["reads"][0]["parts"]}
+    assert parts["token-transfers"]["read_status"] == "complete"
+    assert parts["transactions"]["read_status"] == "gap"
+    assert [row["address"] for row in body["counterparties"]] == [LEFT]
+    assert body["counterparties"][0]["count"] == 1
+
+
+def test_primary_edges_survive_a_failed_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    backend = dual_ethereum(tmp_path, monkeypatch)
+    backend.add(tail_is("token-transfers"), scout([token_item(LEFT, SEED, 4, STAMP, tx(1))]))
+    gap_native_tails(backend)
+    failure = raw({"status": "0", "message": "NOTOK", "result": "Query Timeout occured"})
+    backend.add(action_is("txlist"), failure)
+    backend.add(action_is("tokentx"), failure)
+    backend.add(action_is("txlistinternal"), failure)
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert body["reads"][0]["read_status"] == "gap"
+    assert body["reads"][1]["read_status"] == "gap"
+    assert [row["address"] for row in body["counterparties"]] == [LEFT]
+
+
+def test_fallback_merge_counts_a_shared_transfer_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    backend = dual_ethereum(tmp_path, monkeypatch)
+    backend.add(tail_is("token-transfers"), scout([token_item(LEFT, SEED, 5, STAMP, tx(1))]))
+    gap_native_tails(backend)
+    backend.add(action_is("txlist"), es_empty())
+    backend.add(action_is("tokentx"), es_ok([es_token(LEFT, SEED, 5, STAMP, tx(1))]))
+    backend.add(action_is("txlistinternal"), es_empty())
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert body["counterparties"][0]["address"] == LEFT
+    assert body["counterparties"][0]["count"] == 1
+    assert len(body["counterparties"][0]["transfers"]) == 1
+
+
+def test_fallback_merge_keeps_two_equal_amounts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    backend = dual_ethereum(tmp_path, monkeypatch)
+    shared = tx(7)
+    first = token_item(LEFT, SEED, 5, STAMP, shared)
+    second = token_item(LEFT, SEED, 5, STAMP, shared)
+    first["log_index"] = 0
+    second["log_index"] = 1
+    left = es_token(LEFT, SEED, 5, STAMP, shared)
+    right = es_token(LEFT, SEED, 5, STAMP, shared)
+    left["logIndex"] = "0"
+    right["logIndex"] = "1"
+    backend.add(tail_is("token-transfers"), scout([first, second]))
+    gap_native_tails(backend)
+    backend.add(action_is("txlist"), es_empty())
+    backend.add(action_is("tokentx"), es_ok([left, right]))
+    backend.add(action_is("txlistinternal"), es_empty())
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert body["counterparties"][0]["count"] == 2
+    assert body["counterparties"][0]["tx_hash_count"] == 1
+    assert len(body["counterparties"][0]["transfers"]) == 2
+
+
+def test_token_targets_that_cannot_be_read_are_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    missing = token_item(LEFT, SEED, 4, STAMP, tx(1))
+    missing["to"] = None
+    garbled = token_item(OTHER, SEED, 4, STAMP, tx(2))
+    garbled["to"] = {"hash": "0xnot"}
+    for item in (missing, garbled):
+        sources, routes, secrets = blockscout_profile(
+            "ethereum-mainnet", "blockscout-eth", "BLOCKSCOUT_ETH_URL", "https://eth.blockscout.example.invalid",
+        )
+        backend = install(
+            tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+            address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+        )
+        fill_tails(backend, [item], [])
+        code, body = invoke(capsys, inbound_argv(
+            tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+        ), backend)
+        assert code == 0, body
+        assert body["reads"][0]["read_status"] == "partial"
+        assert body["reads"][0]["reason"] == "unreadable_row"
+        assert body["counterparties"] is None
+
+
+def test_etherscan_unparsed_to_is_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources, routes, secrets = etherscan_profile()
+    backend = install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+    backend.add(action_is("txlist"), es_ok([es_native(LEFT, "0xnot", 1, STAMP, tx(1))]))
+    backend.add(action_is("tokentx"), es_empty())
+    backend.add(action_is("txlistinternal"), es_empty())
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert body["reads"][0]["read_status"] == "partial"
+    assert body["reads"][0]["reason"] == "unreadable_row"
+    assert body["counterparties"] is None
+
+
+def test_native_contract_creation_stays_complete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources, routes, secrets = blockscout_profile(
+        "ethereum-mainnet", "blockscout-eth", "BLOCKSCOUT_ETH_URL", "https://eth.blockscout.example.invalid",
+    )
+    backend = install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+    creation = native_item(LEFT, SEED, 3, STAMP, tx(8))
+    creation["to"] = None
+    fill_tails(backend, [], [creation, native_item(OTHER, SEED, 4, STAMP, tx(9))])
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert body["status"] == "complete"
+    assert body["reads"][0]["read_status"] == "complete"
+    assert [row["address"] for row in body["counterparties"]] == [OTHER]
+
+
+def test_user_page_cap_is_not_the_result_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources, routes, secrets = etherscan_profile()
+    backend = install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+    backend.add(action_is("txlist"), [es_ok(es_rows(page * 1000, 1000)) for page in range(3)])
+    backend.add(action_is("tokentx"), es_empty())
+    backend.add(action_is("txlistinternal"), es_empty())
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--max-pages", "2", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert body["reads"][0]["read_status"] == "partial"
+    assert body["reads"][0]["reason"] == "page_cap"
+    assert body["counterparties"][0]["count"] == 2000
+    tx_pages = [
+        call_query(call).get("page")
+        for call in backend.calls
+        if call_query(call).get("action") == ["txlist"]
+    ]
+    assert tx_pages == [["1"], ["2"]]
+
+
+def test_etherscan_pins_endblock_and_counts_overlap_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources, routes, secrets = etherscan_profile()
+    backend = install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+    page = es_rows(0, 999)
+    page[0]["blockNumber"] = "44"
+    last = es_native(OTHER, SEED, 2, STAMP, tx(999))
+    last["blockNumber"] = "30"
+    page.append(last)
+    again = es_native(OTHER, SEED, 2, STAMP, tx(999))
+    again["blockNumber"] = "30"
+    extra = es_native(RIGHT, SEED, 3, STAMP, tx(1000))
+    extra["blockNumber"] = "29"
+    backend.add(action_is("txlist"), [es_ok(page), es_ok([again, extra])])
+    backend.add(action_is("tokentx"), es_empty())
+    backend.add(action_is("txlistinternal"), es_empty())
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    queries = [call_query(call) for call in backend.calls if call_query(call).get("action") == ["txlist"]]
+    assert [item.get("endblock") for item in queries] == [["latest"], ["44"]]
+    counts = {row["address"]: row["count"] for row in body["counterparties"]}
+    assert counts[OTHER] == 1
+    assert counts[RIGHT] == 1
+
+
+def test_label_hub_with_a_partial_read_is_not_a_complete_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources, routes, secrets = blockscout_profile(
+        "ethereum-mainnet", "blockscout-eth", "BLOCKSCOUT_ETH_URL", "https://eth.blockscout.example.invalid",
+    )
+    backend = install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+
+    def fake(network: str, address: str):
+        if network == "ethereum-mainnet" and address.lower() == PAYER.lower():
+            return {"label": "Desk Router", "label_source": "static_local_registry"}
+        return None
+
+    monkeypatch.setattr("guardian.relations.report.lookup", fake)
+    backend.add(tail_is("token-transfers"), scout(
+        [token_item(PAYER, LEFT, 2, STAMP, tx(1))],
+        {"block_number": 4, "index": 0},
+    ))
+    backend.add(tail_is("transactions"), empty_scout())
+    backend.add(tail_is("internal-transactions"), empty_scout())
+    code, body = invoke(capsys, expand_argv(
+        tmp_path / "monitor.json", "--yes", "--max-pages", "1", "--payer", PAYER,
+        "--network", "ethereum-mainnet", "--seed", SEED,
+    ), backend)
+    assert code == 0, body
+    assert body["hub"] is True
+    assert "label" in body["hub_reasons"]
+    assert body["reads"][0]["read_status"] == "partial"
+    assert body["recipient_count_complete"] is False
+
+
+def test_fallback_complete_read_marks_the_count_complete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    backend = dual_ethereum(tmp_path, monkeypatch)
+    backend.add(tail_is("token-transfers"), BudgetExhausted("daily_cap"))
+    gap_native_tails(backend)
+    backend.add(action_is("txlist"), es_empty())
+    backend.add(action_is("tokentx"), es_ok([es_token(PAYER, LEFT, 4, STAMP, tx(1))]))
+    backend.add(action_is("txlistinternal"), es_empty())
+    code, body = invoke(capsys, expand_argv(
+        tmp_path / "monitor.json", "--yes", "--payer", PAYER, "--network", "ethereum-mainnet", "--seed", SEED,
+    ), backend)
+    assert code == 0, body
+    assert body["reads"][0]["read_status"] == "gap"
+    assert body["reads"][1]["read_status"] == "complete"
+    assert body["hub"] is False
+    assert body["recipient_count_complete"] is True
+    assert [row["address"] for row in body["co_recipients"]] == [LEFT]
+
+
+def test_full_second_page_stops_at_the_time_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources, routes, secrets = etherscan_profile()
+    backend = install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+    page2 = es_rows(1000, 999)
+    page2.append(es_native(OTHER, SEED, 1, 1, tx(2000)))
+    backend.add(action_is("txlist"), [
+        es_ok(es_rows(0, 1000)),
+        es_ok(page2),
+        es_ok([es_native(RIGHT, SEED, 1, STAMP, tx(3000))]),
+    ])
+    backend.add(action_is("tokentx"), es_empty())
+    backend.add(action_is("txlistinternal"), es_empty())
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert body["status"] == "complete"
+    found = {row["address"] for row in body["counterparties"]}
+    assert LEFT in found
+    assert OTHER not in found
+    assert RIGHT not in found
+    assert not any(
+        call_query(call).get("action") == ["txlist"] and call_query(call).get("page") == ["3"]
+        for call in backend.calls
+    )
+
+
+def test_environment_key_in_a_serialized_field_is_masked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from guardian.relations.command import _extra_secrets
+    from guardian.relations.fetch import Outcome
+
+    monkeypatch.setenv("BLOCKSCOUT_API_KEY", BLOCK_KEY)
+    found = _extra_secrets({}, {"sources": {"blockscout-eth": {"credential_env": "BLOCKSCOUT_API_KEY"}}})
+    assert BLOCK_KEY in found
+    sources = {
+        "blockscout-eth": _source("blockscout", "BLOCKSCOUT_ETH_URL", "blockscout-public", "BLOCKSCOUT_API_KEY"),
+    }
+    routes = [
+        {"network": "ethereum-mainnet", "capability": name, "source_ids": ["blockscout-eth"]}
+        for name in ("history.native_external", "history.native_internal", "history.fungible", "history.token")
+    ]
+    backend = install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes,
+        secrets={"BLOCKSCOUT_ETH_URL": "https://eth.blockscout.example.invalid"},
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+
+    def fake_read(*_args, **_kwargs):
+        return Outcome(
+            "gap",
+            BLOCK_KEY,
+            [],
+            parts=[{"part": "transactions", "read_status": "gap", "reason": BLOCK_KEY}],
+        )
+
+    monkeypatch.setattr("guardian.relations.command.read_blockscout", fake_read)
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    rendered = json.dumps(body)
+    assert BLOCK_KEY not in rendered
+    assert BLOCK_KEY not in Path(body["result_path"]).read_text(encoding="utf-8")
+    assert body["reads"][0]["reason"] == "***"
+    assert body["reads"][0]["parts"][0]["reason"] == "***"
+
+
+def test_blockscout_environment_credential_sends_authorization(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources = {
+        "blockscout-eth": _source("blockscout", "BLOCKSCOUT_ETH_URL", "blockscout-public", "BLOCKSCOUT_API_KEY"),
+    }
+    routes = [
+        {"network": "ethereum-mainnet", "capability": name, "source_ids": ["blockscout-eth"]}
+        for name in ("history.native_external", "history.native_internal", "history.fungible", "history.token")
+    ]
+    backend = install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes,
+        secrets={"BLOCKSCOUT_ETH_URL": "https://eth.blockscout.example.invalid"},
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+    monkeypatch.setenv("BLOCKSCOUT_API_KEY", BLOCK_KEY)
+    fill_tails(backend, [token_item(LEFT, SEED, 4, STAMP, tx(1))], [])
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert [row["address"] for row in body["counterparties"]] == [LEFT]
+    assert backend.calls
+    for call in backend.calls:
+        headers = getattr(call, "credential_headers", ())
+        assert headers
+        name, secret = headers[0]
+        assert name.lower() == "authorization"
+        assert secret.reveal() == f"Bearer {BLOCK_KEY}"
+        assert BLOCK_KEY not in call.url
+    assert BLOCK_KEY not in json.dumps(body)
+    assert BLOCK_KEY not in Path(body["result_path"]).read_text(encoding="utf-8")
+
+
+def test_tron_shaped_solana_text_is_unsupported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from guardian.relations.command import _classify
+
+    assert parse_address("solana", SOL_T).canonical == SOL_T
+    assert SOL_T.startswith("T")
+    with pytest.raises(IdentityError):
+        parse_address("tron", SOL_T)
+    assert _classify(SOL_T) == ("solana", SOL_T)
+    sources, routes, secrets = blockscout_profile(
+        "ethereum-mainnet", "blockscout-eth", "BLOCKSCOUT_ETH_URL", "https://eth.blockscout.example.invalid",
+    )
+    backend = install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SOL_T,
+    ), backend)
+    assert code == 0, body
+    assert backend.calls == []
+    matched = [row for row in body["reads"] if row["address"] == SOL_T]
+    assert matched
+    assert matched[0]["network"] == "solana-mainnet"
+    assert matched[0]["read_status"] == "unsupported"
+
+
+def test_etherscan_budget_and_redirect_stay_on_one_action(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources, routes, secrets = etherscan_profile()
+    backend = install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+    backend.add(action_is("txlist"), BudgetExhausted("daily_cap"))
+    backend.add(action_is("tokentx"), es_ok([es_token(LEFT, SEED, 4, STAMP, tx(1))]))
+    backend.add(action_is("txlistinternal"), es_empty())
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert body["reads"][0]["read_status"] == "gap"
+    assert body["reads"][0]["reason"] == "daily_cap"
+    assert [row["address"] for row in body["counterparties"]] == [LEFT]
+    sources, routes, secrets = etherscan_profile()
+    backend = install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+    backend.add(action_is("txlist"), SecurityError("redirect_host", reason="redirect_host"))
+    backend.add(action_is("tokentx"), es_ok([es_token(OTHER, SEED, 4, STAMP, tx(2))]))
+    backend.add(action_is("txlistinternal"), es_empty())
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert body["reads"][0]["read_status"] == "gap"
+    assert body["reads"][0]["reason"] == "redirect_host"
+    assert [row["address"] for row in body["counterparties"]] == [OTHER]
+
+
+def test_tron_budget_is_a_gap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources = {"tron-grid": _source("tron_grid", "TRONGRID_API_URL", "tron-public")}
+    routes = [{"network": "tron-mainnet", "capability": "history.fungible", "source_ids": ["tron-grid"]}]
+    backend = install(
+        tmp_path, monkeypatch, networks=["tron-mainnet"], sources=sources, routes=routes,
+        secrets={"TRONGRID_API_URL": "https://tron.example.invalid"},
+        address=TRON_PAYER, family="tron", account_networks=["tron-mainnet"],
+    )
+    backend.add(lambda call: "transactions/trc20" in call.url, BudgetExhausted("daily_cap"))
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", TRON_PAYER, "--network", "tron-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert body["reads"][0]["read_status"] == "gap"
+    assert body["reads"][0]["reason"] == "daily_cap"
+    assert body["counterparties"] is None
+
+
+def test_inbound_zero_value_token_is_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources, routes, secrets = blockscout_profile(
+        "ethereum-mainnet", "blockscout-eth", "BLOCKSCOUT_ETH_URL", "https://eth.blockscout.example.invalid",
+    )
+    backend = install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+    fill_tails(backend, [token_item(LEFT, SEED, 0, STAMP, tx(1))], [])
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert body["status"] == "complete"
+    assert body["counterparties"] == []
+    assert body["reads"][0]["ignored_zero_value"] == 1
+
+
+def test_missing_decimals_stay_null(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources, routes, secrets = blockscout_profile(
+        "ethereum-mainnet", "blockscout-eth", "BLOCKSCOUT_ETH_URL", "https://eth.blockscout.example.invalid",
+    )
+    backend = install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+        address=SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+    item = token_item(LEFT, SEED, 7, STAMP, tx(1))
+    item["token"]["decimals"] = None
+    item["total"]["decimals"] = None
+    fill_tails(backend, [item], [])
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
+    ), backend)
+    assert code == 0, body
+    asset = body["counterparties"][0]["assets"][0]
+    assert asset["decimals"] is None
+    assert asset["raw_amount"] == "7"
+    transfer = body["counterparties"][0]["transfers"][0]
+    assert transfer["asset"]["decimals"] is None
+    assert transfer["raw_amount"] == "7"
+
+
 def test_tron_shaped_text_falls_back_when_tron_parse_fails() -> None:
     from guardian.configuration import ConfigError
     from guardian.relations.command import _classify
@@ -1621,8 +2176,7 @@ def test_tron_shaped_text_falls_back_when_tron_parse_fails() -> None:
 
 
 class _WindowTransport:
-    def __init__(self, page: dict) -> None:
-        self.page = page
+    def __init__(self) -> None:
         self.tx_pages = 0
 
     def retry_attempts(self, _source_id: str) -> int:
@@ -1632,7 +2186,11 @@ class _WindowTransport:
         action = operation.query["action"]
         if action == "txlist":
             self.tx_pages += 1
-            return _Result(self.page, "ok")
+            rows = [
+                es_native(LEFT, SEED, 1, STAMP, tx((self.tx_pages - 1) * 1000 + index))
+                for index in range(1000)
+            ]
+            return _Result({"status": "1", "message": "OK", "result": rows}, "ok")
         return _Result({"status": "0", "message": "No transactions found", "result": []}, "empty")
 
 

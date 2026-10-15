@@ -77,7 +77,7 @@ def execute(
         payload = _store(private.state_dir, command, payload, moment, secrets, public.document)
         return payload, 0 if dry_run else 2
     transport = _transport(public, default_backend() if backend is None else backend, now)
-    reads, edges, payer_contract = _perform(
+    reads, edges, payer_contract, source_complete = _perform(
         jobs, transport, public.document, secrets, registry, max_pages, _stop(moment, since_days), now,
     )
     if command == "inbound":
@@ -95,6 +95,7 @@ def execute(
             expand_hub=bool(getattr(args, "expand_hub", False)),
             payer_is_contract=payer_contract,
             max_nodes=max_nodes,
+            source_complete=source_complete,
         )
     payload = _envelope(command, overall(reads), since_days, max_pages, moment, plan, reads)
     payload.update(body)
@@ -109,31 +110,75 @@ def _perform(jobs, transport, document, secrets, registry, page_cap, stop_timest
     reads: list[dict] = []
     edges = []
     payer_contract: bool | None = None
+    adopted: list[bool] = []
     sources = document["sources"]
     for job in jobs:
-        fallback = any(choice.role == "fallback" for choice in job.choices)
-        primary_status = None
+        has_fallback = any(choice.role == "fallback" for choice in job.choices)
+        primary: Outcome | None = None
         for choice in job.choices:
-            if choice.role == "fallback" and primary_status in {"complete", "partial"}:
+            if choice.role == "fallback" and primary is not None and primary.status in {"complete", "partial"}:
                 continue
             if choice.role == "skip":
                 outcome = Outcome(choice.read_status or "gap", choice.reason, [])
                 reads.append(_read_row(job, choice, outcome))
+                adopted.append(outcome.status == "complete")
                 continue
             outcome = _run_choice(
                 job, choice, transport, sources, secrets, registry, page_cap, stop_timestamp, clock,
             )
             if outcome.payer_is_contract is True:
                 payer_contract = True
-            if choice.role == "primary":
-                primary_status = outcome.status
-                use_edges = outcome.status != "gap" or not fallback
-            else:
-                use_edges = True
-            if use_edges:
-                edges.extend(outcome.edges)
             reads.append(_read_row(job, choice, outcome))
-    return reads, edges, payer_contract
+            if choice.role == "primary":
+                primary = outcome
+                # A gap with a fallback still keeps edges from the parts that were read.
+                if has_fallback and outcome.status == "gap":
+                    continue
+                edges.extend(outcome.edges)
+                adopted.append(outcome.status == "complete")
+                continue
+            if choice.role == "fallback" and primary is not None:
+                edges.extend(_merge_edges(primary.edges, outcome.edges))
+                adopted.append(outcome.status == "complete")
+                continue
+            edges.extend(outcome.edges)
+            adopted.append(outcome.status == "complete")
+    return reads, edges, payer_contract, bool(adopted) and all(adopted)
+
+
+def _edge_key(edge) -> tuple:
+    return (
+        edge.network,
+        edge.tx_hash,
+        edge.kind,
+        edge.contract or "",
+        edge.sender.lower(),
+        edge.recipient.lower(),
+        edge.raw_amount,
+    )
+
+
+def _merge_edges(primary: list, fallback: list) -> list:
+    """Multiset union. The same transfer key keeps the larger of the two counts."""
+    primary_counts: dict[tuple, int] = {}
+    fallback_counts: dict[tuple, int] = {}
+    for edge in primary:
+        key = _edge_key(edge)
+        primary_counts[key] = primary_counts.get(key, 0) + 1
+    for edge in fallback:
+        key = _edge_key(edge)
+        fallback_counts[key] = fallback_counts.get(key, 0) + 1
+    seen: dict[tuple, int] = {}
+    merged = []
+    for source in (primary, fallback):
+        for edge in source:
+            key = _edge_key(edge)
+            limit = max(primary_counts.get(key, 0), fallback_counts.get(key, 0))
+            used = seen.get(key, 0)
+            if used < limit:
+                merged.append(edge)
+                seen[key] = used + 1
+    return merged
 
 
 def _run_choice(job: Job, choice, transport, sources, secrets, registry, page_cap, stop_timestamp, clock) -> Outcome:

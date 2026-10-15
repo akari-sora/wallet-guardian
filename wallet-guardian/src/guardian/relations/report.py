@@ -35,6 +35,7 @@ def expand_report(
     expand_hub: bool,
     payer_is_contract: bool | None,
     max_nodes: int = 500,
+    source_complete: bool | None = None,
 ) -> dict:
     seed_txs = {
         (edge.network, edge.tx_hash)
@@ -60,11 +61,12 @@ def expand_report(
         reasons.append("label")
     if count is not None and count > hub_threshold:
         reasons.append("recipient_count")
-    complete = bool(reads) and all(row.get("read_status") == "complete" for row in reads)
+    if source_complete is None:
+        source_complete = bool(reads) and all(row.get("read_status") == "complete" for row in reads)
     hub: bool | None
     if reasons:
         hub = True
-    elif complete:
+    elif source_complete:
         hub = False
     else:
         hub = None
@@ -87,9 +89,8 @@ def expand_report(
         "network": network,
         "payer": payer,
         "recipient_count": count,
+        "recipient_count_complete": source_complete,
     }
-    if hub is None:
-        body["recipient_count_complete"] = False
     if hub is True and expand_hub:
         body["noise"] = "high"
     if not (hub is True and not expand_hub):
