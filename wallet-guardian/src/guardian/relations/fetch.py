@@ -368,9 +368,7 @@ def _failed(item: Mapping[str, Any]) -> bool:
     if item.get("success") is False:
         return True
     status = item.get("status")
-    if isinstance(status, str) and status.lower() in {"error", "reverted"}:
-        return True
-    return False
+    return isinstance(status, str) and status.lower() in {"error", "reverted"}
 
 
 def _party(value: Any) -> tuple[str, bool | None]:

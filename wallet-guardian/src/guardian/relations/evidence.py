@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from guardian.relations.fetch import Edge
 
 _ORDER = ("same_tx", "same_asset", "amount_band", "cadence")
 _WEIGHTS = {"same_tx": 3, "same_asset": 1, "amount_band": 1, "cadence": 1}
-_SYMBOL = re.compile(r"^[0-9A-Za-z._-]{1,16}$")
 
 
 def seed_summary(edges: Sequence[Edge]) -> dict:
@@ -188,7 +186,7 @@ def _reason(item: dict) -> str:
     if kind == "amount_band":
         raw = item["matched_raw_amounts"][0]
         decimals = item["decimals"] if item["decimals"] is not None else "null"
-        name = _asset_name(item["asset"])
+        name = asset_name(item["asset"])
         return (
             f"received {raw} (decimals {decimals}) of {name}, "
             f"inside {item['low']}\u2013{item['high']} derived from the seed receipts"
@@ -198,17 +196,13 @@ def _reason(item: dict) -> str:
     return f"median interval {median}s is within 20% of the seed median {seed_median}s"
 
 
-def display_symbol(symbol: object, contract: object) -> str:
-    """Whitelist for sentences and Markdown. Source fields keep the raw symbol."""
-    if isinstance(symbol, str) and _SYMBOL.fullmatch(symbol):
-        return symbol
-    if isinstance(contract, str) and contract:
-        return contract
+def asset_name(asset: Mapping) -> str:
+    """Token sentences use the contract. Native sentences use native."""
+    if asset.get("kind") == "token":
+        contract = asset.get("contract")
+        if isinstance(contract, str) and contract:
+            return contract
     return "native"
-
-
-def _asset_name(asset: dict) -> str:
-    return display_symbol(asset.get("symbol"), asset.get("contract"))
 
 
 def _asset_key(edge: Edge) -> tuple[str, str, str]:

@@ -7,11 +7,15 @@ import os
 import re
 import time
 from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from guardian.configuration import ConfigError, load_public_config, resolve_private_inputs
+from guardian.configuration import (
+    ConfigError,
+    load_public_config,
+    resolve_private_inputs,
+)
 from guardian.credentials import resolve_named
 from guardian.identities import parse_address
 from guardian.locations import secure_write_text
@@ -272,7 +276,7 @@ def _parsed(family: str, raw: str) -> tuple[str, str]:
 def _envelope(command, status, since_days, max_pages, moment, plan, reads) -> dict:
     return {
         "command": command,
-        "generated_at": datetime.fromtimestamp(moment, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated_at": datetime.fromtimestamp(moment, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "max_pages": max_pages,
         "plan": plan,
         "reads": reads,
@@ -294,7 +298,7 @@ def _store(
     max_nodes: int = 500,
 ) -> dict:
     directory = Path(state_dir) / "relations"
-    stamp = datetime.fromtimestamp(moment, timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    stamp = datetime.fromtimestamp(moment, UTC).strftime("%Y%m%dT%H%M%S%fZ")
     path = directory / f"{stamp}-{command}.json"
     suffix = 2
     while path.exists():
@@ -304,11 +308,12 @@ def _store(
     payload["result_path"] = str(path)
     if markdown:
         payload["markdown_path"] = str(md_path)
+    if command == "expand":
+        payload["seeds"] = [item[1] for item in (seeds or [])]
     extra = _extra_secrets(secrets, document)
     payload = _redact_payload(payload, extra)
     if markdown:
-        seed_text = [item[1] for item in (seeds or [])] if command == "expand" else []
-        rendered = render_markdown(payload, seeds=seed_text, max_nodes=max_nodes)
+        rendered = render_markdown(payload, max_nodes=max_nodes)
         if not rendered.endswith("\n"):
             rendered += "\n"
         secure_write_text(md_path, rendered)
@@ -363,7 +368,7 @@ def _bounded_int(value: Any, name: str, low: int, high: int) -> int:
 
 def _stop(moment: float, since_days: int) -> int:
     stamp = int(moment) - since_days * 86400
-    return stamp if stamp > 0 else 0
+    return max(0, stamp)
 
 
 def _drop(secrets: dict) -> None:

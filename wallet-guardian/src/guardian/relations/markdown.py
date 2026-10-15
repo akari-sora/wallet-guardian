@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 
-from guardian.relations.evidence import display_symbol
+from guardian.relations.evidence import asset_name
 
 CLOSING = (
     "This report lists addresses and heuristic evidence only. "
@@ -13,16 +13,11 @@ CLOSING = (
     "are controlled by the same party."
 )
 _ALLOWED = set("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\u2026: ")
-_MD_SPECIAL = set("\\ *_[]()<>!#|~")
-_URL = re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://\S+")
+_MD_SPECIAL = set("\\`*_[]()<>!#|~")
+_URL = re.compile(r"(?i)[a-z][a-z0-9+.\-]*://\S*")
 
 
-def render_markdown(
-    payload: Mapping,
-    *,
-    seeds: Sequence[str] = (),
-    max_nodes: int = 500,
-) -> str:
+def render_markdown(payload: Mapping, *, max_nodes: int = 500) -> str:
     command = str(payload.get("command") or "relations")
     lines = [
         f"# Relations {command}",
@@ -39,6 +34,7 @@ def render_markdown(
         lines.append("Networks: " + ", ".join(str(item) for item in networks))
     elif payload.get("network"):
         lines.append(f"Network: {payload.get('network')}")
+    lines.extend(_window_hub(payload))
     lines.extend(["", "## Disclosure plan"])
     lines.extend(_plan_lines(payload.get("plan") or {}))
     if payload.get("status") in {"dry_run", "consent_required"}:
@@ -54,7 +50,7 @@ def render_markdown(
         if isinstance(rows, list):
             lines.extend(_main_table(rows, expand=command == "expand"))
             if command == "expand" and rows:
-                lines.extend(["", *_mermaid(payload, rows, seeds, max_nodes)])
+                lines.extend(["", *_mermaid(payload, rows, max_nodes)])
         else:
             lines.append("unknown")
     lines.extend(_seed_lines(payload))
@@ -161,7 +157,7 @@ def _merged_section(payload: Mapping) -> list[str]:
 
 def _merged_lines(rows: Sequence) -> list[str]:
     if not rows:
-        return ["None"]
+        return ["No merged addresses."]
     lines = []
     for row in rows:
         if not isinstance(row, Mapping):
@@ -175,7 +171,7 @@ def _merged_lines(rows: Sequence) -> list[str]:
         if "score" in row:
             text += f"; score {row.get('score')}; confidence {row.get('confidence')}"
         lines.append(text)
-    return lines or ["None"]
+    return lines or ["No merged addresses."]
 
 
 def _gap_lines(payload: Mapping) -> list[str]:
@@ -196,10 +192,25 @@ def _gap_lines(payload: Mapping) -> list[str]:
     return lines or ["None"]
 
 
-def _mermaid(payload: Mapping, rows: Sequence[Mapping], seeds: Sequence[str], max_nodes: int) -> list[str]:
+def _window_hub(payload: Mapping) -> list[str]:
+    if payload.get("hub") is not True or "co_recipients" in payload:
+        return []
+    reasons = payload.get("hub_reasons")
+    if not isinstance(reasons, list):
+        reasons = []
+    shown = ", ".join(str(item) for item in reasons)
+    return [
+        f"Hub: true ({shown})",
+        "Co-recipients are not listed for a hub payer; pass --expand-hub to list them.",
+    ]
+
+
+def _mermaid(payload: Mapping, rows: Sequence[Mapping], max_nodes: int) -> list[str]:
     payer = str(payload.get("payer") or "")
+    raw_seeds = payload.get("seeds") if isinstance(payload.get("seeds"), list) else []
     chosen_seeds = []
-    for seed in seeds:
+    for seed in raw_seeds:
+        seed = str(seed or "")
         if not seed or _same(seed, payer) or seed in chosen_seeds:
             continue
         chosen_seeds.append(seed)
@@ -240,7 +251,7 @@ def _assets_text(assets: Sequence) -> str:
     for asset in assets:
         if not isinstance(asset, Mapping):
             continue
-        name = display_symbol(asset.get("symbol"), asset.get("contract"))
+        name = asset_name(asset)
         parts.append(f"{name} raw {asset.get('raw_amount')} decimals {asset.get('decimals')}")
     return "; ".join(parts)
 

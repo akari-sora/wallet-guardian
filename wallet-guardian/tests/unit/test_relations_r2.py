@@ -288,7 +288,7 @@ def test_expand_ranks_evidence_and_keeps_one_network_field(tmp_path: Path, monke
     cadence = evidence_of(body, addr_b, "cadence")
     assert cadence == {"kind": "cadence", "median_seconds": 7200, "seed_median_seconds": 7200}
     assert by_address[addr_b]["reasons"][1] == (
-        "received 100 (decimals 6) of SYN, inside 80\u2013120 derived from the seed receipts"
+        f"received 100 (decimals 6) of {r1.TOKEN}, inside 80\u2013120 derived from the seed receipts"
     )
     assert by_address[addr_b]["reasons"][2] == "median interval 7200s is within 20% of the seed median 7200s"
     assert by_address[addr_c]["score"] == 1
@@ -770,6 +770,42 @@ def _section(text: str, heading: str) -> str:
     return chunk if nxt < 0 else chunk[:nxt]
 
 
+def _node_label(address: str) -> str:
+    short = address if len(address) <= 12 else address[:6] + "\u2026" + address[-4:]
+    allowed = set("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\u2026: ")
+    return "".join(char for char in short if char in allowed)
+
+
+def _unescaped_pipes(line: str) -> int:
+    count = 0
+    escaped = False
+    for char in line:
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == "|":
+            count += 1
+    return count
+
+
+def _assert_table_columns(text: str) -> None:
+    lines = text.splitlines()
+    tables = 0
+    for index, line in enumerate(lines):
+        if not line.startswith("| ") or index + 1 >= len(lines) or not lines[index + 1].startswith("| ---"):
+            continue
+        tables += 1
+        expected = _unescaped_pipes(line)
+        cursor = index + 1
+        while cursor < len(lines) and lines[cursor].startswith("|"):
+            assert _unescaped_pipes(lines[cursor]) == expected
+            cursor += 1
+    assert tables >= 1
+
+
 def _masked(text: str) -> bool:
     return "***" in text.replace("\\", "")
 
@@ -828,8 +864,11 @@ def test_untrusted_symbol_stays_data_and_markdown_drops_urls(
     assert forbidden not in "\n".join(row["reasons"]).lower()
     assert r1.TOKEN in "\n".join(row["reasons"])
     stored = Path(body["result_path"]).read_text(encoding="utf-8")
+    stored_blank = _with_attack_symbols_blanked(json.loads(stored), attack)
     md = Path(body["markdown_path"]).read_text(encoding="utf-8")
     scan(_with_attack_symbols_blanked(body, attack))
+    scan(stored_blank)
+    assert attack not in stored_blank
     scan(md)
     assert "://" not in md
     assert "<img" not in md
@@ -1309,9 +1348,8 @@ def test_expand_help_block_matches_the_cli(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setenv("COLUMNS", "200")
     parser = build_parser()
     buffer = io.StringIO()
-    with contextlib.redirect_stdout(buffer):
-        with pytest.raises(SystemExit) as caught:
-            parser.parse_args(["relations", "expand", "--help"])
+    with contextlib.redirect_stdout(buffer), pytest.raises(SystemExit) as caught:
+        parser.parse_args(["relations", "expand", "--help"])
     assert caught.value.code == 0
     help_text = buffer.getvalue().replace("\r\n", "\n").strip()
     reference = Path(__file__).resolve().parents[2] / "docs" / "cli-reference.md"
@@ -1323,3 +1361,354 @@ def test_expand_help_block_matches_the_cli(monkeypatch: pytest.MonkeyPatch) -> N
     inbound = body.index("## `guardian relations inbound`")
     assert "Repeat `--network` on `expand`" not in body[inbound:start]
     assert "Repeat `--network` on `expand`" in body[start:]
+
+
+def test_seed_fragment_is_masked_in_stdout_json_and_mermaid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    fragment = "0x0000"
+    sources, routes, secrets = r1.blockscout_profile(ETH, "blockscout-eth", "BLOCKSCOUT_ETH_URL", f"https://{ETH_HOST}")
+    secrets["RELATIONS_SEED_FRAGMENT"] = fragment
+    backend = install_chains(tmp_path, monkeypatch, sources, routes, secrets, [ETH])
+    r1.fill_tails(backend, [r1.token_item(r1.PAYER, r1.LEFT, 5, r1.STAMP, r1.tx(1))], [])
+    code, body = invoke(capsys, r1.expand_argv(
+        tmp_path / "monitor.json", "--yes", "--markdown", "--payer", r1.PAYER, "--network", ETH, "--seed", r1.SEED,
+    ), backend)
+    assert code == 0, body
+    stored = Path(body["result_path"]).read_text(encoding="utf-8")
+    md = Path(body["markdown_path"]).read_text(encoding="utf-8")
+    stdout = json.dumps(body)
+    assert json.loads(stored)["seeds"] == body["seeds"]
+    redacted = body["seeds"][0]
+    assert fragment not in redacted
+    assert r1.SEED not in redacted
+    assert redacted.startswith("***")
+    for blob in (stdout, stored, md):
+        assert fragment not in blob
+        assert r1.SEED not in blob
+        assert "***" in blob
+    block = md.split("graph LR", 1)[1].split("```", 1)[0]
+    assert fragment not in block
+    assert r1.SEED not in block
+    assert _node_label(r1.SEED) not in block
+    assert _node_label(redacted) in block
+
+
+def test_complete_and_gap_with_zero_receipts_stays_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    sources, routes, secrets = eth_base()
+    backend = install_chains(tmp_path, monkeypatch, sources, routes, secrets, [ETH, BASE])
+    backend.add(lambda call: urlsplit(call.url).hostname == BASE_HOST, r1.FixtureFailure("connection_error"))
+    fill_host(backend, ETH_HOST, [], [])
+    code, body = invoke(capsys, r1.expand_argv(
+        tmp_path / "monitor.json", "--yes", "--markdown", "--payer", r1.PAYER,
+        "--network", ETH, "--network", BASE, "--seed", r1.SEED,
+    ), backend)
+    assert code == 0, body
+    status = {row["network"]: row["read_status"] for row in body["reads"]}
+    assert status[ETH] == "complete"
+    assert status[BASE] == "gap"
+    assert body["seed_receipts"] == {"assets": [], "count": 0}
+    assert body["evidence_note"] == "no_seed_receipts_in_partial_read"
+    text = Path(body["markdown_path"]).read_text(encoding="utf-8")
+    section = _section(text, "## Seed receipts")
+    assert "Note: no_seed_receipts_in_partial_read" in section
+    assert "Note: no_seed_receipts\n" not in section
+    assert "Count: 0" in section
+
+
+def test_markdown_reasons_keep_spaces_and_escape_backticks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    sources, routes, secrets = r1.blockscout_profile(ETH, "blockscout-eth", "BLOCKSCOUT_ETH_URL", f"https://{ETH_HOST}")
+    backend = install_chains(tmp_path, monkeypatch, sources, routes, secrets, [ETH])
+    write_labels(tmp_path / "state", labels_file(label_row(r1.LEFT, ETH, "tick`mark", "other")))
+    r1.fill_tails(backend, [
+        r1.token_item(r1.PAYER, r1.SEED, 100, r1.STAMP, r1.tx(1)),
+        r1.token_item(r1.PAYER, r1.LEFT, 100, r1.STAMP + 5, r1.tx(2)),
+    ], [])
+    code, body = invoke(capsys, r1.expand_argv(
+        tmp_path / "monitor.json", "--yes", "--markdown", "--payer", r1.PAYER, "--network", ETH, "--seed", r1.SEED,
+    ), backend)
+    assert code == 0, body
+    text = Path(body["markdown_path"]).read_text(encoding="utf-8")
+    assert "tick\\`mark" in text
+    assert "\\ " not in text
+
+
+def test_source_symbols_stay_out_of_reasons_and_markdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    symbols = ("Ident" + "ity", "PER" + "SON", "employ" + "ee")
+    sources, routes, secrets = r1.blockscout_profile(ETH, "blockscout-eth", "BLOCKSCOUT_ETH_URL", f"https://{ETH_HOST}")
+    for symbol in symbols:
+        backend = install_chains(tmp_path, monkeypatch, sources, routes, secrets, [ETH])
+        seed = r1.token_item(r1.PAYER, r1.SEED, 100, r1.STAMP, r1.tx(1))
+        other = r1.token_item(r1.PAYER, r1.LEFT, 100, r1.STAMP + 5, r1.tx(2))
+        seed["token"]["symbol"] = symbol
+        other["token"]["symbol"] = symbol
+        r1.fill_tails(backend, [seed, other], [])
+        code = r1.main(r1.expand_argv(
+            tmp_path / "monitor.json", "--yes", "--markdown", "--payer", r1.PAYER, "--network", ETH, "--seed", r1.SEED,
+        ), backend=backend, clock=lambda: r1.CLOCK)
+        printed = capsys.readouterr().out
+        body = json.loads(printed)
+        assert code == 0, body
+        row = next(item for item in body["co_recipients"] if item["address"] == r1.LEFT)
+        assert_evidence(row)
+        reasons = "\n".join(row["reasons"])
+        md = Path(body["markdown_path"]).read_text(encoding="utf-8")
+        scan(reasons)
+        scan(md)
+        assert symbol not in reasons
+        assert symbol.lower() not in reasons.lower()
+        assert symbol not in md
+        assert symbol.lower() not in md.lower()
+        assert r1.TOKEN in reasons
+        assert row["assets"][0]["symbol"] == symbol
+        assert row["transfers"][0]["asset"]["symbol"] == symbol
+        assert body["seed_receipts"]["assets"][0]["symbol"] == symbol
+        assert evidence_of(body, r1.LEFT, "amount_band")["asset"]["symbol"] == symbol
+        assert evidence_of(body, r1.LEFT, "same_asset")["assets"][0]["symbol"] == symbol
+
+
+def test_newer_time_sorts_ahead_of_a_larger_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    sources, routes, secrets = r1.blockscout_profile(ETH, "blockscout-eth", "BLOCKSCOUT_ETH_URL", f"https://{ETH_HOST}")
+    backend = install_chains(tmp_path, monkeypatch, sources, routes, secrets, [ETH])
+    older = r1.evm(72)
+    newer = r1.evm(73)
+    assert older < newer
+    moment = r1.STAMP
+    r1.fill_tails(backend, [
+        r1.token_item(r1.PAYER, r1.SEED, 100, moment, r1.tx(1)),
+        r1.token_item(r1.PAYER, older, 100, moment, r1.tx(1)),
+        r1.token_item(r1.PAYER, r1.SEED, 100, moment + 8000, r1.tx(2)),
+        r1.token_item(r1.PAYER, newer, 100, moment + 8000, r1.tx(2)),
+    ], [])
+    code, body = invoke(capsys, r1.expand_argv(
+        tmp_path / "monitor.json", "--yes", "--payer", r1.PAYER, "--network", ETH, "--seed", r1.SEED,
+    ), backend)
+    assert code == 0, body
+    found = body["co_recipients"]
+    assert [row["address"] for row in found] == [newer, older]
+    by_address = {row["address"]: row for row in found}
+    assert by_address[newer]["score"] == by_address[older]["score"]
+    assert by_address[newer]["same_tx_as_seed"] is True
+    assert by_address[older]["same_tx_as_seed"] is True
+    assert by_address[newer]["count"] == by_address[older]["count"]
+    assert by_address[newer]["last_timestamp"] > by_address[older]["last_timestamp"]
+
+
+def test_smaller_address_sorts_ahead_of_a_later_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    sources, routes, secrets = r1.blockscout_profile(ETH, "blockscout-eth", "BLOCKSCOUT_ETH_URL", f"https://{ETH_HOST}")
+    backend = install_chains(tmp_path, monkeypatch, sources, routes, secrets, [ETH])
+    small = r1.evm(70)
+    large = r1.evm(71)
+    assert small < large
+    moment = r1.STAMP
+    r1.fill_tails(backend, [
+        r1.token_item(r1.PAYER, r1.SEED, 100, moment, r1.tx(1)),
+        r1.token_item(r1.PAYER, large, 100, moment + 10, r1.tx(2)),
+        r1.token_item(r1.PAYER, small, 100, moment + 10, r1.tx(3)),
+    ], [])
+    code, body = invoke(capsys, r1.expand_argv(
+        tmp_path / "monitor.json", "--yes", "--payer", r1.PAYER, "--network", ETH, "--seed", r1.SEED,
+    ), backend)
+    assert code == 0, body
+    found = body["co_recipients"]
+    assert [row["address"] for row in found] == [small, large]
+    by_address = {row["address"]: row for row in found}
+    assert by_address[small]["score"] == by_address[large]["score"]
+    assert by_address[small]["same_tx_as_seed"] is False
+    assert by_address[large]["same_tx_as_seed"] is False
+    assert by_address[small]["count"] == by_address[large]["count"]
+    assert by_address[small]["last_timestamp"] == by_address[large]["last_timestamp"]
+
+
+def test_candidate_duplicate_timestamps_keep_the_deduped_median(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    sources, routes, secrets = r1.blockscout_profile(ETH, "blockscout-eth", "BLOCKSCOUT_ETH_URL", f"https://{ETH_HOST}")
+    backend = install_chains(tmp_path, monkeypatch, sources, routes, secrets, [ETH])
+    other = r1.evm(98)
+    moment = r1.STAMP
+    rows = [
+        r1.token_item(r1.PAYER, r1.SEED, 100, moment, r1.tx(1)),
+        r1.token_item(r1.PAYER, r1.SEED, 100, moment + 7200, r1.tx(2)),
+    ]
+    for index, stamp in enumerate((moment, moment, moment, moment + 7200, moment + 14400)):
+        rows.append(r1.token_item(r1.PAYER, other, 100, stamp, r1.tx(3 + index)))
+    r1.fill_tails(backend, rows, [])
+    code, body = invoke(capsys, r1.expand_argv(
+        tmp_path / "monitor.json", "--yes", "--payer", r1.PAYER, "--network", ETH, "--seed", r1.SEED,
+    ), backend)
+    assert code == 0, body
+    cadence = evidence_of(body, other, "cadence")
+    assert cadence["seed_median_seconds"] == 7200
+    assert cadence["median_seconds"] == 7200
+
+
+def test_markdown_escapes_pipes_brackets_and_exclamation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    sources, routes, secrets = r1.blockscout_profile(ETH, "blockscout-eth", "BLOCKSCOUT_ETH_URL", f"https://{ETH_HOST}")
+    backend = install_chains(tmp_path, monkeypatch, sources, routes, secrets, [ETH])
+    write_labels(tmp_path / "state", labels_file(label_row(r1.LEFT, ETH, "a|b [x] !y", "other")))
+    r1.fill_tails(backend, [r1.token_item(r1.PAYER, r1.LEFT, 5, r1.STAMP, "synth|hash")], [])
+    code, body = invoke(capsys, r1.expand_argv(
+        tmp_path / "monitor.json", "--yes", "--markdown", "--payer", r1.PAYER, "--network", ETH, "--seed", r1.SEED,
+    ), backend)
+    assert code == 0, body
+    text = Path(body["markdown_path"]).read_text(encoding="utf-8")
+    assert "a\\|b" in text
+    assert "\\[x\\]" in text
+    assert "\\!y" in text
+    assert "synth\\|hash" in text
+    assert "a|b" not in text
+    _assert_table_columns(text)
+
+
+def test_markdown_strips_urls_without_a_word_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    sources, routes, secrets = r1.blockscout_profile(ETH, "blockscout-eth", "BLOCKSCOUT_ETH_URL", f"https://{ETH_HOST}")
+    backend = install_chains(tmp_path, monkeypatch, sources, routes, secrets, [ETH])
+    write_labels(tmp_path / "state", labels_file(label_row(r1.LEFT, ETH, "0xhttps://evil.example", "other")))
+    r1.fill_tails(backend, [
+        r1.token_item(r1.PAYER, r1.LEFT, 5, r1.STAMP, "_https://evil.example/p.png"),
+    ], [])
+    code, body = invoke(capsys, r1.expand_argv(
+        tmp_path / "monitor.json", "--yes", "--markdown", "--payer", r1.PAYER, "--network", ETH, "--seed", r1.SEED,
+    ), backend)
+    assert code == 0, body
+    text = Path(body["markdown_path"]).read_text(encoding="utf-8")
+    assert "://" not in text
+    assert "[url removed]" in text
+
+
+def test_hub_markdown_names_the_hub_and_the_hidden_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    sources, routes, secrets = r1.blockscout_profile(ETH, "blockscout-eth", "BLOCKSCOUT_ETH_URL", f"https://{ETH_HOST}")
+    backend = install_chains(tmp_path, monkeypatch, sources, routes, secrets, [ETH])
+    r1.fill_tails(backend, [r1.token_item(r1.PAYER, r1.LEFT, 2, r1.STAMP, r1.tx(1), contract=True)], [])
+    code, body = invoke(capsys, r1.expand_argv(
+        tmp_path / "monitor.json", "--yes", "--markdown", "--payer", r1.PAYER, "--network", ETH, "--seed", r1.SEED,
+    ), backend)
+    assert code == 0, body
+    assert body["hub"] is True
+    assert body["hub_reasons"] == ["contract"]
+    assert "co_recipients" not in body
+    text = Path(body["markdown_path"]).read_text(encoding="utf-8")
+    window = _section(text, "## Window")
+    assert "Hub: true (contract)" in window
+    assert "Co-recipients are not listed for a hub payer; pass --expand-hub to list them." in window
+    assert "## Co-recipients" not in text
+
+
+def test_cadence_holds_when_both_medians_are_one_hour(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    sources, routes, secrets = r1.blockscout_profile(ETH, "blockscout-eth", "BLOCKSCOUT_ETH_URL", f"https://{ETH_HOST}")
+    backend = install_chains(tmp_path, monkeypatch, sources, routes, secrets, [ETH])
+    other = r1.evm(97)
+    moment = r1.STAMP
+    r1.fill_tails(backend, [
+        r1.token_item(r1.PAYER, r1.SEED, 100, moment, r1.tx(1)),
+        r1.token_item(r1.PAYER, r1.SEED, 100, moment + 3600, r1.tx(2)),
+        r1.token_item(r1.PAYER, other, 100, moment, r1.tx(3)),
+        r1.token_item(r1.PAYER, other, 100, moment + 3600, r1.tx(4)),
+    ], [])
+    code, body = invoke(capsys, r1.expand_argv(
+        tmp_path / "monitor.json", "--yes", "--payer", r1.PAYER, "--network", ETH, "--seed", r1.SEED,
+    ), backend)
+    assert code == 0, body
+    cadence = evidence_of(body, other, "cadence")
+    assert cadence["seed_median_seconds"] == 3600
+    assert cadence["median_seconds"] == 3600
+    assert type(cadence["seed_median_seconds"]) is int
+    assert type(cadence["median_seconds"]) is int
+
+
+def test_illegal_native_symbol_is_named_native(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    bad = "Ident" + "ity"
+    from guardian.relations import command as relations_command
+
+    original = relations_command.load_registry
+
+    def wrapped(directory, *args, **kwargs):
+        registry = original(directory, *args, **kwargs)
+        entry = registry[ETH]
+        native = dict(entry["native_asset"])
+        native["symbol"] = bad
+        entry["native_asset"] = native
+        return registry
+
+    monkeypatch.setattr(relations_command, "load_registry", wrapped)
+    sources, routes, secrets = r1.blockscout_profile(ETH, "blockscout-eth", "BLOCKSCOUT_ETH_URL", f"https://{ETH_HOST}")
+    backend = install_chains(tmp_path, monkeypatch, sources, routes, secrets, [ETH])
+    r1.fill_tails(backend, [], [
+        r1.native_item(r1.PAYER, r1.SEED, 4, r1.STAMP, r1.tx(1)),
+        r1.native_item(r1.PAYER, r1.LEFT, 4, r1.STAMP + 5, r1.tx(2)),
+    ])
+    code = r1.main(r1.expand_argv(
+        tmp_path / "monitor.json", "--yes", "--markdown", "--payer", r1.PAYER, "--network", ETH, "--seed", r1.SEED,
+    ), backend=backend, clock=lambda: r1.CLOCK)
+    printed = capsys.readouterr().out
+    body = json.loads(printed)
+    assert code == 0, body
+    row = next(item for item in body["co_recipients"] if item["address"] == r1.LEFT)
+    reasons = "\n".join(row["reasons"])
+    md = Path(body["markdown_path"]).read_text(encoding="utf-8")
+    scan(reasons)
+    scan(md)
+    assert bad not in reasons
+    assert bad.lower() not in md.lower()
+    assert "received 4 (decimals 18) of native, inside 3\u20135 derived from the seed receipts" in reasons
+    assert row["assets"][0]["symbol"] == bad
+    assert row["assets"][0]["kind"] == "native"
+    assert evidence_of(body, r1.LEFT, "amount_band")["asset"]["symbol"] == bad
+    assert " of native," in md
+
+
+def test_repeated_network_is_one_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    sources, routes, secrets = r1.blockscout_profile(ETH, "blockscout-eth", "BLOCKSCOUT_ETH_URL", f"https://{ETH_HOST}")
+    backend = install_chains(tmp_path, monkeypatch, sources, routes, secrets, [ETH])
+    r1.fill_tails(backend, [r1.token_item(r1.PAYER, r1.LEFT, 5, r1.STAMP, r1.tx(1))], [])
+    code, body = invoke(capsys, r1.expand_argv(
+        tmp_path / "monitor.json", "--yes", "--payer", r1.PAYER,
+        "--network", ETH, "--network", ETH, "--seed", r1.SEED,
+    ), backend)
+    assert code == 0, body
+    assert body["networks"] == [ETH]
+    assert body["network"] == ETH
+    assert len(body["reads"]) == 1
+    assert body["reads"][0]["network"] == ETH
+    assert len(body["plan"]["queries"]) == 1
+    assert body["plan"]["queries"][0]["network"] == ETH
+
+
+def test_empty_merged_addresses_are_described(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    sources, routes, secrets = r1.blockscout_profile(ETH, "blockscout-eth", "BLOCKSCOUT_ETH_URL", f"https://{ETH_HOST}")
+    backend = install_chains(tmp_path, monkeypatch, sources, routes, secrets, [ETH])
+    r1.fill_tails(backend, [r1.token_item(r1.PAYER, r1.LEFT, 5, r1.STAMP, r1.tx(1))], [])
+    code, body = invoke(capsys, r1.expand_argv(
+        tmp_path / "monitor.json", "--yes", "--markdown", "--payer", r1.PAYER, "--network", ETH, "--seed", r1.SEED,
+    ), backend)
+    assert code == 0, body
+    assert body["merged_addresses"] == []
+    text = Path(body["markdown_path"]).read_text(encoding="utf-8")
+    section = _section(text, "## Merged addresses")
+    assert "No merged addresses." in section
+    assert "None" not in section

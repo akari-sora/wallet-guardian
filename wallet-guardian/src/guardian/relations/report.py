@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from guardian.balances.labels import lookup
 from guardian.relations.evidence import evidence_for, seed_summary
@@ -336,7 +336,9 @@ def _seed_fields(reads: list[dict], summary: dict) -> tuple[dict | None, str | N
     known = {"assets": summary["assets"], "count": count}
     if statuses and all(status in {"gap", "unsupported"} for status in statuses):
         return None, "seed_receipts_unknown"
-    if count == 0 and any(status == "partial" for status in statuses):
+    all_complete = bool(statuses) and all(status == "complete" for status in statuses)
+    usable = any(status in {"complete", "partial"} for status in statuses)
+    if count == 0 and usable and not all_complete:
         return known, "no_seed_receipts_in_partial_read"
     if count == 0:
         return known, "no_seed_receipts"
@@ -389,4 +391,4 @@ def _network_family(registry: Mapping, network: str) -> str:
 
 
 def _iso(stamp: int) -> str:
-    return datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.fromtimestamp(stamp, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
