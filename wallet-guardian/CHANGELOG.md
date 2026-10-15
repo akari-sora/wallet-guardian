@@ -16,6 +16,7 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 
 ### Changed
 
+- When `balance-probe` cannot read logs, a native balance change already read in that round still records `balance_change` for that chain. The row stays `failure: logs`, the probe cursor does not advance, a same-balance or first observation is not committed, and nothing is written as zero. Token transfers and approvals still need a log source that accepts block ranges. On 2026-10-15, one round against public contract addresses, publicnode (Ethereum, BSC, Base, Optimism) accepted a topic-only `eth_getLogs` for a single block and returned JSON-RPC `-32701` for two or more blocks; one round, not a 24-hour measurement.
 - A degraded `guardian run-once` exits 3. `failed` stays 1. A misconfigured delivery still exits 2.
 
 ## [0.4.0rc4] - 2026-10-11

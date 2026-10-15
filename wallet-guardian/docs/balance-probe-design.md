@@ -20,19 +20,23 @@ For each enabled EVM network that has a watched wallet and an `evm_rpc` source:
 4. `eth_getLogs` for incoming `Transfer` logs: topic0 is Transfer, topic2 is the watched addresses OR-ed. The wallet is not placed in the `address` filter.
 5. `eth_getLogs` for outgoing transfers and approvals: topic0 is Transfer, Approval, ApprovalForAll, and the Permit2 events, OR-ed, and topic1 is the watched addresses OR-ed.
 
-Log calls use the ready `evm_rpc` sources on the `history.token` route for that network. If that route has none, the probe uses `permissions.standard`. A policy refusal (`filter_requires_address` or `method_disabled`) tries the next source in that route. Any other log failure stops the chain for this round. The family balance RPC is not used as a hidden log fallback: publicnode answers BSC and OP `eth_getLogs` with JSON-RPC `-32701`. A missing log source, a refusal from every source, or a failed read is a gap. It does not become an empty log list, a zero balance, a trigger, or a cursor advance.
+Log calls use the ready `evm_rpc` sources on the `history.token` route for that network. If that route has none, the probe uses `permissions.standard`. A policy refusal (`filter_requires_address` or `method_disabled`) tries the next source in that route. Any other log failure stops the log route for this round. The family balance RPC is not used as a hidden log fallback: publicnode answers BSC and OP `eth_getLogs` with JSON-RPC `-32701`. A missing log source, a refusal from every source, or a failed read is a gap. It does not become an empty log list, a zero balance, or a cursor advance.
 
-A quiet native balance is committed with the same versioned baseline as `run-once`. The first valid observation is version 1 and does not alert. A changed raw balance is not written by the probe, so the triggered `run-once` still sees the delta. A failed read does not write zero and does not bump the version.
+A quiet native balance is committed with the same versioned baseline as `run-once` when that round's logs were read. The first valid observation is version 1 and does not alert. A changed raw balance is not written by the probe, so the triggered `run-once` still sees the delta. A failed read does not write zero and does not bump the version.
 
 A Transfer log, an approval-family log, or a changed raw balance records a trigger for that chain only. The same fingerprint is not recorded again when the head hash changes; the next round still reads. `--trigger run-once` then starts at most one `run-once --no-send` for outstanding triggers. `--trigger none` does not start it.
 
-Head, code, multicall, per-wallet balance, or log failure: no trigger, no probe-cursor advance, no zero written.
+Head, code, multicall, or per-wallet balance failure: no trigger, no probe-cursor advance, no zero written.
+
+When the log route is a gap, a native balance change already read in that round still records a `balance_change` trigger for that chain. The row stays `failure: logs`, the probe cursor does not advance, and a same-balance or first observation is not committed. Nothing is written as zero. Token transfers and approvals still need a log source that accepts block ranges.
+
+On 2026-10-15, one round against public contract addresses, publicnode (Ethereum, BSC, Base, Optimism) accepted a topic-only `eth_getLogs` for a single block and returned JSON-RPC `-32701` for two or more blocks. That was one round, not a 24-hour measurement.
 
 The optional nonce batch and a second header for `latest − k` are not issued. Either one would push a quiet Multicall3 round past the five-HTTP ceiling below. The bound block is the single `latest` head this round read.
 
 ## Shared reducer
 
-One observation is fetched outside the database transaction. The commit then takes a short immediate transaction and requires the expected baseline version. The first valid observation writes version 1 and does not alert. The probe uses `plan_transition` for that decision. A raw balance that differs from the stored baseline is not committed here, so the triggered `run-once` still computes the delta. A same-balance observation at a later block commits with no alert. A lower block is discarded. A failed read does not write zero and does not bump the version. History cursors stay on their own rows.
+One observation is fetched outside the database transaction. The commit then takes a short immediate transaction and requires the expected baseline version. The first valid observation writes version 1 and does not alert. The probe uses `plan_transition` for that decision. A raw balance that differs from the stored baseline is not committed here, so the triggered `run-once` still computes the delta. A same-balance observation at a later block commits with no alert only when that round's logs were read. A lower block is discarded. A failed read does not write zero and does not bump the version. History cursors stay on their own rows.
 
 ## Request budget
 
@@ -40,7 +44,7 @@ This is an engineering estimate, not a provider quota and not a promise. The non
 
 A quiet Multicall3 round is 5 HTTP calls and 5 methods per chain: head, `eth_getCode`, one `aggregate3`, and two `eth_getLogs`. That is within 5 HTTP and within `4 + N` methods for one or more wallets. The method count does not grow with N on this path. An empty-code fallback adds one `eth_getBalance` per wallet instead of the single `eth_call`.
 
-A policy refusal of the first log source is outside that quiet ceiling. The refused source is asked once for the chunk, then both log directions move to the next source: one refused `eth_getLogs` plus the two queries on the next source, so the round is 6 HTTP (3 family calls plus 3 log calls). The ≤5 figure is the quiet-success ceiling. Capping the refusal path at 5 would drop one log direction or skip the failover that makes detection possible on publicnode BSC and OP, so the fall-through is not capped. A second refusal, or any non-policy failure, stops the chain: gap, no empty logs, no zero, no trigger, no cursor advance. Head, code, and balance stay on the family source and are not repeated for the log failover.
+A policy refusal of the first log source is outside that quiet ceiling. The refused source is asked once for the chunk, then both log directions move to the next source: one refused `eth_getLogs` plus the two queries on the next source, so the round is 6 HTTP (3 family calls plus 3 log calls). The ≤5 figure is the quiet-success ceiling. Capping the refusal path at 5 would drop one log direction or skip the failover that makes detection possible on publicnode BSC and OP, so the fall-through is not capped. A second refusal, or any non-policy failure, stops the log route for this round: gap, no empty logs, no zero, no cursor advance. A native balance change already read in that round can still record `balance_change`, as described above. Head, code, and balance stay on the family source and are not repeated for the log failover.
 
 Count the existing three-hour `run-once` monitor as well. Every endpoint that shares the provider account shares the budget. This command does not add a scheduler and does not change the monitor interval.
 

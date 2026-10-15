@@ -629,3 +629,148 @@ def _write_private(path: Path, text: str) -> None:
     descriptor = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(text)
+
+
+def test_log_gap_records_a_changed_native_balance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A log gap still records one balance_change. The baseline and probe cursor stay put."""
+    config = _desk(tmp_path, monkeypatch)
+    _seed(tmp_path)
+    before = _baseline(tmp_path, BSC)
+    probe_path = tmp_path / "probe.sqlite"
+    for mode in ("refusal", "read_error"):
+        if probe_path.exists():
+            probe_path.unlink()
+        backend = Backend()
+        backend.balance[BSC] = TWO
+        if mode == "refusal":
+            backend.refuse_logs_hosts.update({"nodereal.example.invalid", "bsc-logs.example.invalid"})
+        else:
+            backend.fail_logs.add(BSC)
+        payload = _run(config, tmp_path, backend, capsys, trigger="none")
+        bsc = next(chain for chain in payload["chains"] if chain["network"] == BSC)
+        base = next(chain for chain in payload["chains"] if chain["network"] == BASE)
+        assert _reasons(tmp_path) == [(BSC, "balance_change")]
+        assert bsc["failure"] == "logs"
+        assert bsc["triggered"] is True
+        assert bsc["reasons"] == ["balance_change"]
+        assert bsc["cursor_advanced"] is False
+        assert base["failure"] is None
+        assert base["triggered"] is False
+        assert _baseline(tmp_path, BSC) == before
+        probe = Database(probe_path)
+        try:
+            assert probe.probe_cursor(TENANT, BSC) is None
+        finally:
+            probe.close()
+        _assert_no_zero_and_no_alert(tmp_path)
+        _assert_history_unchanged(tmp_path)
+
+
+def test_log_gap_failed_balance_item_does_not_trigger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = _desk(tmp_path, monkeypatch)
+    _seed(tmp_path)
+    before = _baseline(tmp_path, BSC)
+    backend = Backend()
+    backend.refuse_logs_hosts.update({"nodereal.example.invalid", "bsc-logs.example.invalid"})
+    backend.fail_item.add(BSC)
+    payload = _run(config, tmp_path, backend, capsys, trigger="none")
+    bsc = next(chain for chain in payload["chains"] if chain["network"] == BSC)
+    assert bsc["failure"] == "balance"
+    assert bsc["triggered"] is False
+    assert bsc["cursor_advanced"] is False
+    assert _reasons(tmp_path) == []
+    assert _baseline(tmp_path, BSC) == before
+    assert [
+        call for call in backend.calls
+        if call["method"] == "eth_getLogs" and _network(call["url"]) == BSC
+    ] == []
+    _assert_no_zero_and_no_alert(tmp_path)
+
+
+def test_log_gap_does_not_write_a_first_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = _desk(tmp_path, monkeypatch)
+    _seed(tmp_path)
+    state = Database(tmp_path / "state" / "monitor.sqlite")
+    try:
+        state.conn.execute(
+            "DELETE FROM native_balance_baselines WHERE tenant_id=? AND wallet_id=? AND network=?",
+            (TENANT, WALLET, BSC),
+        )
+        state.conn.commit()
+        assert state.native_balance_baseline(TENANT, WALLET, BSC, ASSETS[BSC]) is None
+    finally:
+        state.close()
+    backend = Backend()
+    backend.refuse_logs_hosts.update({"nodereal.example.invalid", "bsc-logs.example.invalid"})
+    payload = _run(config, tmp_path, backend, capsys, trigger="none")
+    bsc = next(chain for chain in payload["chains"] if chain["network"] == BSC)
+    assert bsc["failure"] == "logs"
+    assert bsc["triggered"] is False
+    assert _reasons(tmp_path) == []
+    opened = Database(tmp_path / "state" / "monitor.sqlite")
+    try:
+        assert opened.native_balance_baseline(TENANT, WALLET, BSC, ASSETS[BSC]) is None
+    finally:
+        opened.close()
+    _assert_no_zero_and_no_alert(tmp_path)
+
+
+def test_log_gap_balance_change_is_recorded_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = _desk(tmp_path, monkeypatch)
+    _seed(tmp_path)
+    backend = Backend()
+    backend.refuse_logs_hosts.update({"nodereal.example.invalid", "bsc-logs.example.invalid"})
+    backend.balance[BSC] = TWO
+    _run(config, tmp_path, backend, capsys, trigger="none")
+    assert _reasons(tmp_path) == [(BSC, "balance_change")]
+    payload = _run(config, tmp_path, backend, capsys, trigger="none")
+    bsc = next(chain for chain in payload["chains"] if chain["network"] == BSC)
+    assert bsc["triggered"] is False
+    assert _reasons(tmp_path) == [(BSC, "balance_change")]
+
+
+def test_log_gap_changed_balance_calls_run_once_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _desk(tmp_path, monkeypatch)
+    _seed(tmp_path)
+    public, private, database = _open(config)
+    calls: list[int] = []
+
+    def run_once() -> None:
+        calls.append(1)
+
+    backend = Backend()
+    backend.refuse_logs_hosts.update({"nodereal.example.invalid", "bsc-logs.example.invalid"})
+    backend.balance[BSC] = TWO
+    try:
+        first = run_balance_probe(
+            public, private, database,
+            probe_state=tmp_path / "probe.sqlite",
+            backend=backend,
+            clock=lambda: CLOCK,
+            trigger="run-once",
+            run_once=run_once,
+        )
+        assert calls == [1]
+        assert first["run_once"] == "called"
+        second = run_balance_probe(
+            public, private, database,
+            probe_state=tmp_path / "probe.sqlite",
+            backend=backend,
+            clock=lambda: CLOCK,
+            trigger="run-once",
+            run_once=run_once,
+        )
+    finally:
+        database.close()
+    assert calls == [1]
+    assert second["run_once"] == "not_called"
