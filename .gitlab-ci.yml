@@ -1,11 +1,9 @@
-# Locked offline tests from MR !1, plus the static Pages job from main.
-# The pages job does not set VITE_GUARDIAN_MAINNET_SEND and refuses a true value.
-# It is manual on main, so a merge does not publish. D-11 (whether to delete
-# this job) stays the operator's decision. This reconcile does not deploy.
+# Locked offline tests from MR !1.
+# D-11 deleted the GitLab pages job and action-client/vercel.json.
+# This file does not publish the Action Client. It does not deploy.
 
 stages:
   - test
-  - deploy
 
 workflow:
   rules:
@@ -55,25 +53,6 @@ client-tests:
     - npm run build
   rules:
     - if: $CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event"
-
-pages:
-  stage: deploy
-  image: node:22
-  script:
-    - test "${VITE_GUARDIAN_MAINNET_SEND:-}" != "true"
-    - cd wallet-guardian/action-client
-    - npm ci --ignore-scripts --no-audit --no-fund
-    - npm run build
-    - rm -rf ../../public
-    - mkdir -p ../../public
-    - cp -a dist/. ../../public/
-  artifacts:
-    paths:
-      - public
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-      when: manual
-      allow_failure: true
 
 # On-demand Linux host (tag wg-box-ondemand).
 # Shared-runner jobs above are unchanged.

@@ -433,7 +433,8 @@ def test_mcm_share_s6_01_reuse_isolated_runner() -> None:
     assert "npm run build" in jobs["box-client-tests"]["script"]
     assert "npm run test:gate" in jobs["box-client-tests"]["script"]
     assert jobs["box-build-checks"]["script"][-1] == "uv build --wheel --sdist"
-    assert [name for name, job in jobs.items() if job.get("stage") == "deploy"] == ["pages"]
+    assert "pages" not in jobs
+    assert [name for name, job in jobs.items() if job.get("stage") == "deploy"] == []
 
     assert jobs["python-tests"]["timeout"] == "20m"
     assert jobs["python-tests"]["script"] == [
@@ -456,10 +457,6 @@ def test_mcm_share_s6_01_reuse_isolated_runner() -> None:
         "npm run test:api",
         "npm run build",
     ]
-    assert jobs["pages"]["rules"] == [
-        {"if": '$CI_COMMIT_BRANCH == "main"', "when": "manual", "allow_failure": True},
-    ]
-    assert jobs["pages"]["stage"] == "deploy"
     assert document["default"]["interruptible"] is True
     assert document["workflow"]["rules"][1]["when"] == "never"
 
@@ -546,10 +543,7 @@ def test_mcm_share_s6_02_fixed_sha_trigger() -> None:
     shared = jobs["python-tests"]["rules"]
     assert runs(shared, {"CI_PIPELINE_SOURCE": "push"}) is True
     assert runs(shared, {"CI_PIPELINE_SOURCE": "merge_request_event"}) is True
-    assert runs(jobs["pages"]["rules"], {"CI_COMMIT_BRANCH": "main"}) is True
-    assert jobs["pages"]["rules"][0]["when"] == "manual"
-    assert jobs["pages"]["rules"][0]["allow_failure"] is True
-    assert runs(jobs["pages"]["rules"], {"CI_COMMIT_BRANCH": "ci/wallet-guardian-on-demand"}) is False
+    assert "pages" not in jobs
 
 
 def test_mcm_share_s6_03_real_artifact_gate(tmp_path: Path) -> None:
