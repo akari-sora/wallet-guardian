@@ -15,6 +15,7 @@ from eth_abi import encode
 from eth_utils import to_checksum_address
 
 from guardian.chains.evm.accounting import TRANSFER_TOPIC, pad_address
+from guardian.chains.evm.multicall import decode_aggregate3_calls
 from guardian.chains.evm.permissions import ERC20_APPROVAL_TOPIC
 from guardian.cli import main
 from guardian.configuration import load_public_config, resolve_private_inputs
@@ -26,7 +27,9 @@ ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples" / "monitor.json"
 TENANT = "local"
 WALLET = "11111111-1111-4111-8111-111111111111"
+WALLET_B = "22222222-2222-4222-8222-222222222222"
 ADDRESS = to_checksum_address("0x" + ("0" * 39) + "1")
+ADDRESS_B = to_checksum_address("0x" + ("0" * 39) + "2")
 ONE = 10**18
 TWO = 2 * 10**18
 CLOCK = 1_700_000_000.0
@@ -59,6 +62,7 @@ class Backend:
         self.calls: list[dict] = []
         self.head = {BSC: (10, _hash(10)), BASE: (20, _hash(20))}
         self.balance = {BSC: ONE, BASE: ONE}
+        self.balances: dict[str, list[int]] = {}
         self.code = {BSC: "0x01", BASE: "0x01"}
         self.transfer_logs: dict[str, list[dict]] = {BSC: [], BASE: []}
         self.approval_logs: dict[str, list[dict]] = {BSC: [], BASE: []}
@@ -85,10 +89,17 @@ class Backend:
         if method == "eth_call":
             if network in self.fail_multicall:
                 return _err()
+            count = _requested_calls(params)
             if network in self.fail_item:
                 word = (0).to_bytes(32, "big")
-                return _ok("0x" + encode(["(bool,bytes)[]"], [[(False, word)]]).hex())
-            return _ok("0x" + encode(["(bool,bytes)[]"], [[(True, self.balance[network].to_bytes(32, "big"))]]).hex())
+                items = [(False, word) for _ in range(count)]
+            else:
+                listed = self.balances.get(network)
+                values = [self.balance[network]] * count if listed is None else listed
+                if len(values) != count:
+                    raise AssertionError(f"{network} balances {len(values)} != aggregate3 calls {count}")
+                items = [(True, int(value).to_bytes(32, "big")) for value in values]
+            return _ok("0x" + encode(["(bool,bytes)[]"], [items]).hex())
         if method == "eth_getBalance":
             return _ok(hex(self.balance[network]))
         if method == "eth_getLogs":
@@ -346,7 +357,7 @@ def test_empty_code_falls_back_to_get_balance(
     assert _baseline(tmp_path, BSC)["raw_balance"] == str(ONE)
 
 
-def _desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def _desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, second_bsc: bool = False) -> Path:
     document = json.loads(EXAMPLE.read_text(encoding="utf-8"))
     document["plugins"] = []
     document["enabled_networks"] = [BSC, BASE]
@@ -368,18 +379,29 @@ def _desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     }
     accounts = tmp_path / "accounts.json"
     secret_path = tmp_path / "secrets.json"
+    records = [{
+        "address": ADDRESS,
+        "family": "evm",
+        "label": "Wallet A",
+        "networks": [BSC, BASE],
+        "own_group": "desk",
+        "relationship": "owned_user_declared",
+        "wallet_id": WALLET,
+    }]
+    if second_bsc:
+        records.append({
+            "address": ADDRESS_B,
+            "family": "evm",
+            "label": "Wallet B",
+            "networks": [BSC],
+            "own_group": "desk",
+            "relationship": "owned_user_declared",
+            "wallet_id": WALLET_B,
+        })
     _write_private(accounts, json.dumps({
         "schema_version": "guardian.accounts.v1",
         "tenant_id": TENANT,
-        "accounts": [{
-            "address": ADDRESS,
-            "family": "evm",
-            "label": "Wallet A",
-            "networks": [BSC, BASE],
-            "own_group": "desk",
-            "relationship": "owned_user_declared",
-            "wallet_id": WALLET,
-        }],
+        "accounts": records,
     }) + "\n")
     _write_private(secret_path, json.dumps(secrets) + "\n")
     monkeypatch.setenv("MONITOR_ACCOUNTS_FILE", str(accounts))
@@ -388,15 +410,18 @@ def _desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return config
 
 
-def _seed(tmp_path: Path) -> None:
+def _seed(tmp_path: Path, *, also_bsc: tuple[str, ...] = ()) -> None:
     state = tmp_path / "state"
     state.mkdir(parents=True, exist_ok=True)
     database = Database(state / "monitor.sqlite")
     try:
-        for network, asset in ASSETS.items():
+        seeded = [(WALLET, network, asset) for network, asset in ASSETS.items()]
+        for wallet in also_bsc:
+            seeded.append((wallet, BSC, ASSETS[BSC]))
+        for wallet, network, asset in seeded:
             database.commit_native_observation(
                 TENANT,
-                wallet_id=WALLET,
+                wallet_id=wallet,
                 network=network,
                 asset=asset,
                 expected_version=0,
@@ -473,12 +498,28 @@ def _counts(backend: Backend) -> tuple[dict[str, int], dict[str, int]]:
     return http, methods
 
 
-def _baseline(tmp_path: Path, network: str) -> dict:
+def _baseline(tmp_path: Path, network: str, wallet: str = WALLET) -> dict:
+    row = _baseline_row(tmp_path, network, wallet)
+    assert row is not None
+    return row
+
+
+def _baseline_row(tmp_path: Path, network: str, wallet: str) -> dict | None:
+    """Read the stored row. SQL, so a monkeypatched ``native_balance_baseline`` cannot hide it."""
     database = Database(tmp_path / "state" / "monitor.sqlite")
     try:
-        row = database.native_balance_baseline(TENANT, WALLET, network, ASSETS[network])
-        assert row is not None
-        return dict(row)
+        row = database.conn.execute(
+            """
+            SELECT version, raw_balance, block_number, block_hash, block_timestamp, observed_at,
+                   source_id, confirmation_policy, binding, continuity, last_failed_at, nonce
+            FROM native_balance_baselines
+            WHERE tenant_id=? AND wallet_id=? AND network=? AND asset=?
+            """,
+            (TENANT, wallet, network, ASSETS[network]),
+        ).fetchone()
+        if row is None:
+            return None
+        return {key: row[key] for key in row.keys()}
     finally:
         database.close()
 
@@ -538,6 +579,19 @@ def _log(topic: str, index: int) -> dict:
 
 def _hash(number: int) -> str:
     return "0x" + f"{number:064x}"
+
+
+def _requested_calls(params: list) -> int:
+    """Count aggregate3 calls in an eth_call. A non-aggregate payload stays one item."""
+    if not params or not isinstance(params[0], dict):
+        return 1
+    data = params[0].get("data")
+    if not isinstance(data, str):
+        return 1
+    calls = decode_aggregate3_calls(data)
+    if not calls:
+        return 1
+    return len(calls)
 
 
 def _network(url: str) -> str:
@@ -677,6 +731,7 @@ def test_log_gap_failed_balance_item_does_not_trigger(
     backend = Backend()
     backend.refuse_logs_hosts.update({"nodereal.example.invalid", "bsc-logs.example.invalid"})
     backend.fail_item.add(BSC)
+    backend.balance[BSC] = TWO
     payload = _run(config, tmp_path, backend, capsys, trigger="none")
     bsc = next(chain for chain in payload["chains"] if chain["network"] == BSC)
     assert bsc["failure"] == "balance"
@@ -762,6 +817,9 @@ def test_log_gap_changed_balance_calls_run_once_once(
         )
         assert calls == [1]
         assert first["run_once"] == "called"
+        stored = [row for row in _trigger_rows(tmp_path) if row["status"] == "triggered"]
+        assert len(stored) == 1
+        assert stored[0]["handoff"] == "called"
         second = run_balance_probe(
             public, private, database,
             probe_state=tmp_path / "probe.sqlite",
@@ -774,3 +832,67 @@ def test_log_gap_changed_balance_calls_run_once_once(
         database.close()
     assert calls == [1]
     assert second["run_once"] == "not_called"
+
+
+def test_log_gap_two_wallets_records_only_the_changed_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A log gap records the changed wallet and does not write a peer's first baseline."""
+    config = _desk(tmp_path, monkeypatch, second_bsc=True)
+    _seed(tmp_path)
+    before = _baseline(tmp_path, BSC)
+    backend = Backend()
+    backend.refuse_logs_hosts.update({"nodereal.example.invalid", "bsc-logs.example.invalid"})
+    backend.balances[BSC] = [TWO, ONE]
+    payload = _run(config, tmp_path, backend, capsys, trigger="none")
+    bsc = next(chain for chain in payload["chains"] if chain["network"] == BSC)
+    assert _reasons(tmp_path) == [(BSC, "balance_change")]
+    assert bsc["failure"] == "logs"
+    assert bsc["triggered"] is True
+    assert bsc["cursor_advanced"] is False
+    assert _baseline(tmp_path, BSC) == before
+    assert _baseline_row(tmp_path, BSC, WALLET_B) is None
+    probe = Database(tmp_path / "probe.sqlite")
+    try:
+        assert probe.probe_cursor(TENANT, BSC) is None
+    finally:
+        probe.close()
+    _assert_no_zero_and_no_alert(tmp_path)
+    _assert_history_unchanged(tmp_path)
+
+
+def test_log_gap_non_integer_peer_baseline_records_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One unreadable baseline fails the whole chain. The other wallet's change is not recorded."""
+    config = _desk(tmp_path, monkeypatch, second_bsc=True)
+    _seed(tmp_path, also_bsc=(WALLET_B,))
+    before_a = _baseline(tmp_path, BSC)
+    before_b = _baseline(tmp_path, BSC, WALLET_B)
+    original = Database.native_balance_baseline
+
+    def baseline(self: Database, tenant_id: str, wallet_id: str, network: str, asset: str) -> dict | None:
+        row = original(self, tenant_id, wallet_id, network, asset)
+        if wallet_id == WALLET_B and network == BSC and row is not None:
+            row = dict(row)
+            row["raw_balance"] = "not-an-int"
+        return row
+
+    monkeypatch.setattr(Database, "native_balance_baseline", baseline)
+    backend = Backend()
+    backend.refuse_logs_hosts.update({"nodereal.example.invalid", "bsc-logs.example.invalid"})
+    backend.balances[BSC] = [TWO, ONE]
+    payload = _run(config, tmp_path, backend, capsys, trigger="none")
+    bsc = next(chain for chain in payload["chains"] if chain["network"] == BSC)
+    assert bsc["failure"] == "logs"
+    assert bsc["triggered"] is False
+    assert bsc["cursor_advanced"] is False
+    assert _reasons(tmp_path) == []
+    assert _baseline_row(tmp_path, BSC, WALLET) == before_a
+    assert _baseline_row(tmp_path, BSC, WALLET_B) == before_b
+    probe = Database(tmp_path / "probe.sqlite")
+    try:
+        assert probe.probe_cursor(TENANT, BSC) is None
+    finally:
+        probe.close()
+    _assert_no_zero_and_no_alert(tmp_path)

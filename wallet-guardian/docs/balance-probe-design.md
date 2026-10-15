@@ -20,7 +20,7 @@ For each enabled EVM network that has a watched wallet and an `evm_rpc` source:
 4. `eth_getLogs` for incoming `Transfer` logs: topic0 is Transfer, topic2 is the watched addresses OR-ed. The wallet is not placed in the `address` filter.
 5. `eth_getLogs` for outgoing transfers and approvals: topic0 is Transfer, Approval, ApprovalForAll, and the Permit2 events, OR-ed, and topic1 is the watched addresses OR-ed.
 
-Log calls use the ready `evm_rpc` sources on the `history.token` route for that network. If that route has none, the probe uses `permissions.standard`. A policy refusal (`filter_requires_address` or `method_disabled`) tries the next source in that route. Any other log failure stops the log route for this round. The family balance RPC is not used as a hidden log fallback: publicnode answers BSC and OP `eth_getLogs` with JSON-RPC `-32701`. A missing log source, a refusal from every source, or a failed read is a gap. It does not become an empty log list, a zero balance, or a cursor advance.
+Log calls use the ready `evm_rpc` sources on the `history.token` route for that network. If that route has none, the probe uses `permissions.standard`. A policy refusal (`filter_requires_address` or `method_disabled`) tries the next source in that route. Any other log failure stops the log route for this round. The family balance RPC is not used as a hidden log fallback: publicnode answers BSC and OP `eth_getLogs` with JSON-RPC `-32701` for two or more blocks; a single block was accepted in one round on 2026-10-15. A missing log source, a refusal from every source, or a failed read is a gap. It does not become an empty log list, a zero balance, or a cursor advance.
 
 A quiet native balance is committed with the same versioned baseline as `run-once` when that round's logs were read. The first valid observation is version 1 and does not alert. A changed raw balance is not written by the probe, so the triggered `run-once` still sees the delta. A failed read does not write zero and does not bump the version.
 
@@ -28,9 +28,9 @@ A Transfer log, an approval-family log, or a changed raw balance records a trigg
 
 Head, code, multicall, or per-wallet balance failure: no trigger, no probe-cursor advance, no zero written.
 
-When the log route is a gap, a native balance change already read in that round still records a `balance_change` trigger for that chain. The row stays `failure: logs`, the probe cursor does not advance, and a same-balance or first observation is not committed. Nothing is written as zero. Token transfers and approvals still need a log source that accepts block ranges.
+When the log route is a gap, a native balance change already read in that round still records a `balance_change` trigger for that chain. The row stays `failure: logs`, the probe cursor does not advance, and a same-balance or first observation is not committed. Nothing is written as zero. Token transfers and approvals still need a log source that accepts block ranges. The balance fingerprint is the wallet and the raw balance, so a balance that returns to a value that already recorded a trigger does not record a second one; the three-hour `run-once` still reads it.
 
-On 2026-10-15, one round against public contract addresses, publicnode (Ethereum, BSC, Base, Optimism) accepted a topic-only `eth_getLogs` for a single block and returned JSON-RPC `-32701` for two or more blocks. That was one round, not a 24-hour measurement.
+On 2026-10-15, one round against public contract addresses, publicnode (Ethereum, BSC, Base, Optimism) accepted a topic-only `eth_getLogs` for a single block and returned JSON-RPC `-32701` for two or more blocks. That was one round, not a 24-hour measurement. It differs from the earlier record in `docs/coverage-matrix.md`, which was not re-run for this change.
 
 The optional nonce batch and a second header for `latest − k` are not issued. Either one would push a quiet Multicall3 round past the five-HTTP ceiling below. The bound block is the single `latest` head this round read.
 

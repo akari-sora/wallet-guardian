@@ -99,7 +99,7 @@ def run_balance_probe(
     trigger: str,
     run_once: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
-    """One round. Writes probe rows and, on a quiet balance, the shared baseline.
+    """One round. Writes probe rows and, on a quiet balance in a round whose logs were read, the shared baseline.
 
     A changed balance is left for ``run-once`` so this function does not alert.
     ``trigger`` ``none`` records the change and does not call ``run-once``.
