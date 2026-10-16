@@ -56,7 +56,7 @@ Environment:
 - `NODEREAL_API_KEY`
 - `NODEREAL_BSC_URL`
 
-Without the key: BSC native history is `credential_missing`. There is no keyless BSC native-history source. BSC token logs use `bsc-logs-48club` when `RPC_BSC_LOGS_URL` is set. If that variable is also unset, the log row is a gap, not an empty history. dataseed and publicnode are not topic-only log sources.
+Without the key: BSC native history in `run-once` is `credential_missing`. There is no keyless BSC native-history source. BSC token logs use `bsc-logs-48club` when `RPC_BSC_LOGS_URL` is set. If that variable is also unset, the monitor log row is a gap, not an empty history. `guardian relations` is separate: with no NodeReal key it reads ERC-20 logs from `https://rpc-bsc.48.club` unless `RPC_BSC_LOGS_URL` names another host. Native and internal BNB stay a gap on that path (`not_in_keyless_logs`). A failed or cut relations read is `gap` or `partial`, not an empty list and not `complete`. The monitor profile still has no default 48club URL. dataseed and publicnode are not topic-only log sources.
 
 <a id="blockscout"></a>
 
@@ -81,7 +81,7 @@ Keyless instances (no key, shared rate limit about 5–10 requests/second, check
 
 - Ethereum: `BLOCKSCOUT_ETH_URL` default `https://eth.blockscout.com`
 - Base: `BLOCKSCOUT_BASE_PUBLIC_URL` default `https://base.blockscout.com`
-- Optimism: `BLOCKSCOUT_OPTIMISM_PUBLIC_URL` default `https://explorer.optimism.io` (`https://optimism.blockscout.com` answers HTTP 301 to it since at least 2026-10-09; set the final origin, a cross-host redirect is refused as redirect_host)
+- Optimism: `BLOCKSCOUT_OPTIMISM_PUBLIC_URL` default `https://explorer.optimism.io` (`https://optimism.blockscout.com` answers HTTP 301 to it since at least 2026-10-09; set the final origin, a cross-host redirect is refused as redirect_host). `guardian relations` reads `https://explorer.optimism.io` when that variable is unset or still names `optimism.blockscout.com`. It does not follow the redirect. `run-once` still uses the endpoint the profile resolved.
 - Arbitrum: `BLOCKSCOUT_ARBITRUM_URL` default `https://arbitrum.blockscout.com`
 - Polygon: `BLOCKSCOUT_POLYGON_URL` default `https://polygon.blockscout.com`
 
@@ -131,7 +131,7 @@ These sources do not take an API key. The public config names the environment va
 
 The numbers below are the 2026-10-14 review appendix. This package did not call the network. Live Mac probes are NOT_RUN.
 
-- `RPC_BSC_LOGS_URL` is `bsc-logs-48club`, `range_limit` 1000. There is no default endpoint. There are no docs and no SLA. The operator is an MEV builder. The review recorded HTTP 200 at 100 blocks and at 1000 blocks. That is not a finished history. BSC dataseed (`-32005`) and publicnode (`-32701`) are not topic-only log sources. The privacy page cited by the review is <https://docs.48.club/privacy-rpc.md>.
+- `RPC_BSC_LOGS_URL` is `bsc-logs-48club`, `range_limit` 1000. The monitor has no default endpoint. There are no docs and no SLA. The operator is an MEV builder. The review recorded HTTP 200 at 100 blocks and at 1000 blocks. That is not a finished history. `guardian relations` uses `https://rpc-bsc.48.club` for its own keyless ERC-20 read when this variable is unset, and does not copy that URL into the profile. A rate limit or a failed chunk stays `gap` or `partial`. BSC dataseed (`-32005`) and publicnode (`-32701`) are not topic-only log sources. The privacy page cited by the review is <https://docs.48.club/privacy-rpc.md>.
 - `RPC_OPTIMISM_LOGS_URL` is `op-logs-public`, `range_limit` 2000. The review recorded `https://mainnet.optimism.io` accepting 1000 and 5000 blocks, and HTTP 413 at 20000 ("limited to a 10,000 range"). publicnode returned `-32701` and is not this route. Optimism documents the public endpoint as not suitable for production: <https://docs.optimism.io/app-developers/reference/rpc-providers>.
 - `RPC_BASE_DRPC_URL` is `base-logs-drpc`, `range_limit` 100, disabled in the examples. The review recorded 100 blocks accepted and 1000 rejected with "ranges over". The public citation is <https://blog.drpc.org/upcoming-changes-to-drpcs-free-plan-effective-june-1-2025/>.
 

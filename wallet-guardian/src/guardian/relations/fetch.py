@@ -1,20 +1,38 @@
-"""Read one address in one direction from a source the profile already has."""
+"""Read one address in one direction from a source the profile already has.
+
+BSC keyless reads use 48club ``eth_getLogs`` for ERC-20 transfers only.
+Native and internal BNB are a gap on that path. NodeReal is used only when
+the caller already selected it.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
+from guardian.chains.evm.accounting import TRANSFER_TOPIC, pad_address
 from guardian.errors import SecurityError
 from guardian.identities import parse_address
+from guardian.security.transport_policy import Operation
 from guardian.sources.blockscout import BlockscoutClient, HistoryRead
 from guardian.sources.budget import BudgetExhausted
+from guardian.sources.nodereal import MAX_BLOCK_SPAN, NodeRealClient
+from guardian.sources.retry import read_with_retry
+from guardian.sources.transport import TransportError
 
 _TAILS = ("token-transfers", "transactions", "internal-transactions")
 _NATIVE_KINDS = frozenset({"transactions", "internal-transactions"})
 _TOKEN_KINDS = frozenset({"token-transfers"})
 _NFT = frozenset({"ERC-721", "ERC-1155", "ERC721", "ERC1155"})
+_CLUB_RANGE = 1000
+_NATIVE_LOG_GAP = "not_in_keyless_logs"
+_NODEREAL_PARTS = (
+    ("20", "token-transfers"),
+    ("external", "transactions"),
+    ("internal", "internal-transactions"),
+)
 
 
 @dataclass
@@ -235,6 +253,10 @@ def _from_history(parts, address, direction, network, family, source_id, entry, 
             if state == "complete" and part_bad:
                 state, why = "partial", "unreadable_row"
         recorded.append({"part": kind, "read_status": state, "reason": why})
+    return _rolled(recorded, edges, zeros, contract, unreadable)
+
+
+def _rolled(recorded, edges, zeros, contract, unreadable: bool = False) -> Outcome:
     gap = next((row for row in recorded if row["read_status"] == "gap"), None)
     if gap is not None:
         status, reason = "gap", gap["reason"] or "upstream_error"
@@ -247,6 +269,517 @@ def _from_history(parts, address, direction, network, family, source_id, entry, 
         else:
             status, reason = "complete", ""
     return Outcome(status, reason, edges, contract, recorded, zeros)
+
+
+def read_club(
+    transport: Any,
+    source_id: str,
+    *,
+    address: str,
+    direction: str,
+    network: str,
+    family: str,
+    page_cap: int,
+    stop_timestamp: int,
+    entry: Mapping[str, Any],
+    clock: Callable[[], float],
+    range_limit: int = _CLUB_RANGE,
+) -> Outcome:
+    """ERC-20 logs from 48club. Native and internal parts stay gaps."""
+    width = range_limit if isinstance(range_limit, int) and 1 <= range_limit <= _CLUB_RANGE else _CLUB_RANGE
+    try:
+        pad_address(address)
+    except ValueError:
+        return _club_outcome("gap", "bad_address", [], 0, None)
+    head, failed = _jsonrpc(transport, source_id, "evm_rpc", "eth_blockNumber", [], clock)
+    if failed or not isinstance(head, str):
+        return _club_outcome("gap", failed or "read_error", [], 0, None)
+    cursor = _hex_int(head)
+    if cursor is None:
+        return _club_outcome("gap", "read_error", [], 0, None)
+    edges: list[Edge] = []
+    zeros = 0
+    unreadable = False
+    status, reason = "complete", ""
+    saw = False
+    covered = False
+    chunks = 0
+    while chunks < page_cap and cursor >= 0:
+        start = max(0, cursor - width + 1)
+        logs, failed = _jsonrpc(
+            transport,
+            source_id,
+            "evm_rpc",
+            "eth_getLogs",
+            [_club_filter(address, direction, start, cursor)],
+            clock,
+        )
+        chunks += 1
+        if failed or not isinstance(logs, list):
+            status, reason = ("gap", failed or "read_error") if not saw else ("partial", failed or "read_error")
+            break
+        saw = True
+        part_edges, part_zeros, part_bad, blocks = _club_logs(
+            logs, address, direction, network, family, source_id,
+        )
+        zeros += part_zeros
+        unreadable = unreadable or part_bad
+        if start != 0:
+            blocks.add(start)
+        stamps = _block_times(transport, source_id, "evm_rpc", blocks, clock)
+        if stamps is None:
+            status, reason = "partial", "window_unchecked"
+            break
+        for edge, block in part_edges:
+            stamp = stamps.get(block)
+            if stamp is None:
+                unreadable = True
+                continue
+            if stamp < stop_timestamp:
+                continue
+            edge.timestamp = stamp
+            edges.append(edge)
+        if start == 0:
+            covered = True
+            break
+        opening = stamps.get(start)
+        if opening is None:
+            status, reason = "partial", "window_unchecked"
+            break
+        if opening <= stop_timestamp:
+            covered = True
+            break
+        cursor = start - 1
+    else:
+        if status == "complete":
+            status, reason = "partial", "page_cap"
+    if status == "complete" and not covered:
+        status, reason = "partial", "page_cap"
+    if unreadable and status == "complete":
+        status, reason = "partial", "unreadable_row"
+    return _club_outcome(status, reason, edges, zeros, None)
+
+
+def _club_outcome(status: str, reason: str, edges: list[Edge], zeros: int, contract: bool | None) -> Outcome:
+    recorded = [
+        {"part": "token-transfers", "read_status": status, "reason": reason},
+        {"part": "transactions", "read_status": "gap", "reason": _NATIVE_LOG_GAP},
+        {"part": "internal-transactions", "read_status": "gap", "reason": _NATIVE_LOG_GAP},
+    ]
+    return _rolled(recorded, edges, zeros, contract)
+
+
+def read_nodereal(
+    transport: Any,
+    source_id: str,
+    *,
+    address: str,
+    direction: str,
+    network: str,
+    family: str,
+    page_cap: int,
+    stop_timestamp: int,
+    entry: Mapping[str, Any],
+    clock: Callable[[], float],
+) -> Outcome:
+    """Bounded NodeReal asset transfers. A chunk past the cap is not a finished window."""
+    symbol, decimals = _native(entry)
+    head, failed = _jsonrpc(transport, source_id, "nodereal_transfers", "eth_blockNumber", [], clock)
+    cursor_head = _hex_int(head) if isinstance(head, str) else None
+    if failed or cursor_head is None:
+        reason = failed or "read_error"
+        recorded = [
+            {"part": part, "read_status": "gap", "reason": reason}
+            for _category, part in _NODEREAL_PARTS
+        ]
+        return _rolled(recorded, [], 0, None)
+    client = NodeRealClient(transport, source_id, network=network, clock=clock, sleep=lambda _seconds: None, random=lambda: 0.0)
+    edges: list[Edge] = []
+    zeros = 0
+    contract: bool | None = None
+    recorded: list[dict[str, str]] = []
+    for category, part in _NODEREAL_PARTS:
+        rows, state, why = _nodereal_part(
+            client, transport, source_id, address, direction, category, cursor_head, page_cap, stop_timestamp, clock,
+        )
+        part_bad = False
+        if state != "gap":
+            for item in rows:
+                parsed = _nodereal_edge(
+                    item, category, address, direction, network, family, source_id, stop_timestamp, symbol, decimals,
+                )
+                if parsed == "bad":
+                    part_bad = True
+                    continue
+                if parsed == "zero":
+                    zeros += 1
+                    continue
+                if parsed is None or not isinstance(parsed, Edge):
+                    continue
+                edges.append(parsed)
+                if direction == "from" and parsed.sender_contract is True:
+                    contract = True
+            if state == "complete" and part_bad:
+                state, why = "partial", "unreadable_row"
+        recorded.append({"part": part, "read_status": state, "reason": why})
+    return _rolled(recorded, edges, zeros, contract)
+
+
+def _nodereal_part(client, transport, source_id, address, direction, category, head, page_cap, stop_timestamp, clock):
+    items: list[Any] = []
+    cursor = head
+    chunks = 0
+    saw = False
+    while chunks < page_cap and cursor >= 0:
+        start = max(0, cursor - MAX_BLOCK_SPAN)
+        page, reason, done = _nodereal_chunk(
+            client, address, direction, category, start, cursor, page_cap,
+        )
+        chunks += 1
+        if not done:
+            if not saw:
+                return [], "gap", reason or "read_error"
+            items.extend(page)
+            return items, "partial", reason or "read_error"
+        saw = True
+        items.extend(page)
+        if start == 0 or _covers(page, stop_timestamp):
+            return items, "complete", ""
+        opening = _block_times(transport, source_id, "nodereal_transfers", {start}, clock)
+        if opening is None or start not in opening:
+            return items, "partial", "window_unchecked"
+        if opening[start] <= stop_timestamp:
+            return items, "complete", ""
+        cursor = start - 1
+    return items, "partial", "page_cap"
+
+
+def _nodereal_chunk(client: NodeRealClient, address, direction, category, start, end, page_cap):
+    kept: list[Any] = []
+    token: str | None = None
+    pages = 0
+    while pages < page_cap:
+        pages += 1
+        operation = client.operation(
+            category=category, address=address, start=start, end=end, page_key=token, side=direction,
+        )
+        try:
+            result = read_with_retry(
+                lambda: client.transport.request(client.source_id, operation),
+                retry_attempts=client.transport.retry_attempts(client.source_id),
+                sleep=lambda _seconds: None,
+                random=lambda: 0.0,
+                clock=client.clock,
+            )
+        except BudgetExhausted as exc:
+            return kept, str(getattr(exc, "reason", "") or "") or "budget_exhausted", False
+        except SecurityError as exc:
+            if getattr(exc, "reason", "") != "redirect_host":
+                raise
+            return kept, "redirect_host", False
+        except TransportError as exc:
+            return kept, exc.reason or "read_error", False
+        payload, reason = _rpc_payload(result)
+        if reason:
+            return kept, reason, False
+        if not isinstance(payload, Mapping) or not isinstance(payload.get("transfers"), list):
+            return kept, "missing_transfers", False
+        kept.extend(payload["transfers"])
+        page_key = payload.get("pageKey")
+        if page_key is None or page_key == "":
+            return kept, "", True
+        if not isinstance(page_key, str):
+            return kept, "bad_page_key", False
+        token = page_key
+    return kept, "page_cap", False
+
+
+def _club_filter(address: str, direction: str, start: int, end: int) -> dict[str, Any]:
+    padded = pad_address(address)
+    topics: list[Any] = [TRANSFER_TOPIC, None, padded] if direction == "to" else [TRANSFER_TOPIC, padded, None]
+    return {"fromBlock": hex(start), "toBlock": hex(end), "topics": topics}
+
+
+def _club_logs(logs, address, direction, network, family, source_id):
+    edges: list[tuple[Edge, int]] = []
+    zeros = 0
+    bad = False
+    blocks: set[int] = set()
+    for item in logs:
+        parsed = _club_log(item, address, direction, network, family, source_id)
+        if parsed == "bad":
+            bad = True
+            continue
+        if parsed == "zero":
+            zeros += 1
+            continue
+        if parsed is None or not isinstance(parsed, tuple):
+            continue
+        edge, block = parsed
+        blocks.add(block)
+        edges.append((edge, block))
+    return edges, zeros, bad, blocks
+
+
+def _club_log(item, address, direction, network, family, source_id):
+    if not isinstance(item, Mapping) or item.get("removed") is True:
+        return None
+    topics = item.get("topics")
+    if not isinstance(topics, list) or not topics or not isinstance(topics[0], str):
+        return "bad"
+    if topics[0].lower() != TRANSFER_TOPIC.lower():
+        return None
+    if len(topics) != 3:
+        return None
+    sender = _canonical(family, _topic_address(topics[1]))
+    recipient = _canonical(family, _topic_address(topics[2]))
+    token = _canonical(family, str(item.get("address") or ""))
+    if direction == "to":
+        if not recipient or not _same(family, recipient, address) or not sender:
+            return None if recipient else "bad"
+    elif direction == "from":
+        if not sender or not _same(family, sender, address) or not recipient:
+            return None if sender else "bad"
+    else:
+        return None
+    if not token:
+        return "bad"
+    raw = _word(item.get("data"))
+    if raw is None:
+        return "bad"
+    if raw == 0:
+        return "zero"
+    block = _hex_int(item.get("blockNumber"))
+    tx_hash = _log_hash(item.get("transactionHash"))
+    if block is None or not tx_hash:
+        return "bad"
+    edge = Edge(
+        network, tx_hash, block, 0, source_id, sender, recipient, None, None,
+        "token", token, None, None, raw,
+    )
+    return edge, block
+
+
+def _nodereal_edge(item, category, address, direction, network, family, source_id, stop_timestamp, native_symbol, native_decimals):
+    if not isinstance(item, Mapping):
+        return "bad"
+    if _failed(item):
+        return None
+    sender = _canonical(family, item.get("from") if isinstance(item.get("from"), str) else "")
+    recipient = _canonical(family, item.get("to") if isinstance(item.get("to"), str) else "")
+    if direction == "to":
+        if not recipient or not _same(family, recipient, address) or not sender:
+            return None if recipient else "bad"
+    elif direction == "from":
+        if not sender or not _same(family, sender, address) or not recipient:
+            return None if sender else "bad"
+    else:
+        return None
+    stamp = _nodereal_stamp(item)
+    if stamp is None:
+        return "bad"
+    if stamp < stop_timestamp:
+        return None
+    tx_hash = _log_hash(item.get("hash") or item.get("tx_hash"))
+    if not tx_hash:
+        return "bad"
+    block = _flexible_block(item)
+    raw = _raw_contract_value(item)
+    if raw is None:
+        return "bad"
+    if raw == 0:
+        return "zero"
+    if category == "20":
+        token = _raw_contract_address(item, family)
+        if not token:
+            return "bad"
+        return Edge(
+            network, tx_hash, block, stamp, source_id, sender, recipient, None, None,
+            "token", token, _symbol(item), _raw_decimals(item), raw,
+        )
+    return Edge(
+        network, tx_hash, block, stamp, source_id, sender, recipient, None, None,
+        "native", None, native_symbol, native_decimals, raw,
+    )
+
+
+def _jsonrpc(transport, source_id, adapter, method, params, clock):
+    operation = Operation(protocol="jsonrpc", adapter=adapter, method=method, params=params)
+    try:
+        result = read_with_retry(
+            lambda: transport.request(source_id, operation),
+            retry_attempts=transport.retry_attempts(source_id),
+            sleep=lambda _seconds: None,
+            random=lambda: 0.0,
+            clock=clock,
+        )
+    except BudgetExhausted as exc:
+        return None, str(getattr(exc, "reason", "") or "") or "budget_exhausted"
+    except SecurityError as exc:
+        if getattr(exc, "reason", "") != "redirect_host":
+            raise
+        return None, "redirect_host"
+    except TransportError as exc:
+        return None, exc.reason or "read_error"
+    return _rpc_payload(result)
+
+
+def _rpc_payload(result: Any) -> tuple[Any, str]:
+    if not getattr(result, "ok", False):
+        reason = str(getattr(result, "reason", "") or "")
+        if reason == "rate_limited":
+            return None, "rate_limited"
+        body = getattr(result, "body", None)
+        if isinstance(body, Mapping):
+            return None, _rpc_reason(body)
+        return None, reason or "read_error"
+    body = getattr(result, "body", None)
+    if not isinstance(body, Mapping) or "result" not in body or "error" in body:
+        if isinstance(body, Mapping):
+            return None, _rpc_reason(body)
+        return None, "rpc_error"
+    return body.get("result"), ""
+
+
+def _rpc_reason(body: Mapping[str, Any]) -> str:
+    err = body.get("error")
+    message = ""
+    if isinstance(err, Mapping):
+        message = str(err.get("message") or "")
+    elif isinstance(err, str):
+        message = err
+    text = message.lower()
+    if "rate limit" in text or "too many" in text or "limit exceeded" in text:
+        return "rate_limited"
+    if err is not None:
+        return "rpc_error"
+    return "rpc_error"
+
+
+def _block_times(transport, source_id, adapter, blocks: set[int], clock) -> dict[int, int] | None:
+    found: dict[int, int] = {}
+    for number in sorted(blocks):
+        payload, reason = _jsonrpc(
+            transport,
+            source_id,
+            adapter,
+            "eth_getBlockByNumber",
+            [hex(number), False],
+            clock,
+        )
+        if reason or not isinstance(payload, Mapping):
+            return None
+        stamp = _hex_int(payload.get("timestamp"))
+        if stamp is None:
+            return None
+        found[number] = stamp
+    return found
+
+
+def _covers(items: list[Any], stop_timestamp: int) -> bool:
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        stamp = _nodereal_stamp(item)
+        if stamp is not None and stamp <= stop_timestamp:
+            return True
+    return False
+
+
+def _nodereal_stamp(item: Mapping[str, Any]) -> int | None:
+    meta = item.get("metadata")
+    if isinstance(meta, Mapping):
+        raw = meta.get("blockTimestamp")
+        if isinstance(raw, str) and raw.strip():
+            text = raw.strip().replace("Z", "+00:00")
+            try:
+                parsed = datetime.fromisoformat(text)
+            except ValueError:
+                parsed = None
+            if parsed is not None:
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=UTC)
+                return int(parsed.timestamp())
+        if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
+            return raw
+    return _stamp(item)
+
+
+def _topic_address(topic: Any) -> str:
+    if not isinstance(topic, str) or not topic.lower().startswith("0x"):
+        return ""
+    hexed = topic[2:]
+    if len(hexed) < 40 or any(char not in "0123456789abcdefABCDEF" for char in hexed):
+        return ""
+    return "0x" + hexed[-40:]
+
+
+def _word(value: Any) -> int | None:
+    if not isinstance(value, str) or not value.lower().startswith("0x"):
+        return None
+    hexed = value[2:]
+    if hexed == "" or len(hexed) > 64 or any(char not in "0123456789abcdefABCDEF" for char in hexed):
+        return None
+    return int(hexed, 16)
+
+
+def _hex_int(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if text.lower().startswith("0x"):
+        try:
+            return int(text, 16)
+        except ValueError:
+            return None
+    if text.isdigit():
+        return int(text)
+    return None
+
+
+def _log_hash(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if len(text) != 66 or not text.lower().startswith("0x"):
+        return ""
+    if any(char not in "0123456789abcdefABCDEF" for char in text[2:]):
+        return ""
+    return "0x" + text[2:].lower()
+
+
+def _flexible_block(item: Mapping[str, Any]) -> int | None:
+    for key in ("blockNum", "blockNumber", "block_number", "block"):
+        parsed = _hex_int(item.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _raw_contract(item: Mapping[str, Any]) -> Mapping[str, Any]:
+    raw = item.get("rawContract")
+    return raw if isinstance(raw, Mapping) else {}
+
+
+def _raw_contract_value(item: Mapping[str, Any]) -> int | None:
+    return _hex_int(_raw_contract(item).get("value"))
+
+
+def _raw_contract_address(item: Mapping[str, Any], family: str) -> str:
+    return _canonical(family, str(_raw_contract(item).get("address") or ""))
+
+
+def _raw_decimals(item: Mapping[str, Any]) -> int | None:
+    return _hex_int(_raw_contract(item).get("decimal"))
+
+
+def _symbol(item: Mapping[str, Any]) -> str | None:
+    asset = item.get("asset")
+    if isinstance(asset, str) and asset and asset.upper() not in {"BNB", "ETH"}:
+        return asset
+    return None
 
 
 def _history_status(read: Any) -> tuple[str, str]:

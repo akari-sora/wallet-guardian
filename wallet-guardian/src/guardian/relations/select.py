@@ -1,6 +1,9 @@
-"""Choose the existing routed source for one relations read.
+"""Choose the source for one relations read.
 
-No new source is registered here. Solana and Bitcoin are not queried.
+The saved profile is not modified. Solana and Bitcoin are not queried.
+Optimism's keyless Blockscout origin is ``explorer.optimism.io``.
+BSC uses NodeReal when that key and URL are both set, and otherwise the
+keyless 48club log host.
 """
 
 from __future__ import annotations
@@ -37,6 +40,14 @@ _HOME = {
     "ton": "ton-mainnet",
     "tron": "tron-mainnet",
 }
+OPTIMISM_REDIRECT_HOST = "optimism.blockscout.com"
+OPTIMISM_KEYLESS_HOST = "explorer.optimism.io"
+OPTIMISM_KEYLESS_URL = "https://explorer.optimism.io"
+CLUB_SOURCE_ID = "bsc-logs-48club"
+CLUB_HOST = "rpc-bsc.48.club"
+CLUB_URL = "https://rpc-bsc.48.club"
+CLUB_BUDGET = "bsc-logs-48club"
+CLUB_ENV = "RPC_BSC_LOGS_URL"
 
 
 @dataclass
@@ -48,6 +59,8 @@ class Choice:
     read_status: str | None = None
     reason: str = ""
     gap: str = ""
+    endpoint: str = ""
+    omit_credential: bool = False
 
 
 @dataclass
@@ -155,7 +168,7 @@ def choices_for(
 ) -> list[Choice]:
     family = registry[network]["family"]
     if network == "bsc-mainnet":
-        return [Choice("skip", read_status="gap", reason="bsc_source_gated", gap="credential_missing")]
+        return _bsc_choices(document, status_map, endpoints)
     if family in {"solana", "bitcoin"}:
         return [Choice("skip", read_status="unsupported", reason="unsupported")]
     if family == "tron":
@@ -164,7 +177,7 @@ def choices_for(
         return [Choice("skip", read_status="unsupported", reason="unsupported")]
     routed = _routed(document, network)
     sources = document.get("sources") or {}
-    blockscout = _first_blockscout(routed, sources, status_map, endpoints)
+    blockscout = _blockscout_choice(network, routed, sources, status_map, endpoints)
     if blockscout is not None:
         return [blockscout]
     if _keyed_but_locked(routed, sources, status_map):
@@ -286,7 +299,17 @@ def _routed(document: Mapping[str, Any], network: str) -> list[str]:
     return found
 
 
-def _first_blockscout(routed, sources, status_map, endpoints) -> Choice | None:
+def _blockscout_choice(network, routed, sources, status_map, endpoints) -> Choice | None:
+    skip = frozenset({OPTIMISM_REDIRECT_HOST}) if network == "optimism-mainnet" else frozenset()
+    found = _first_blockscout(routed, sources, status_map, endpoints, skip_hosts=skip)
+    if found is not None:
+        return found
+    if network == "optimism-mainnet":
+        return _optimism_keyless(routed, sources, status_map, endpoints)
+    return None
+
+
+def _first_blockscout(routed, sources, status_map, endpoints, skip_hosts: frozenset[str] = frozenset()) -> Choice | None:
     for source_id in routed:
         source = sources.get(source_id) or {}
         if source.get("adapter") != "blockscout" or source.get("enabled") is not True:
@@ -294,10 +317,102 @@ def _first_blockscout(routed, sources, status_map, endpoints) -> Choice | None:
         if isinstance(source.get("credential_env"), str) and source.get("credential_env") and not _present(status_map, source_id):
             continue
         host = host_of(endpoint_text(endpoints, source_id))
-        if not host:
+        if not host or host in skip_hosts:
             continue
         return Choice("primary", source_id=source_id, adapter="blockscout", host=host)
     return None
+
+
+def _optimism_keyless(routed, sources, status_map, endpoints) -> Choice | None:
+    """Use the official explorer when the keyless host is empty or is the old redirect."""
+    for source_id in routed:
+        source = sources.get(source_id) or {}
+        if source.get("adapter") != "blockscout" or source.get("enabled") is not True:
+            continue
+        keyed = isinstance(source.get("credential_env"), str) and bool(source.get("credential_env"))
+        if keyed and not _present(status_map, source_id):
+            continue
+        host = host_of(endpoint_text(endpoints, source_id))
+        if host != OPTIMISM_REDIRECT_HOST and not (host == "" and not keyed):
+            continue
+        return Choice(
+            "primary",
+            source_id=source_id,
+            adapter="blockscout",
+            host=OPTIMISM_KEYLESS_HOST,
+            endpoint=OPTIMISM_KEYLESS_URL,
+            omit_credential=True,
+        )
+    return None
+
+
+def _bsc_choices(document, status_map, endpoints) -> list[Choice]:
+    routed = _routed(document, "bsc-mainnet")
+    sources = document.get("sources") or {}
+    for source_id in routed:
+        source = sources.get(source_id) or {}
+        if source.get("enabled") is not True or source.get("adapter") != "nodereal_transfers":
+            continue
+        credential = source.get("credential_env")
+        if not isinstance(credential, str) or not credential or not _present(status_map, source_id):
+            continue
+        host = host_of(endpoint_text(endpoints, source_id))
+        if not host:
+            continue
+        return [Choice("primary", source_id=source_id, adapter="nodereal_transfers", host=host)]
+    return [_club_choice(sources, endpoints)]
+
+
+def _club_choice(sources, endpoints) -> Choice:
+    """Keyless BSC logs. A configured host wins. An empty one uses rpc-bsc.48.club."""
+    chosen = _club_source(sources)
+    if chosen is None:
+        return Choice(
+            "primary",
+            source_id=CLUB_SOURCE_ID,
+            adapter="evm_rpc",
+            host=CLUB_HOST,
+            endpoint=CLUB_URL,
+            omit_credential=True,
+        )
+    source_id, _source = chosen
+    host = host_of(endpoint_text(endpoints, source_id))
+    if host:
+        return Choice(
+            "primary",
+            source_id=source_id,
+            adapter="evm_rpc",
+            host=host,
+            omit_credential=True,
+        )
+    return Choice(
+        "primary",
+        source_id=source_id,
+        adapter="evm_rpc",
+        host=CLUB_HOST,
+        endpoint=CLUB_URL,
+        omit_credential=True,
+    )
+
+
+def _club_source(sources: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]] | None:
+    named = sources.get(CLUB_SOURCE_ID)
+    if _club_row(named):
+        return CLUB_SOURCE_ID, named
+    for source_id, source in sources.items():
+        if not _club_row(source):
+            continue
+        if source.get("endpoint_env") == CLUB_ENV:
+            return source_id, source
+    return None
+
+
+def _club_row(source: Any) -> bool:
+    return (
+        isinstance(source, Mapping)
+        and source.get("enabled") is True
+        and source.get("adapter") == "evm_rpc"
+    )
 
 
 def _tron_choice(document: Mapping[str, Any], endpoints: Any) -> list[Choice]:

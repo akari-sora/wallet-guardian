@@ -22,7 +22,9 @@ REFERENCE = ROOT / "docs" / "cli-reference.md"
 
 _REQUIRED = (
     "credential_missing",
-    "bsc_source_gated",
+    "not_in_keyless_logs",
+    "explorer.optimism.io",
+    "rpc-bsc.48.club",
     "unsupported",
     "source_gated",
     "etherscan_deferred",
