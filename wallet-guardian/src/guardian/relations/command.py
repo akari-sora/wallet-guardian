@@ -30,12 +30,14 @@ from guardian.relations.report import expand_report, inbound_report, overall
 from guardian.relations.select import CLUB_BUDGET, Job, _expand_targets, build_jobs, plan_for
 from guardian.resources import resource_path
 from guardian.security.redact import redact
-from guardian.sources.budget import BudgetGroup, BudgetSpec
+from guardian.sources.budget import BudgetSpec
 from guardian.sources.transport import RegisteredSource, build_endpoint_registry
 
 _CREDENTIAL_ENV = re.compile(r"^[A-Z][A-Z0-9_]{0,95}$")
 
 _MAX_PAGES = 50
+# Created only when the profile has no group for this name. Matches examples/monitor.json.
+CLUB_BUDGET_SPEC = BudgetSpec(max_rps=1, max_concurrency=1, max_requests_per_day=10000, retry_attempts=3)
 
 
 def execute(
@@ -97,7 +99,7 @@ def execute(
         return payload, 0 if dry_run else 2
     transport = _transport(public, default_backend() if backend is None else backend, now)
     _write_disclosure(plan, secrets, public.document)
-    reads, edges, payer_contract, source_complete = _perform(
+    reads, edges, payer_contract, source_complete, contract_withhold = _perform(
         jobs, transport, public.document, secrets, registry, max_pages, _stop(moment, since_days), now,
     )
     if command == "inbound":
@@ -116,6 +118,7 @@ def execute(
             payer_is_contract=payer_contract,
             max_nodes=max_nodes,
             source_complete=source_complete,
+            contract_withhold=contract_withhold,
             labels=labels,
             registry=registry,
         )
@@ -136,9 +139,11 @@ def execute(
 def _perform(jobs, transport, document, secrets, registry, page_cap, stop_timestamp, clock):
     reads: list[dict] = []
     edges = []
-    payer_contract: bool | None = None
+    flags: list[bool | None] = []
+    withhold = False
     adopted: list[bool] = []
     sources = document["sources"]
+    time_cache: dict[tuple[str, int], int] = {}
     for job in jobs:
         for choice in job.choices:
             if choice.role == "skip":
@@ -147,17 +152,24 @@ def _perform(jobs, transport, document, secrets, registry, page_cap, stop_timest
                 adopted.append(outcome.status == "complete")
                 continue
             outcome = _run_choice(
-                job, choice, transport, sources, secrets, registry, page_cap, stop_timestamp, clock,
+                job, choice, transport, sources, secrets, registry, page_cap, stop_timestamp, clock, time_cache,
             )
-            if outcome.payer_is_contract is True:
-                payer_contract = True
+            flags.append(outcome.payer_is_contract)
+            if outcome.contract_withhold:
+                withhold = True
             reads.append(_read_row(job, choice, outcome))
             edges.extend(outcome.edges)
             adopted.append(outcome.status == "complete")
-    return reads, edges, payer_contract, bool(adopted) and all(adopted)
+    if any(flag is True for flag in flags):
+        payer_contract: bool | None = True
+    elif withhold or any(flag is None for flag in flags) or not flags:
+        payer_contract = None
+    else:
+        payer_contract = False
+    return reads, edges, payer_contract, bool(adopted) and all(adopted), withhold
 
 
-def _run_choice(job: Job, choice, transport, sources, secrets, registry, page_cap, stop_timestamp, clock) -> Outcome:
+def _run_choice(job: Job, choice, transport, sources, secrets, registry, page_cap, stop_timestamp, clock, time_cache) -> Outcome:
     _bind_choice(transport, choice, clock)
     source = sources.get(choice.source_id) or {}
     entry = registry[job.network]
@@ -199,6 +211,7 @@ def _run_choice(job: Job, choice, transport, sources, secrets, registry, page_ca
             stop_timestamp=stop_timestamp,
             entry=entry,
             clock=clock,
+            time_cache=time_cache,
         )
     if choice.adapter == "evm_rpc":
         return read_club(
@@ -213,6 +226,7 @@ def _run_choice(job: Job, choice, transport, sources, secrets, registry, page_ca
             entry=entry,
             clock=clock,
             range_limit=_range_limit(source),
+            time_cache=time_cache,
         )
     return Outcome("gap", "endpoint_missing", [])
 
@@ -243,15 +257,9 @@ def _bind_choice(transport, choice, clock) -> None:
 
 
 def _ensure_budget(transport, name: str, clock) -> None:
-    book = transport.budgets
-    groups = book._groups
-    if name in groups:
-        return
-    sample = next(iter(groups.values()), None)
-    group_clock = sample._clock if sample is not None else clock
-    group_sleep = sample._sleep if sample is not None else (lambda _seconds: None)
-    spec = BudgetSpec(max_rps=1, max_concurrency=1, max_requests_per_day=10000, retry_attempts=0)
-    groups[name] = BudgetGroup(name, spec, clock=group_clock, sleep=group_sleep)
+    """Add the fixed relations spec when this profile has no group yet."""
+    del clock
+    transport.budgets.ensure_group(name, CLUB_BUDGET_SPEC)
 
 
 def _range_limit(source: Mapping[str, Any]) -> int:

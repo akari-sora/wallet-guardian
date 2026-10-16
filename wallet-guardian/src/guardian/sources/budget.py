@@ -91,6 +91,10 @@ class BudgetGroup:
         self.day = today
         self.month = today[:7]
 
+    def pause(self, seconds: float) -> None:
+        """Wait with the sleeper this group was built with."""
+        self._sleep(seconds)
+
     def acquire(self, *, priority: str = "normal", credits: int = 1) -> Lease:
         if priority not in {"low", "normal", "high", "health"}:
             raise BudgetExhausted("invalid_priority")
@@ -179,8 +183,10 @@ class BudgetGroup:
 class BudgetBook:
     """The process-wide set of provider accounts."""
 
-    def __init__(self, groups: dict[str, BudgetGroup]) -> None:
+    def __init__(self, groups: dict[str, BudgetGroup], *, clock: Clock | None = None, sleep: Sleeper | None = None) -> None:
         self._groups = groups
+        self._clock = clock
+        self._sleep = sleep
 
     @classmethod
     def from_document(cls, document: Mapping[str, Mapping[str, Any]], *, clock: Clock, sleep: Sleeper) -> BudgetBook:
@@ -188,7 +194,18 @@ class BudgetBook:
             name: BudgetGroup(name, BudgetSpec.from_document(spec), clock=clock, sleep=sleep)
             for name, spec in document.items()
         }
-        return cls(groups)
+        return cls(groups, clock=clock, sleep=sleep)
+
+    def ensure_group(self, name: str, spec: BudgetSpec) -> BudgetGroup:
+        """Return the named group. A missing group is created with ``spec``, not a sibling's spec."""
+        found = self._groups.get(name)
+        if found is not None:
+            return found
+        if self._clock is None or self._sleep is None:
+            raise ConfigError("unknown budget_group")
+        group = BudgetGroup(name, spec, clock=self._clock, sleep=self._sleep)
+        self._groups[name] = group
+        return group
 
     def group(self, name: str) -> BudgetGroup:
         try:

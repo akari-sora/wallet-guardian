@@ -7,18 +7,19 @@ the caller already selected it.
 
 from __future__ import annotations
 
+import random
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from guardian.chains.evm.accounting import TRANSFER_TOPIC, pad_address
-from guardian.errors import SecurityError
+from guardian.errors import ConfigError, SecurityError
 from guardian.identities import parse_address
 from guardian.security.transport_policy import Operation
 from guardian.sources.blockscout import BlockscoutClient, HistoryRead
 from guardian.sources.budget import BudgetExhausted
-from guardian.sources.nodereal import MAX_BLOCK_SPAN, NodeRealClient
+from guardian.sources.nodereal import MAX_BLOCK_SPAN, NodeRealClient, _method_refusal
 from guardian.sources.retry import read_with_retry
 from guardian.sources.transport import TransportError
 
@@ -28,6 +29,10 @@ _TOKEN_KINDS = frozenset({"token-transfers"})
 _NFT = frozenset({"ERC-721", "ERC-1155", "ERC721", "ERC1155"})
 _CLUB_RANGE = 1000
 _NATIVE_LOG_GAP = "not_in_keyless_logs"
+# One part shares this many nr_getAssetTransfers pages. It is not per chunk.
+_NODEREAL_ITEM_CAP = 5_000
+# eth_getBlockByNumber calls per part. Cached hits are free. The cache lives for one command.
+_TIME_LOOKUP_CAP = 32
 _NODEREAL_PARTS = (
     ("20", "token-transfers"),
     ("external", "transactions"),
@@ -61,6 +66,7 @@ class Outcome:
     payer_is_contract: bool | None = None
     parts: list[dict[str, str]] | None = None
     ignored_zero_value: int = 0
+    contract_withhold: bool = False
 
 
 def read_blockscout(
@@ -203,7 +209,7 @@ def read_tron(
             contract = True
     if unreadable and status == "complete":
         status, reason = "partial", "unreadable_row"
-    return _part_outcome(status, reason, "trc20", edges, contract, zeros)
+    return _note_contract(_part_outcome(status, reason, "trc20", edges, contract, zeros), direction)
 
 
 def _part_outcome(status: str, reason: str, part: str, edges: list[Edge] | None = None, contract: bool | None = None, zeros: int = 0) -> Outcome:
@@ -253,7 +259,7 @@ def _from_history(parts, address, direction, network, family, source_id, entry, 
             if state == "complete" and part_bad:
                 state, why = "partial", "unreadable_row"
         recorded.append({"part": kind, "read_status": state, "reason": why})
-    return _rolled(recorded, edges, zeros, contract, unreadable)
+    return _note_contract(_rolled(recorded, edges, zeros, contract, unreadable), direction)
 
 
 def _rolled(recorded, edges, zeros, contract, unreadable: bool = False) -> Outcome:
@@ -271,6 +277,103 @@ def _rolled(recorded, edges, zeros, contract, unreadable: bool = False) -> Outco
     return Outcome(status, reason, edges, contract, recorded, zeros)
 
 
+def _note_contract(outcome: Outcome, direction: str) -> Outcome:
+    """A False flag is an observation. Missing flags stay unknown."""
+    if direction != "from":
+        return outcome
+    flags = [edge.sender_contract for edge in outcome.edges]
+    if any(flag is True for flag in flags):
+        outcome.payer_is_contract = True
+        outcome.contract_withhold = False
+    elif outcome.payer_is_contract is None and any(flag is False for flag in flags):
+        outcome.payer_is_contract = False
+    return outcome
+
+
+def _retry_controls(transport: Any, source_id: str) -> tuple[Callable[[float], None], Callable[[], float]]:
+    """Budget sleep and a real random unit. A missing group does not invent a wait."""
+    try:
+        source = transport.endpoints.get(source_id)
+        group = transport.budgets.group(source.budget_group)
+    except (AttributeError, ConfigError, SecurityError):
+        return (lambda _seconds: None), random.random
+    return group.pause, random.random
+
+
+class _Lookups:
+    """Block timestamps for one part. Successful stamps are cached for the command."""
+
+    def __init__(
+        self,
+        transport: Any,
+        source_id: str,
+        adapter: str,
+        clock: Callable[[], float],
+        cache: dict[tuple[str, int], int],
+        cap: int,
+    ) -> None:
+        self.transport = transport
+        self.source_id = source_id
+        self.adapter = adapter
+        self.clock = clock
+        self.cache = cache
+        self.cap = cap
+        self.used = 0
+
+    def one(self, block: int) -> tuple[int | None, str]:
+        key = (self.source_id, block)
+        found = self.cache.get(key)
+        if found is not None:
+            return found, ""
+        if self.used >= self.cap:
+            return None, "time_lookup_cap"
+        self.used += 1
+        payload, reason = _jsonrpc(
+            self.transport,
+            self.source_id,
+            self.adapter,
+            "eth_getBlockByNumber",
+            [hex(block), False],
+            self.clock,
+        )
+        if reason:
+            return None, reason
+        if not isinstance(payload, Mapping):
+            return None, "read_error"
+        stamp = _hex_int(payload.get("timestamp"))
+        if stamp is None:
+            return None, "window_unchecked"
+        self.cache[key] = stamp
+        return stamp, ""
+
+
+def _attach_payer_code(outcome: Outcome, transport: Any, source_id: str, adapter: str, address: str, clock) -> None:
+    """One eth_getCode for the payer on the host this read already uses."""
+    payload, reason = _jsonrpc(transport, source_id, adapter, "eth_getCode", [address, "latest"], clock)
+    if outcome.payer_is_contract is True:
+        outcome.contract_withhold = False
+        return
+    text = payload.strip().lower() if isinstance(payload, str) else ""
+    digits = text[2:] if text.startswith("0x") else None
+    if reason or digits is None or any(char not in "0123456789abcdef" for char in digits):
+        outcome.payer_is_contract = None
+        outcome.contract_withhold = True
+        return
+    if digits == "" or int(digits, 16) == 0:
+        outcome.payer_is_contract = False
+        outcome.contract_withhold = False
+        return
+    outcome.payer_is_contract = True
+    outcome.contract_withhold = False
+
+
+def _time_failure(edges: list[Edge], why: str) -> tuple[str, str]:
+    reason = why or "window_unchecked"
+    if edges:
+        return "partial", reason
+    return "gap", reason
+
+
 def read_club(
     transport: Any,
     source_id: str,
@@ -284,19 +387,28 @@ def read_club(
     entry: Mapping[str, Any],
     clock: Callable[[], float],
     range_limit: int = _CLUB_RANGE,
+    time_cache: dict[tuple[str, int], int] | None = None,
 ) -> Outcome:
     """ERC-20 logs from 48club. Native and internal parts stay gaps."""
+    del entry
+    cache = time_cache if time_cache is not None else {}
+
+    def finish(outcome: Outcome) -> Outcome:
+        if direction == "from":
+            _attach_payer_code(outcome, transport, source_id, "evm_rpc", address, clock)
+        return outcome
+
     width = range_limit if isinstance(range_limit, int) and 1 <= range_limit <= _CLUB_RANGE else _CLUB_RANGE
     try:
         pad_address(address)
     except ValueError:
-        return _club_outcome("gap", "bad_address", [], 0, None)
+        return finish(_club_outcome("gap", "bad_address", [], 0, None))
     head, failed = _jsonrpc(transport, source_id, "evm_rpc", "eth_blockNumber", [], clock)
     if failed or not isinstance(head, str):
-        return _club_outcome("gap", failed or "read_error", [], 0, None)
+        return finish(_club_outcome("gap", failed or "read_error", [], 0, None))
     cursor = _hex_int(head)
     if cursor is None:
-        return _club_outcome("gap", "read_error", [], 0, None)
+        return finish(_club_outcome("gap", "read_error", [], 0, None))
     edges: list[Edge] = []
     zeros = 0
     unreadable = False
@@ -304,6 +416,7 @@ def read_club(
     saw = False
     covered = False
     chunks = 0
+    lookups = _Lookups(transport, source_id, "evm_rpc", clock, cache, _TIME_LOOKUP_CAP)
     while chunks < page_cap and cursor >= 0:
         start = max(0, cursor - width + 1)
         logs, failed = _jsonrpc(
@@ -319,35 +432,32 @@ def read_club(
             status, reason = ("gap", failed or "read_error") if not saw else ("partial", failed or "read_error")
             break
         saw = True
-        part_edges, part_zeros, part_bad, blocks = _club_logs(
+        part_edges, part_zeros, part_bad, _blocks = _club_logs(
             logs, address, direction, network, family, source_id,
         )
         zeros += part_zeros
         unreadable = unreadable or part_bad
         if start != 0:
-            blocks.add(start)
-        stamps = _block_times(transport, source_id, "evm_rpc", blocks, clock)
-        if stamps is None:
-            status, reason = "partial", "window_unchecked"
-            break
+            opening, why = lookups.one(start)
+            if opening is None:
+                status, reason = _time_failure(edges, why)
+                break
+            if opening <= stop_timestamp:
+                covered = True
+        else:
+            covered = True
+        stopped = False
         for edge, block in part_edges:
-            stamp = stamps.get(block)
+            stamp, why = lookups.one(block)
             if stamp is None:
-                unreadable = True
-                continue
+                status, reason = _time_failure(edges, why)
+                stopped = True
+                break
             if stamp < stop_timestamp:
                 continue
             edge.timestamp = stamp
             edges.append(edge)
-        if start == 0:
-            covered = True
-            break
-        opening = stamps.get(start)
-        if opening is None:
-            status, reason = "partial", "window_unchecked"
-            break
-        if opening <= stop_timestamp:
-            covered = True
+        if stopped or covered:
             break
         cursor = start - 1
     else:
@@ -357,7 +467,7 @@ def read_club(
         status, reason = "partial", "page_cap"
     if unreadable and status == "complete":
         status, reason = "partial", "unreadable_row"
-    return _club_outcome(status, reason, edges, zeros, None)
+    return finish(_club_outcome(status, reason, edges, zeros, None))
 
 
 def _club_outcome(status: str, reason: str, edges: list[Edge], zeros: int, contract: bool | None) -> Outcome:
@@ -381,8 +491,17 @@ def read_nodereal(
     stop_timestamp: int,
     entry: Mapping[str, Any],
     clock: Callable[[], float],
+    time_cache: dict[tuple[str, int], int] | None = None,
 ) -> Outcome:
     """Bounded NodeReal asset transfers. A chunk past the cap is not a finished window."""
+    cache = time_cache if time_cache is not None else {}
+    pause, rng = _retry_controls(transport, source_id)
+
+    def finish(outcome: Outcome) -> Outcome:
+        if direction == "from":
+            _attach_payer_code(outcome, transport, source_id, "nodereal_transfers", address, clock)
+        return _note_contract(outcome, direction)
+
     symbol, decimals = _native(entry)
     head, failed = _jsonrpc(transport, source_id, "nodereal_transfers", "eth_blockNumber", [], clock)
     cursor_head = _hex_int(head) if isinstance(head, str) else None
@@ -392,17 +511,24 @@ def read_nodereal(
             {"part": part, "read_status": "gap", "reason": reason}
             for _category, part in _NODEREAL_PARTS
         ]
-        return _rolled(recorded, [], 0, None)
-    client = NodeRealClient(transport, source_id, network=network, clock=clock, sleep=lambda _seconds: None, random=lambda: 0.0)
+        return finish(_rolled(recorded, [], 0, None))
+    client = NodeRealClient(transport, source_id, network=network, clock=clock, sleep=pause, random=rng)
     edges: list[Edge] = []
     zeros = 0
-    contract: bool | None = None
     recorded: list[dict[str, str]] = []
     for category, part in _NODEREAL_PARTS:
+        lookups = _Lookups(transport, source_id, "nodereal_transfers", clock, cache, _TIME_LOOKUP_CAP)
         rows, state, why = _nodereal_part(
-            client, transport, source_id, address, direction, category, cursor_head, page_cap, stop_timestamp, clock,
+            client, address, direction, category, cursor_head, page_cap, stop_timestamp, lookups,
         )
         part_bad = False
+        time_reason = ""
+        if state != "gap":
+            rows, time_reason = _stamp_nodereal_rows(rows, lookups)
+            if time_reason and not rows and state == "complete":
+                state, why = "gap", time_reason
+            elif time_reason and state == "complete":
+                state, why = "partial", time_reason
         if state != "gap":
             for item in rows:
                 parsed = _nodereal_edge(
@@ -417,81 +543,125 @@ def read_nodereal(
                 if parsed is None or not isinstance(parsed, Edge):
                     continue
                 edges.append(parsed)
-                if direction == "from" and parsed.sender_contract is True:
-                    contract = True
             if state == "complete" and part_bad:
                 state, why = "partial", "unreadable_row"
         recorded.append({"part": part, "read_status": state, "reason": why})
-    return _rolled(recorded, edges, zeros, contract)
+    return finish(_rolled(recorded, edges, zeros, None))
 
 
-def _nodereal_part(client, transport, source_id, address, direction, category, head, page_cap, stop_timestamp, clock):
+def _nodereal_part(client, address, direction, category, head, page_cap, stop_timestamp, lookups: _Lookups):
     items: list[Any] = []
     cursor = head
-    chunks = 0
+    pages_left = page_cap
     saw = False
-    while chunks < page_cap and cursor >= 0:
+    while pages_left > 0 and cursor >= 0:
         start = max(0, cursor - MAX_BLOCK_SPAN)
-        page, reason, done = _nodereal_chunk(
-            client, address, direction, category, start, cursor, page_cap,
+        room = _NODEREAL_ITEM_CAP - len(items)
+        page, reason, done, used = _nodereal_chunk(
+            client, address, direction, category, start, cursor, pages_left, room,
         )
-        chunks += 1
+        pages_left -= used
         if not done:
-            if not saw:
-                return [], "gap", reason or "read_error"
             items.extend(page)
-            return items, "partial", reason or "read_error"
+            if not saw and not items:
+                return [], "gap", reason or "read_error"
+            kept = items[:_NODEREAL_ITEM_CAP]
+            why = reason or "read_error"
+            if len(items) >= _NODEREAL_ITEM_CAP and why == "item_cap":
+                return kept, "partial", "item_cap"
+            return kept, "partial", why
         saw = True
         items.extend(page)
+        if len(items) >= _NODEREAL_ITEM_CAP:
+            return items[:_NODEREAL_ITEM_CAP], "partial", "item_cap"
         if start == 0 or _covers(page, stop_timestamp):
             return items, "complete", ""
-        opening = _block_times(transport, source_id, "nodereal_transfers", {start}, clock)
-        if opening is None or start not in opening:
-            return items, "partial", "window_unchecked"
-        if opening[start] <= stop_timestamp:
+        opening, why = lookups.one(start)
+        if opening is None:
+            if not items:
+                return [], "gap", why or "window_unchecked"
+            return items, "partial", why or "window_unchecked"
+        if opening <= stop_timestamp:
             return items, "complete", ""
         cursor = start - 1
-    return items, "partial", "page_cap"
+    return items[:_NODEREAL_ITEM_CAP], "partial", "page_cap"
 
 
-def _nodereal_chunk(client: NodeRealClient, address, direction, category, start, end, page_cap):
+def _nodereal_chunk(client: NodeRealClient, address, direction, category, start, end, page_budget: int, item_budget: int):
     kept: list[Any] = []
     token: str | None = None
-    pages = 0
-    while pages < page_cap:
-        pages += 1
+    used = 0
+    pause, rng = client.sleep, client.random
+    while used < page_budget and len(kept) < item_budget:
+        used += 1
         operation = client.operation(
             category=category, address=address, start=start, end=end, page_key=token, side=direction,
         )
         try:
             result = read_with_retry(
-                lambda: client.transport.request(client.source_id, operation),
+                lambda operation=operation: client.transport.request(client.source_id, operation),
                 retry_attempts=client.transport.retry_attempts(client.source_id),
-                sleep=lambda _seconds: None,
-                random=lambda: 0.0,
+                sleep=pause,
+                random=rng,
                 clock=client.clock,
             )
         except BudgetExhausted as exc:
-            return kept, str(getattr(exc, "reason", "") or "") or "budget_exhausted", False
+            return kept, str(getattr(exc, "reason", "") or "") or "budget_exhausted", False, used
         except SecurityError as exc:
             if getattr(exc, "reason", "") != "redirect_host":
                 raise
-            return kept, "redirect_host", False
+            return kept, "redirect_host", False, used
         except TransportError as exc:
-            return kept, exc.reason or "read_error", False
+            if exc.reason == "fixture_miss":
+                raise
+            return kept, exc.reason or "read_error", False, used
+        refusal = _method_refusal(getattr(result, "body", None))
+        if refusal:
+            return kept, refusal, False, used
         payload, reason = _rpc_payload(result)
         if reason:
-            return kept, reason, False
+            return kept, reason, False, used
         if not isinstance(payload, Mapping) or not isinstance(payload.get("transfers"), list):
-            return kept, "missing_transfers", False
-        kept.extend(payload["transfers"])
+            return kept, "missing_transfers", False, used
+        batch = payload["transfers"]
+        room = item_budget - len(kept)
+        if len(batch) > room:
+            kept.extend(batch[:room])
+            return kept, "item_cap", False, used
+        kept.extend(batch)
         page_key = payload.get("pageKey")
         if page_key is None or page_key == "":
-            return kept, "", True
+            return kept, "", True, used
         if not isinstance(page_key, str):
-            return kept, "bad_page_key", False
+            return kept, "bad_page_key", False, used
         token = page_key
-    return kept, "page_cap", False
+    if len(kept) >= item_budget:
+        return kept[:item_budget], "item_cap", False, used
+    return kept, "page_cap", False, used
+
+
+def _stamp_nodereal_rows(rows: list[Any], lookups: _Lookups) -> tuple[list[Any], str]:
+    stamped: list[Any] = []
+    reason = ""
+    for item in rows:
+        if not isinstance(item, Mapping) or _nodereal_stamp(item) is not None or _failed(item):
+            stamped.append(item)
+            continue
+        block = _flexible_block(item)
+        if block is None:
+            stamped.append(item)
+            continue
+        stamp, why = lookups.one(block)
+        if stamp is None:
+            reason = why or "window_unchecked"
+            continue
+        copied = dict(item)
+        meta = copied.get("metadata")
+        merged = dict(meta) if isinstance(meta, Mapping) else {}
+        merged["blockTimestamp"] = stamp
+        copied["metadata"] = merged
+        stamped.append(copied)
+    return stamped, reason
 
 
 def _club_filter(address: str, direction: str, start: int, end: int) -> dict[str, Any]:
@@ -605,12 +775,13 @@ def _nodereal_edge(item, category, address, direction, network, family, source_i
 
 def _jsonrpc(transport, source_id, adapter, method, params, clock):
     operation = Operation(protocol="jsonrpc", adapter=adapter, method=method, params=params)
+    pause, rng = _retry_controls(transport, source_id)
     try:
         result = read_with_retry(
             lambda: transport.request(source_id, operation),
             retry_attempts=transport.retry_attempts(source_id),
-            sleep=lambda _seconds: None,
-            random=lambda: 0.0,
+            sleep=pause,
+            random=rng,
             clock=clock,
         )
     except BudgetExhausted as exc:
@@ -620,6 +791,8 @@ def _jsonrpc(transport, source_id, adapter, method, params, clock):
             raise
         return None, "redirect_host"
     except TransportError as exc:
+        if exc.reason == "fixture_miss":
+            raise
         return None, exc.reason or "read_error"
     return _rpc_payload(result)
 
@@ -654,26 +827,6 @@ def _rpc_reason(body: Mapping[str, Any]) -> str:
     if err is not None:
         return "rpc_error"
     return "rpc_error"
-
-
-def _block_times(transport, source_id, adapter, blocks: set[int], clock) -> dict[int, int] | None:
-    found: dict[int, int] = {}
-    for number in sorted(blocks):
-        payload, reason = _jsonrpc(
-            transport,
-            source_id,
-            adapter,
-            "eth_getBlockByNumber",
-            [hex(number), False],
-            clock,
-        )
-        if reason or not isinstance(payload, Mapping):
-            return None
-        stamp = _hex_int(payload.get("timestamp"))
-        if stamp is None:
-            return None
-        found[number] = stamp
-    return found
 
 
 def _covers(items: list[Any], stop_timestamp: int) -> bool:
@@ -764,14 +917,27 @@ def _raw_contract(item: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def _raw_contract_value(item: Mapping[str, Any]) -> int | None:
+    if "value" in item:
+        parsed = _hex_int(item.get("value"))
+        if parsed is not None:
+            return parsed
     return _hex_int(_raw_contract(item).get("value"))
 
 
 def _raw_contract_address(item: Mapping[str, Any], family: str) -> str:
+    for key in ("contractAddress", "tokenAddress"):
+        found = item.get(key)
+        if isinstance(found, str) and found.strip():
+            parsed = _canonical(family, found)
+            if parsed:
+                return parsed
     return _canonical(family, str(_raw_contract(item).get("address") or ""))
 
 
 def _raw_decimals(item: Mapping[str, Any]) -> int | None:
+    parsed = _hex_int(item.get("tokenDecimal"))
+    if parsed is not None:
+        return parsed
     return _hex_int(_raw_contract(item).get("decimal"))
 
 
@@ -901,7 +1067,14 @@ def _failed(item: Mapping[str, Any]) -> bool:
     if item.get("success") is False:
         return True
     status = item.get("status")
-    return isinstance(status, str) and status.lower() in {"error", "reverted"}
+    if isinstance(status, str) and status.lower() in {"error", "reverted"}:
+        return True
+    if "isError" not in item:
+        return False
+    flag = item.get("isError")
+    if isinstance(flag, bool):
+        return flag
+    return str(flag).strip() not in {"0", "false", "False", ""}
 
 
 def _party(value: Any) -> tuple[str, bool | None]:

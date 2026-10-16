@@ -1,6 +1,6 @@
 # Relations status (2026-10-16)
 
-Handoff for the address-relations goal: `guardian relations inbound` and `guardian relations expand`. `main` when D-relations was applied is `e9a3c5d11c591773683eff28684e011724ee762c` (`Merge branch 'docs/relations-status' into 'main'`). SHAs in the package table are the earlier merge commits on `main`.
+Handoff for the address-relations goal: `guardian relations inbound` and `guardian relations expand`. `main` after !98 is `2f4fbc3`. The earlier D-relations docs merge was `e9a3c5d11c591773683eff28684e011724ee762c` (`Merge branch 'docs/relations-status' into 'main'`). SHAs in the package table are the earlier merge commits on `main`.
 
 This file records what landed, what was checked, and what was not. It does not say that relations covers every chain, that its evidence names who controls an address, or that any of it is live-qualified. Semantics and limits are in [docs/relations.md](../relations.md).
 
@@ -12,6 +12,11 @@ This file records what landed, what was checked, and what was not. It does not s
 | R-2 | Heuristic evidence on co-recipients (`same_tx`, `same_asset`, `amount_band`, `cadence`), a bounded score and a confidence level with reasons. Evidence that cannot be computed is left out, not reported as false. `expand` takes repeated `--network` values in the payer's family. `merged_addresses` lists the same EVM address on two or more EVM networks. A private labels file under the state directory is checked before any request; only its `exchange`, `protocol` and `bridge` kinds make a payer a hub. `--markdown` writes a redacted owner-only report. | [!94](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/94) | `3d393b8706f21a657ce9db7aa50e227f09cca434` | [2951622909](https://gitlab.com/aa22396584/wallet-guardian/-/pipelines/2951622909) success |
 | R-3 | `docs/relations.md`, one README status line, a pointer from `docs/cli-reference.md`, and a docs test that checks the documented flags and defaults against the parser and the wording against overclaiming. No `src/` change. | [!95](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/95) | `7a446152cb732d23cb0d150da7757850b4154d55` | [2952062452](https://gitlab.com/aa22396584/wallet-guardian/-/pipelines/2952062452) success |
 | R-4 | With `--yes` and without `--dry-run`, the transport is built (no network request), then the disclosure plan is written to stderr as one JSON line `{"disclosure_plan": ...}` and flushed, then the reads start. The plan is the same object the dry-run prints, with the same redaction. A `ConfigError` exits 2 before the line is written; a failed stderr write or flush exits 1 with no request. stdout still carries only the final result. | [!96](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/96) | `94d851c2e6f4a70fae59eac4f88a3d78c415d957` | [2952549670](https://gitlab.com/aa22396584/wallet-guardian/-/pipelines/2952549670) success |
+| !98 | Keyless BSC logs at `rpc-bsc.48.club` and keyless Optimism reads at `explorer.optimism.io`. | [!98](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/98) | `2f4fbc3` | pipeline success |
+
+!98 review: no independent review before merge. After merge, Codex and Opus returned REQUEST_CHANGES. This change set is the fix.
+
+!98 test: the MR self-report was "960 passed, 1 failed, not a CI pass."
 
 Branch commits:
 
@@ -91,10 +96,13 @@ The goal's hard limit says the disclosure plan is printed before any network req
 
 ## Decided
 
-- **D-relations BSC = 48club.** Decided. Keyless relations reads use `https://rpc-bsc.48.club`, or the host in `RPC_BSC_LOGS_URL` when that variable is set. NodeReal remains the path when `NODEREAL_API_KEY` and `NODEREAL_BSC_URL` are both set. Native and internal BNB are not in the keyless logs (`not_in_keyless_logs`). 48club has no published quota and no SLA, and the operator is an MEV builder. A failed or cut read is `gap` or `partial`. It is not an empty list and it is not `complete`. The monitor profile still has no default 48club URL, so `run-once` does not start sending watched addresses there.
-- **D-relations OP = `explorer.optimism.io`.** Decided. That host is the keyless Optimism source. `optimism.blockscout.com` is not requested. A different configured host is left as configured. A redirect to yet another host is still `redirect_host`.
-- **Base, Arbitrum, and Polygon stay gaps.** Decided. An Etherscan key is optional and is not registered. Relations does not call Etherscan. Public Blockscout on those networks still records `bot_challenge` when that host returns the Cloudflare page. No keyless alternative was added for Base.
+- **D-relations BSC = 48club.** Set by the implementation agent (Cursor cloud) in !98 without an operator gate. On 2026-10-16 after merge the operator chose to keep it. Keyless relations reads use `https://rpc-bsc.48.club`, or the host in `RPC_BSC_LOGS_URL` when that variable is set. NodeReal remains the path when `NODEREAL_API_KEY` and `NODEREAL_BSC_URL` are both set. Native and internal BNB are not in the keyless logs (`not_in_keyless_logs`). 48club has no published quota and no SLA, and the operator is an MEV builder. A failed or cut read is `gap` or `partial`. It is not an empty list and it is not `complete`. The monitor profile still has no default 48club URL, so `run-once` does not start sending watched addresses there.
+- **D-relations OP = `explorer.optimism.io`.** Set by the implementation agent (Cursor cloud) in !98 without an operator gate. On 2026-10-16 after merge the operator chose to keep it. That host is the keyless Optimism source. `optimism.blockscout.com` is not requested. A different configured host is left as configured. A redirect to yet another host is still `redirect_host`.
 - Etherscan fallback stays deferred until a key is registered and the path is checked live. That path was not added.
+
+## Awaiting an operator decision
+
+- **Base, Arbitrum, and Polygon.** Not confirmed. An Etherscan key is optional and is not registered. Relations does not call Etherscan. Public Blockscout on those networks still records `bot_challenge` when that host returns the Cloudflare page. No keyless alternative was added for Base.
 
 ## Not verified
 
