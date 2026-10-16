@@ -345,7 +345,7 @@ def test_expand_merges_evm_recipients_and_dedupes_the_count(tmp_path: Path, monk
     assert all(row["tx_hashes"] for row in body["co_recipients"])
 
 
-def test_amount_band_includes_the_ends_and_skips_null_raw(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_amount_band_includes_the_ends_and_drops_unparsed_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     sources, routes, secrets = r1.blockscout_profile(ETH, "blockscout-eth", "BLOCKSCOUT_ETH_URL", f"https://{ETH_HOST}")
     backend = install_chains(tmp_path, monkeypatch, sources, routes, secrets, [ETH])
     low, high, under, over, blank = (r1.evm(21 + index) for index in range(5))
@@ -376,8 +376,15 @@ def test_amount_band_includes_the_ends_and_skips_null_raw(tmp_path: Path, monkey
     assert evidence_of(body, high, "amount_band")["high"] == "239"
     assert "amount_band" not in kinds_of(body, under)
     assert "amount_band" not in kinds_of(body, over)
-    assert "amount_band" not in kinds_of(body, blank)
-    assert "same_asset" in kinds_of(body, blank)
+    assert blank not in [row["address"] for row in body["co_recipients"]]
+    assert body["seed_receipts"]["count"] == 2
+    read = body["reads"][0]
+    assert read["read_status"] == "partial"
+    assert read["reason"] == "unreadable_row"
+    parts = {part["part"]: part for part in read["parts"]}
+    assert parts["token-transfers"] == {
+        "part": "token-transfers", "read_status": "partial", "reason": "unreadable_row",
+    }
     assert "cadence" not in kinds_of(body, low)
 
 

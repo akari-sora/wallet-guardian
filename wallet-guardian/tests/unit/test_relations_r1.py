@@ -528,7 +528,7 @@ def test_tron_expand_merges_two_fingerprint_pages(tmp_path: Path, monkeypatch: p
         tmp_path / "monitor.json", "--yes", "--payer", TRON_PAYER, "--network", "tron-mainnet", "--seed", TRON_SEED,
     ), backend)
     assert code == 0
-    assert body["status"] == "complete"
+    assert body["status"] == "partial"
     assert len(backend.calls) == 2
     first = call_query(backend.calls[0])
     second = call_query(backend.calls[1])
@@ -1372,7 +1372,7 @@ def test_zero_value_and_contract_creation_are_not_edges(tmp_path: Path, monkeypa
     assert TOKEN not in [row["address"] for row in body["co_recipients"]]
 
 
-def test_missing_amount_stays_null(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_missing_amount_is_an_unreadable_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     sources, routes, secrets = blockscout_profile(
         "ethereum-mainnet", "blockscout-eth", "BLOCKSCOUT_ETH_URL", "https://eth.blockscout.example.invalid",
     )
@@ -1387,9 +1387,15 @@ def test_missing_amount_stays_null(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "ethereum-mainnet",
     ), backend)
     assert code == 0, body
-    assert body["status"] == "complete"
-    assert body["counterparties"][0]["assets"][0]["raw_amount"] is None
-    assert body["counterparties"][0]["transfers"][0]["raw_amount"] is None
+    assert body["status"] == "partial"
+    assert body["reads"][0]["read_status"] == "partial"
+    assert body["reads"][0]["reason"] == "unreadable_row"
+    assert body["reads"][0]["parts"] == [
+        {"part": "token-transfers", "read_status": "complete", "reason": ""},
+        {"part": "transactions", "read_status": "partial", "reason": "unreadable_row"},
+        {"part": "internal-transactions", "read_status": "complete", "reason": ""},
+    ]
+    assert body["counterparties"] is None
 
 
 def test_missing_fungible_contract_is_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1526,8 +1532,13 @@ def test_tron_request_cap_keeps_rows(tmp_path: Path, monkeypatch: pytest.MonkeyP
     ), backend)
     assert code == 0, body
     assert body["status"] == "partial"
-    assert body["reads"][0]["read_status"] == "partial"
-    assert body["reads"][0]["reason"] == "request_cap"
+    assert body["reads"][0]["read_status"] == "gap"
+    assert body["reads"][0]["reason"] == "not_in_trc20_endpoint"
+    assert body["reads"][0]["parts"][0] == {"part": "trc20", "read_status": "partial", "reason": "request_cap"}
+    assert body["reads"][0]["parts"][1:] == [
+        {"part": "trx", "read_status": "gap", "reason": "not_in_trc20_endpoint"},
+        {"part": "trc10", "read_status": "gap", "reason": "not_in_trc20_endpoint"},
+    ]
     assert body["co_recipients"][0]["address"] == TRON_DEST
     assert body["co_recipients"][0]["count"] == 48
     assert len(backend.calls) == 48
@@ -2139,7 +2150,11 @@ def test_tron_budget_and_redirect_stay_on_one_part(tmp_path: Path, monkeypatch: 
     assert by_network["ethereum-mainnet"]["read_status"] == "complete"
     assert by_network["tron-mainnet"]["read_status"] == "gap"
     assert by_network["tron-mainnet"]["reason"] == "daily_cap"
-    assert by_network["tron-mainnet"]["parts"] == [{"part": "trc20", "read_status": "gap", "reason": "daily_cap"}]
+    assert by_network["tron-mainnet"]["parts"] == [
+        {"part": "trc20", "read_status": "gap", "reason": "daily_cap"},
+        {"part": "trx", "read_status": "gap", "reason": "not_in_trc20_endpoint"},
+        {"part": "trc10", "read_status": "gap", "reason": "not_in_trc20_endpoint"},
+    ]
     assert [row["address"] for row in body["counterparties"]] == [LEFT]
 
     backend = _ethereum_and_tron(tmp_path, monkeypatch)
@@ -2154,7 +2169,11 @@ def test_tron_budget_and_redirect_stay_on_one_part(tmp_path: Path, monkeypatch: 
     assert by_network["ethereum-mainnet"]["read_status"] == "complete"
     assert by_network["tron-mainnet"]["read_status"] == "gap"
     assert by_network["tron-mainnet"]["reason"] == "redirect_host"
-    assert by_network["tron-mainnet"]["parts"] == [{"part": "trc20", "read_status": "gap", "reason": "redirect_host"}]
+    assert by_network["tron-mainnet"]["parts"] == [
+        {"part": "trc20", "read_status": "gap", "reason": "redirect_host"},
+        {"part": "trx", "read_status": "gap", "reason": "not_in_trc20_endpoint"},
+        {"part": "trc10", "read_status": "gap", "reason": "not_in_trc20_endpoint"},
+    ]
     assert [row["address"] for row in body["counterparties"]] == [OTHER]
     assert all(urlsplit(call.url).hostname != "explorer.tron.example.invalid" for call in backend.calls)
 
