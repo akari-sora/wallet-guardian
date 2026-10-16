@@ -61,11 +61,15 @@ The `answers.json` above is all `init` needs. `init` writes under the XDG config
 - `guardian install-service --dry-run` prints a schedule plan and exits non-zero. It does not install a unit.
 - Grok Bot can run the same CLI. The shareable template is coming; there is no template link yet.
 
-Guides: [CLI only](docs/guide-cli.md), [command reference](docs/cli-reference.md), [scheduling](docs/scheduling.md), [FAQ](docs/faq-troubleshooting.md), [Grok Bot](docs/guide-grok-bot.md), [security and privacy](docs/security-privacy.md). Contributing: [CONTRIBUTING.md](../CONTRIBUTING.md).
+Guides: [CLI only](docs/guide-cli.md), [command reference](docs/cli-reference.md), [scheduling](docs/scheduling.md), [FAQ](docs/faq-troubleshooting.md), [Grok Bot](docs/guide-grok-bot.md), [AI agents](docs/guide-agents.md), [security and privacy](docs/security-privacy.md). Contributing: [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 You do not need Cloudflare, D1, a wallet login, or Node to run the monitor. The Action Client section below is optional.
 
 The MCM-01 scope contract is [docs/mcm-01.md](docs/mcm-01.md). That document is a plan, not a live result.
+
+## Use from AI agents
+
+The skill at `skills/wallet-guardian/` tells an agent how to call the installed `guardian` command. Read [docs/guide-agents.md](docs/guide-agents.md) before copying it into an agent home. Run `guardian capabilities` and follow the class it prints. An agent must not run `guardian relations`. Installing the skill into Claude Code, Codex, Cursor, Grok Build, Hermes, or Grok Bot was not exercised (未實測).
 
 ## Quickstart
 

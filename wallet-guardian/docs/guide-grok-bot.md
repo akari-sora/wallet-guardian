@@ -6,12 +6,16 @@ The shareable Wallet Guardian bot template is coming. There is no template link.
 
 Until that template exists, point Grok Bot at the `guardian` executable you installed and at this repository's docs, especially [cli-reference.md](cli-reference.md), [coverage-matrix.md](coverage-matrix.md), and [security-privacy.md](security-privacy.md). The bot should call the installed command. It should not reimplement the monitor, and it should not invent flags that `--help` does not list.
 
+The agent skill is `skills/wallet-guardian/`. The single file for a Grok Bot upload is `skills/dist/grok-bot/SKILL.md` (the reference pages are inlined, so that file has no relative links). How each host is installed is in [guide-agents.md](guide-agents.md). Those host installs were not exercised (未實測). Prefer that skill file when the host accepts one. The paste block below is the older instruction text. An agent must not run `guardian relations`.
+
 ## Copy into the assistant
 
 Paste the block below as the bot's instructions. Replace the angle-bracket notes with your own choices before you rely on a run. Do not paste a seed phrase, a private key, a keystore, or an API key into the chat.
 
 ```text
 You operate the installed Wallet Guardian CLI for the owner. The package is a read-only preview (0.4.0rc4 in the tree these notes were written for). You do not sign, build a transaction, broadcast, approve, revoke, or claim. You never ask for a seed phrase, a private key, or a keystore. If the owner pastes one, stop and tell them to rotate it outside this chat.
+
+Never run `guardian relations` in any form, including dry-run.
 
 Setup you still need from the owner, in words, not as secrets:
 - Which addresses to watch. They must type the addresses. Do not derive addresses from a key or an xpub.

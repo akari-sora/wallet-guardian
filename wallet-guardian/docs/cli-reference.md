@@ -6,20 +6,55 @@ The monitor is read-only. `run-once --no-send` still contacts the read endpoints
 
 A nested command (`config validate`, `alerts test`, `action plan`) has its own section. `{formal,preview}` and `{system,doh}` on `egress-doctor` are flag choices, not commands.
 
+`guardian --version` prints the package version and exits 0. `guardian capabilities` prints the static command classes. Exit codes: 0 finished, 1 general error (including `install-service` when nothing was installed), 2 bad arguments or missing config or consent, 3 degraded or stale, 4 security or policy stop.
+
 ## `guardian`
 
 ```text
-usage: guardian [-h]
-                {doctor,run-once,balance-probe,snapshot,reconcile,claims,providers,wallets,approvals,explain,coverage,replay,alerts,self-check,diagnose,actions,action,rescue,operation-coverage,workbench,config,sources,export,compare-legacy,news,legacy-capture,outbox,watchdog,monitor,egress-doctor,init,install-service}
+usage: guardian [-h] [--version]
+                {doctor,run-once,balance-probe,snapshot,reconcile,claims,providers,wallets,approvals,explain,coverage,replay,alerts,self-check,diagnose,actions,action,rescue,operation-coverage,workbench,config,sources,export,compare-legacy,news,legacy-capture,outbox,watchdog,monitor,egress-doctor,init,install-service,relations,capabilities}
                 ...
 
 positional arguments:
-  {doctor,run-once,balance-probe,snapshot,reconcile,claims,providers,wallets,approvals,explain,coverage,replay,alerts,self-check,diagnose,actions,action,rescue,operation-coverage,workbench,config,sources,export,compare-legacy,news,legacy-capture,outbox,watchdog,monitor,egress-doctor,init,install-service}
+  {doctor,run-once,balance-probe,snapshot,reconcile,claims,providers,wallets,approvals,explain,coverage,replay,alerts,self-check,diagnose,actions,action,rescue,operation-coverage,workbench,config,sources,export,compare-legacy,news,legacy-capture,outbox,watchdog,monitor,egress-doctor,init,install-service,relations,capabilities}
+    doctor              offline host and credential report unless the live flag is set
+    run-once            one monitor pass for a legacy config or a monitor profile
+    balance-probe       read balances into probe state; the no-send flag is required
+    snapshot            print the latest stored snapshot
+    reconcile           count stored items without a live reconciliation
+    claims              list stored Lista claim rows from the local database
+    providers           legacy provider probe group
+    wallets             legacy wallet command group
+    approvals           stored allowance view; history is not indexed
+    explain             render one stored alert; the refresh flag re-reads history
+    coverage            print stored or static coverage without a live probe
+    replay              replay a local fixture; the no-send flag is required
+    alerts              alert format check group
+    self-check          create a local self-check database and report table health
+    diagnose            print one stored task from the local database
+    actions             stored claim list group
+    action              unsigned local action views
+    rescue              report that rescue packaging is blocked in this build
+    operation-coverage  print the static operation coverage record
+    workbench           print the static workbench status
+    config              monitor profile command group
+    sources             source command group
+    export              print a public redacted profile
+    compare-legacy      compare local legacy state with the monitor database
+    news                news command group
+    legacy-capture      legacy capture command group
+    outbox              local outbox command group
+    watchdog            evaluate local monitor health and maybe hand off the outbox
+    monitor             schedule command group
+    egress-doctor       diagnose host DNS and egress without opening wallet secrets
     init                write a read-only monitor profile
     install-service     print a dry-run install plan; units stay disabled without --apply
+    relations           manual inbound and payer reads; an agent must not run this
+    capabilities        print the static agent capability catalog
 
 options:
   -h, --help            show this help message and exit
+  --version             print the package version and exit
 ```
 
 ## `guardian doctor`
@@ -150,6 +185,7 @@ usage: guardian wallets [-h] [--db DB] [--tenant TENANT] [--json] {discover} ...
 
 positional arguments:
   {discover}
+    discover       legacy discovery through the old config file
 
 options:
   -h, --help       show this help message and exit
@@ -233,6 +269,7 @@ usage: guardian alerts [-h] [--db DB] [--tenant TENANT] [--json] {test} ...
 
 positional arguments:
   {test}
+    test           print one dry-run alert and do not deliver it
 
 options:
   -h, --help       show this help message and exit
@@ -286,6 +323,7 @@ usage: guardian actions [-h] [--db DB] [--tenant TENANT] [--json] {list} ...
 
 positional arguments:
   {list}
+    list           list stored Lista claims for one wallet label
 
 options:
   -h, --help       show this help message and exit
@@ -314,6 +352,11 @@ usage: guardian action [-h] [--db DB] [--tenant TENANT] [--json] {plan,simulate,
 
 positional arguments:
   {plan,simulate,export,status,reconcile}
+    plan                refuse raw calldata; this does not plan a live transaction
+    simulate            read a stored simulation without calling the network
+    export              export one stored unsigned task
+    status              read one stored task without chain reconciliation
+    reconcile           read one stored task and leave on-chain completion unset
 
 options:
   -h, --help            show this help message and exit
@@ -431,6 +474,7 @@ usage: guardian config [-h] {validate} ...
 
 positional arguments:
   {validate}
+    validate  check a monitor profile offline
 
 options:
   -h, --help  show this help message and exit
@@ -456,6 +500,7 @@ usage: guardian sources [-h] {probe} ...
 
 positional arguments:
   {probe}
+    probe     contact enabled RPC sources and report chain identity
 
 options:
   -h, --help  show this help message and exit
@@ -516,6 +561,7 @@ usage: guardian news [-h] {health} ...
 
 positional arguments:
   {health}
+    health    read stored feed health; this command does not fetch
 
 options:
   -h, --help  show this help message and exit
@@ -543,6 +589,9 @@ usage: guardian legacy-capture [-h] {begin,record,finish} ...
 
 positional arguments:
   {begin,record,finish}
+    begin               start a legacy capture directory
+    record              append windows and events to a legacy capture
+    finish              finish a legacy capture directory
 
 options:
   -h, --help            show this help message and exit
@@ -602,6 +651,8 @@ usage: guardian outbox [-h] {pending,ack} ...
 
 positional arguments:
   {pending,ack}
+    pending      list pending outbox rows without sending
+    ack          record a local acknowledgement for one outbox row
 
 options:
   -h, --help     show this help message and exit
@@ -657,6 +708,7 @@ usage: guardian monitor [-h] {plan} ...
 
 positional arguments:
   {plan}
+    plan      describe the schedule; this does not start it
 
 options:
   -h, --help  show this help message and exit
@@ -740,6 +792,8 @@ usage: guardian relations [-h] [--db DB] [--tenant TENANT] [--json] {inbound,exp
 
 positional arguments:
   {inbound,expand}
+    inbound         manual inbound read; an agent must not run this
+    expand          manual payer expansion; an agent must not run this
 
 options:
   -h, --help        show this help message and exit
@@ -806,3 +860,24 @@ options:
 Repeat `--network` on `expand` to read more than one network in the payer's family.
 
 See docs/relations.md for semantics and limits.
+
+## `guardian capabilities`
+
+```text
+usage: guardian capabilities [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
+`capabilities` prints a static catalog. It does not open a socket and it does not write a file.
+
+| code | meaning |
+| --- | --- |
+| 0 | the command finished |
+| 1 | a general error, or `install-service` when nothing was installed |
+| 2 | bad arguments, or the command refused to continue without config or consent |
+| 3 | a degraded or stale result |
+| 4 | a security or policy stop |
+
+A gap name in the JSON is not success and is not a zero balance. Exit code 3 is not success.
