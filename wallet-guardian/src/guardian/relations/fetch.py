@@ -187,15 +187,13 @@ def read_tron(
     if caught is not None and getattr(caught, "reason", "") != "redirect_host":
         raise caught
     if caught is not None:
-        return _tron_outcome("gap", "redirect_host")
-    if walk.complete and not walk.error:
+        status, reason = "gap", "redirect_host"
+    elif walk.complete and not walk.error:
         status, reason = "complete", ""
     elif walk.reason in {"page_cap", "request_cap"}:
         status, reason = "partial", walk.reason
     else:
         status, reason = "gap", walk.reason or "read_error"
-    if status == "gap":
-        return _tron_outcome(status, reason)
     edges: list[Edge] = []
     unreadable = False
     zeros = 0
