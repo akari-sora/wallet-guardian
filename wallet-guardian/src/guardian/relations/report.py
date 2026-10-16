@@ -51,6 +51,8 @@ def expand_report(
     payer_is_contract: bool | None,
     max_nodes: int = 500,
     source_complete: bool | None = None,
+    contract_withhold: bool = False,
+    contract_check: Mapping | None = None,
     labels: Sequence[Mapping] | None = None,
     registry: Mapping | None = None,
 ) -> dict:
@@ -69,10 +71,11 @@ def expand_report(
     summary = seed_summary(seed_edges)
     seed_txs = {(edge.network, edge.tx_hash) for edge in seed_edges}
     rows = _groups(counted, "recipient", seed_txs, user_labels, chain_registry)
-    known = any(row.get("read_status") in {"complete", "partial"} for row in reads)
     unique = {_merge_key(family, edge.recipient) for edge in counted}
+    if source_complete is None:
+        source_complete = bool(reads) and all(row.get("read_status") == "complete" for row in reads)
     count: int | None
-    if not known and not rows:
+    if not counted and not source_complete:
         count = None
     else:
         count = len(unique)
@@ -83,12 +86,10 @@ def expand_report(
         reasons.append("label")
     if count is not None and count > hub_threshold:
         reasons.append("recipient_count")
-    if source_complete is None:
-        source_complete = bool(reads) and all(row.get("read_status") == "complete" for row in reads)
     hub: bool | None
     if reasons:
         hub = True
-    elif source_complete:
+    elif source_complete and payer_is_contract is False:
         hub = False
     else:
         hub = None
@@ -121,7 +122,14 @@ def expand_report(
     for row in visible:
         row.pop("_last", None)
     shown, truncated = _cap_rows(visible, max_nodes)
-    receipts, note = _seed_fields(reads, summary)
+    if not counted and not source_complete:
+        statuses = [row.get("read_status") for row in reads]
+        if statuses and all(status in {"gap", "unsupported"} for status in statuses):
+            receipts, note = None, "seed_receipts_unknown"
+        else:
+            receipts, note = None, None
+    else:
+        receipts, note = _seed_fields(reads, summary)
     body: dict = {
         "hub": hub,
         "hub_reasons": reasons,
@@ -136,9 +144,14 @@ def expand_report(
     if note:
         body["evidence_note"] = note
     body.update(_payer_label(network_list, payer, user_labels, chain_registry))
+    if isinstance(contract_check, Mapping):
+        body["contract_check"] = {
+            "status": str(contract_check.get("status") or ""),
+            "reason": str(contract_check.get("reason") or ""),
+        }
     if hub is True and expand_hub:
         body["noise"] = "high"
-    if hub is True and not expand_hub:
+    if (hub is True or contract_withhold) and not expand_hub:
         return body
     if shown:
         body["co_recipients"] = shown

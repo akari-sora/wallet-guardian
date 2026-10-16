@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import time
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,7 +65,6 @@ TRON_TOKEN = "TAF8dttxK5iPKbvYC626aDBytrWANpLRXp"
 TRON_DEST = "TALSWqjhNCaXi5YWPh9DvZgvtYRSfqVUwq"
 SOL = "11111111111111111111111111111111"
 BITCOIN = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
-LISTA = "0x1adb950d8bb3da4be104211d5ab038628e477fe6"
 BLOCK_KEY = "env-only-blockscout-key-r1"
 # 34 base58 characters decode to at most 25 bytes, so none of them pass the 32-byte check.
 SOL_T = "T1o7YUcLByKaGt1V4MvPxvp88qvEhxDqyb27WcBq83e"
@@ -193,8 +193,9 @@ def _private(path: Path, text: str) -> None:
         os.chmod(path, 0o600)
 
 
-def _budget(name: str, daily: int = 10000) -> dict:
-    return {"max_concurrency": 1, "max_requests_per_day": daily, "max_rps": 1000, "retry_attempts": 0}
+def _budget(name: str, daily: int = 10000, retry_attempts: int = 0) -> dict:
+    del name
+    return {"max_concurrency": 1, "max_requests_per_day": daily, "max_rps": 1000, "retry_attempts": retry_attempts}
 
 
 def _source(adapter: str, env: str, group: str, credential: str | None = None) -> dict:
@@ -217,6 +218,7 @@ def install(
     account_networks: list[str],
     daily: int = 10000,
     extra_accounts: list[dict] | None = None,
+    retry_attempts: int = 0,
 ) -> PathBackend:
     accounts = tmp_path / "accounts.json"
     profile = tmp_path / "secrets.json"
@@ -241,7 +243,10 @@ def install(
         "accounts": account_rows,
     }))
     _private(profile, json.dumps(secrets))
-    budgets = {source["budget_group"]: _budget(source["budget_group"], daily) for source in sources.values()}
+    budgets = {
+        source["budget_group"]: _budget(source["budget_group"], daily, retry_attempts)
+        for source in sources.values()
+    }
     config.write_text(json.dumps({
         "schema_version": "guardian.monitor.v1",
         "mode": "read_only",
@@ -461,7 +466,7 @@ def test_complete_payer_with_zero_receipts_lists_no_co_recipients(tmp_path: Path
     assert body["recipient_count"] == 0
     assert body["recipient_count_complete"] is True
     assert body["co_recipients"] == []
-    assert body["hub"] is False
+    assert body["hub"] is None
 
 
 def test_expand_sorts_same_tx_ahead_of_a_larger_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -780,6 +785,7 @@ def test_bsc_48club_empty_window_is_a_gap_and_not_zero(tmp_path: Path, monkeypat
 
 
 def test_bsc_48club_rate_limit_is_a_gap_and_not_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
     sources = {"nodereal-bsc": _source("nodereal_transfers", "NODEREAL_BSC_URL", "nodereal-bsc")}
     backend = _bsc_install(tmp_path, monkeypatch, sources, {"NODEREAL_BSC_URL": "https://bsc.example.invalid"})
     allow_fixture_hosts(monkeypatch, "rpc-bsc.48.club")
@@ -809,6 +815,7 @@ def test_bsc_48club_rate_limit_is_a_gap_and_not_zero(tmp_path: Path, monkeypatch
 
 
 def test_bsc_48club_keeps_rows_when_a_later_chunk_is_limited(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
     sources = {
         "bsc-logs-48club": {
             "adapter": "evm_rpc",
@@ -1653,6 +1660,7 @@ def test_hub_count_uses_the_full_recipient_total(tmp_path: Path, monkeypatch: py
 
 
 def test_local_label_marks_a_hub_when_the_bsc_read_is_a_gap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
     sources = {"nodereal-bsc": _source("nodereal_transfers", "NODEREAL_BSC_URL", "nodereal-bsc")}
     routes = [{"network": "bsc-mainnet", "capability": "history.native_external", "source_ids": ["nodereal-bsc"]}]
     backend = install(
@@ -1660,9 +1668,28 @@ def test_local_label_marks_a_hub_when_the_bsc_read_is_a_gap(tmp_path: Path, monk
         secrets={"NODEREAL_BSC_URL": "https://bsc.example.invalid"},
         address=SEED, family="evm", account_networks=["bsc-mainnet"],
     )
+    label_path = tmp_path / "state" / "relations-labels.json"
+    _private(label_path, json.dumps({
+        "labels": [{
+            "address": PAYER,
+            "kind": "exchange",
+            "label": "desk router",
+            "network": "bsc-mainnet",
+        }],
+        "schema_version": "guardian.relations.labels.v1",
+    }))
     allow_fixture_hosts(monkeypatch, "rpc-bsc.48.club")
+
+    def answer(call):
+        body = rpc_call(call)
+        assert urlsplit(call.url).hostname == "rpc-bsc.48.club"
+        if body["method"] == "eth_getCode":
+            assert body["params"] == [PAYER, "latest"]
+        return RawResponse(500, {"content-type": "application/json"}, b"")
+
+    backend.add(lambda _call: True, answer)
     code = main(expand_argv(
-        tmp_path / "monitor.json", "--yes", "--payer", LISTA, "--network", "bsc-mainnet", "--seed", SEED,
+        tmp_path / "monitor.json", "--yes", "--payer", PAYER, "--network", "bsc-mainnet", "--seed", SEED,
     ), backend=backend, clock=lambda: CLOCK)
     captured = capsys.readouterr()
     body = json.loads(captured.out)
@@ -1672,11 +1699,15 @@ def test_local_label_marks_a_hub_when_the_bsc_read_is_a_gap(tmp_path: Path, monk
     assert "co_recipients" not in body
     assert body["status"] != "complete"
     assert body["reads"][0]["read_status"] == "gap"
+    assert body["reads"][0]["reason"] == "http_5xx"
+    assert any(rpc_call(call)["method"] == "eth_getCode" for call in backend.calls)
     assert SEED.lower() not in captured.err.lower()
     for call in backend.calls:
         blob = (call.url + call.body.decode()).lower()
         assert SEED.lower() not in blob
         assert urlsplit(call.url).hostname == "rpc-bsc.48.club"
+        if rpc_call(call)["method"] != "eth_blockNumber":
+            assert PAYER[2:].lower() in blob
 
 
 def test_label_hit_on_ethereum_is_a_hub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

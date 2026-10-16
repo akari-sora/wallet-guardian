@@ -24,6 +24,7 @@ Init prints a data-sharing summary before it writes. The machine hostname is not
 | OFAC | Init stores the list name `us-ofac-sdn` and does not add an OFAC source. If you set `OFAC_SLS_FEED` (a local file or an HTTPS URL), `run-once` downloads or reads that list and matches addresses locally; no address is uploaded. An unset endpoint is `feed_not_supplied`; a stale or unreadable list is reported as such, not as "no hit" | No address is uploaded by init or by screening |
 | GoPlus and Chainabuse | Not enabled by init. The summary lists both as off. The watch address is not sent | Stays off until you change the config yourself |
 | Notifications | Nothing, while delivery mode is `outbox_only`. Rows stay in the local outbox. `install-service` does not start a sender | `--no-send` also refuses to hand rows to a sender |
+| `guardian relations` | Manual. The disclosure plan is printed first, and `--yes` is required before a request is sent. Without a NodeReal key the plan may name `rpc-bsc.48.club`. A keyless Optimism read may name `explorer.optimism.io`. See [relations.md](relations.md) | Without `--yes`, or with `--dry-run`, nothing is sent |
 
 ## Opt-in third parties
 

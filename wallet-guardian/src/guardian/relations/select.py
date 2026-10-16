@@ -9,7 +9,7 @@ keyless 48club log host.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -303,6 +303,8 @@ def _blockscout_choice(network, routed, sources, status_map, endpoints) -> Choic
     skip = frozenset({OPTIMISM_REDIRECT_HOST}) if network == "optimism-mainnet" else frozenset()
     found = _first_blockscout(routed, sources, status_map, endpoints, skip_hosts=skip)
     if found is not None:
+        if network == "optimism-mainnet" and found.host == OPTIMISM_KEYLESS_HOST:
+            return replace(found, omit_credential=True)
         return found
     if network == "optimism-mainnet":
         return _optimism_keyless(routed, sources, status_map, endpoints)
@@ -324,16 +326,17 @@ def _first_blockscout(routed, sources, status_map, endpoints, skip_hosts: frozen
 
 
 def _optimism_keyless(routed, sources, status_map, endpoints) -> Choice | None:
-    """Use the official explorer when the keyless host is empty or is the old redirect."""
+    """Use the official explorer for an empty host, that host, or the old redirect."""
+    del status_map
     for source_id in routed:
         source = sources.get(source_id) or {}
         if source.get("adapter") != "blockscout" or source.get("enabled") is not True:
             continue
         keyed = isinstance(source.get("credential_env"), str) and bool(source.get("credential_env"))
-        if keyed and not _present(status_map, source_id):
-            continue
         host = host_of(endpoint_text(endpoints, source_id))
-        if host != OPTIMISM_REDIRECT_HOST and not (host == "" and not keyed):
+        old_host = host == OPTIMISM_REDIRECT_HOST
+        keyless_host = host == OPTIMISM_KEYLESS_HOST
+        if not old_host and not keyless_host and not (host == "" and not keyed):
             continue
         return Choice(
             "primary",
@@ -365,6 +368,13 @@ def _bsc_choices(document, status_map, endpoints) -> list[Choice]:
 
 def _club_choice(sources, endpoints) -> Choice:
     """Keyless BSC logs. A configured host wins. An empty one uses rpc-bsc.48.club."""
+    named = sources.get(CLUB_SOURCE_ID)
+    if (
+        isinstance(named, Mapping)
+        and named.get("adapter") == "evm_rpc"
+        and named.get("enabled") is False
+    ):
+        return Choice("skip", read_status="gap", reason="source_disabled")
     chosen = _club_source(sources)
     if chosen is None:
         return Choice(
