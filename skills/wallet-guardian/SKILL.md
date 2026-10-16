@@ -15,6 +15,8 @@ Use the installed `guardian` command. Do not reimplement the monitor and do not 
 
 Install only a wheel file whose SHA256 you have checked. The release page named in the project README is `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.4`. Download `SHA256SUMS` and every file it lists, including `constraints.txt`, into one directory, and check the hashes before install. The wheel for this tree is `wallet_guardian_monitor-0.4.0rc4-py3-none-any.whl`.
 
+The rc.4 wheel currently on that release page is older than this skill and does not include `capabilities`. Wait for the next release.
+
 Do not install `guardian` or `wallet-guardian-monitor` by name from any index (pip, uv, or pipx). A package in an index with one of those names is not this project.
 
 ```bash
@@ -25,7 +27,9 @@ uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc4
 
 Run `guardian capabilities` before any other command. It prints the package version, every subcommand class, and the exit-code map. It does not open a socket and it does not write a file. Then run `guardian --version` if you need the version alone.
 
-If `guardian capabilities` returns `invalid choice`, or the command does not exist, stop. The installed release is older than this skill. The newest release, `v0.4.0-rc.4`, was packaged from an older commit and does not include `capabilities`. Tell the owner: 已安裝的版本沒有能力目錄，請安裝含 `capabilities` 的 release. Do not guess a command. Do not install or upgrade. Wait for the next release.
+If the `guardian` command does not exist, stop. Tell the owner: 沒有安裝. Do not guess a command. Do not install or upgrade. Wait for the next release.
+
+If `guardian` is installed and `guardian capabilities` returns `invalid choice`, stop. `v0.4.0-rc.4` and earlier releases do not include `capabilities`. Tell the owner: 已安裝的版本沒有能力目錄，請安裝含 `capabilities` 的 release. Do not guess a command. Do not install or upgrade. Wait for the next release.
 
 ## Classes
 
@@ -34,13 +38,13 @@ If `guardian capabilities` returns `invalid choice`, or the command does not exi
 - `C_writes_local_state_owner_decides`: writes local files or rows, or prints an install plan. Run only after the owner decides. Most view commands are in this class because opening the local monitor database can create it or apply additive migrations. Run those only after the owner agrees to that run. Offline `doctor` writes three report files in the state directory and is class C. `init` writes nothing until consent (the yes flag, or typing yes) and otherwise exits 2. `outbox pending` and `outbox ack` open the database. `outbox ack` records a local receipt and does not send. `self-check` creates a local database. `watchdog` with the no-send flag does not open a socket; it writes local health and alerts, so it is class C. `install-service` without apply prints a plan and exits 1 because nothing was installed. The output flag on that dry-run writes rendered units and still exits 1. That 1 is not a reason to pass apply. Passing apply together with dry-run is still forbidden.
 - `D_never_from_agent`: do not run these. That includes every form of `relations` (including dry-run), `install-service` with apply (including apply together with dry-run), `run-once` or `watchdog` without the no-send flag, and the legacy paths `run-once` with the legacy config flag, `wallets discover`, `legacy-capture`, `compare-legacy`, and `replay`.
 
-If this summary and `guardian capabilities` disagree, trust the command. The catalog is the source. A subcommand or flag form that `guardian capabilities` does not list is class D. Do not run it.
+If this summary and `guardian capabilities` disagree, trust the command. The catalog is the source. A subcommand path the catalog does not list is class D. Do not run it. A flag that is named in a variant id and changes the class is class D when the catalog does not list that combination. Do not run it. Ordinary arguments a listed variant needs, such as a file path or `--db`, do not change the class.
+
+Top-level `guardian --help` and `guardian --version`, and `guardian <subcommand> --help`, are class A. They exit while arguments are parsed, before the command runs, and they do not open a database or a socket.
 
 An owner's agreement covers the one run the owner answered. It is not standing consent for later runs, other commands, or other classes. Ask again each time.
 
 ## Hard limits
-
-The longer list is [Safety rules](references/safety.md).
 
 - Do not ask for, store, or log a seed phrase, private key, keystore, or API key.
 - Do not sign, approve, revoke, claim, or broadcast. Do not call eth_sendTransaction, eth_sendRawTransaction, wallet_sendCalls, eth_sign, personal_sign, or eth_signTypedData.
@@ -53,6 +57,8 @@ The longer list is [Safety rules](references/safety.md).
 - If the owner pastes a seed phrase, private key, keystore, or API key into the chat, do not use it, repeat it, store it, or pass it to a command. Tell the owner that it is now exposed. API keys belong in the owner's own environment, set by the owner.
 - Do not read, print, or edit API keys or the files that hold them. The installed CLI reads them itself.
 - An agent must never call `guardian relations`, including inbound, expand, and dry-run. Only the owner may run it, by hand, in their own terminal.
+
+The longer list is [Safety rules](references/safety.md).
 
 ## Catalog
 

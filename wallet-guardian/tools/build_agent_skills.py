@@ -13,9 +13,14 @@ import re
 import sys
 from pathlib import Path
 
-_LINK = re.compile(r"\[([^\]]+)\]\((references/[^)]+)\)([.。!！?？]*)")
+_TRAILING_PUNCT = set(".。!！?？:：;；,")
+_LINK = re.compile(
+    r"\[([^\]]+)\]\((references/[^)]+)\)([.。!！?？:：;；,])?(?=\r?\n|$)"
+)
+_REF_LINK = re.compile(r"\[([^\]]+)\]\((references/[^)]+)\)")
 _ATX = re.compile(r"^(#{1,6})([ \t]+.*)$")
-_ORPHAN_PUNCT = set(".。!！?？")
+_FENCE_OR_INDENTED_ATX = re.compile(r"^(?:[ ]{0,3}(?:`{3,}|~{3,})|[ ]{1,3}#{1,6}(?:[ \t]|$))")
+_ORPHAN_PUNCT = set(".。!！?？:：;；,")
 _GROK_NOTE = """## Grok Bot host
 
 This file inlines the reference pages because a Grok Bot skill upload keeps only this text. The cloud computer for that account must already have the `guardian` command installed. Bots on the same account share that computer and its data. This host integration was not exercised (未實測).
@@ -181,22 +186,75 @@ def _demote_headings(text: str, shift: int) -> str:
     return "\n".join(lines)
 
 
+def _validate_reference_links(skill: str) -> None:
+    """A reference link ends its line, with at most one punctuation mark."""
+    for match in _REF_LINK.finditer(skill):
+        newline = skill.find("\n", match.end())
+        tail = skill[match.end():] if newline < 0 else skill[match.end():newline]
+        tail = tail.removesuffix("\r")
+        if tail == "" or (len(tail) == 1 and tail in _TRAILING_PUNCT):
+            continue
+        raise ValueError("a reference link must end the line, with at most one punctuation mark")
+
+
+def _reject_unhandled_reference(text: str, target: str) -> None:
+    """Fences and indented ATX headings are rejected instead of being reinterpreted."""
+    for line in text.splitlines():
+        if _FENCE_OR_INDENTED_ATX.match(line):
+            raise ValueError(f"{target} has a fence or an indented heading")
+
+
+def _outer_content_follows(skill: str, match_end: int, parent_level: int) -> bool:
+    """True when the link's section still has text before its next heading."""
+    fence = False
+    after = False
+    offset = 0
+    for line in skill.splitlines(keepends=True):
+        raw = line.removesuffix("\n").removesuffix("\r")
+        end = offset + len(line)
+        if not after:
+            if raw.startswith("```"):
+                fence = not fence
+            if offset < match_end <= end:
+                after = True
+            offset = end
+            continue
+        if raw.startswith("```"):
+            fence = not fence
+            return True
+        if not fence:
+            match = _ATX.match(raw)
+            if match and len(match.group(1)) <= parent_level:
+                return False
+        if raw.strip():
+            return True
+        offset = end
+    return False
+
+
 def render_grok(skill: str, references: dict[str, str], catalog_version: str) -> str:
     """Inline reference pages. The result has no relative links."""
     if _frontmatter_version(skill) != catalog_version:
         raise ValueError("skill metadata.version does not match the catalog")
+    _validate_reference_links(skill)
 
     def replace(match: re.Match[str]) -> str:
         label = match.group(1)
         target = match.group(2)
-        punct = match.group(3)
+        punct = match.group(3) or ""
         if target not in references:
             raise ValueError(f"unknown skill reference {target}")
-        body = references[target].strip()
+        raw = references[target]
+        _reject_unhandled_reference(raw, target)
+        body = raw.strip()
         levels = _heading_levels(body)
         if levels:
             preceding = _heading_levels(skill[: match.start()])
             parent = preceding[-1] if preceding else 1
+            if _outer_content_follows(skill, match.end(), parent):
+                raise ValueError(
+                    f"{target} has headings, and the link is not the last content before the next heading"
+                )
             body = _demote_headings(body, (parent + 1) - min(levels))
         # Sentence punctuation stays on the label line. Leaving it for the
         # next line made a file whose only character was ".".

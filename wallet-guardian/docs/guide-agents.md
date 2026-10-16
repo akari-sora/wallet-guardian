@@ -6,14 +6,18 @@ The monitor is watch-only. An agent must not sign, approve, revoke, claim, or br
 
 ## Before any other command
 
-Run `guardian capabilities`. It prints the package version, a class for every subcommand, and the exit-code map. It does not open a socket and it does not write a file. If this page and that JSON disagree, trust the command. A subcommand or flag form that the JSON does not list is class D. An owner's agreement covers the one run the owner answered; it is not standing consent.
+Run `guardian capabilities`. It prints the package version, a class for every subcommand, and the exit-code map. It does not open a socket and it does not write a file. If this page and that JSON disagree, trust the command. The catalog is the source.
+
+A subcommand path the catalog does not list is class D. Do not run it. A flag that is named in a variant id and changes the class is class D when the catalog does not list that combination. Do not run it. Ordinary arguments a listed variant needs, such as a file path or `--db`, do not change the class.
+
+Top-level `guardian --help` and `guardian --version`, and `guardian <subcommand> --help`, are class A. They exit while arguments are parsed, before the command runs, and they do not open a database or a socket. `guardian --version` prints only the version and exits 0.
+
+An owner's agreement covers the one run the owner answered; it is not standing consent.
 
 - `A_read_only_offline`: no network and no local writes. Commands that open a database are not in this class.
 - `B_network_requires_owner_ok`: contacts a configured host. Run it only after the owner agrees to that read. Some of these commands also write local files.
 - `C_writes_local_state_owner_decides`: writes local files or rows, or prints an install plan. The owner decides. Most view commands are in this class because opening the monitor database can create it or apply additive migrations. Run those only after the owner agrees to that run.
 - `D_never_from_agent`: do not run these. This includes every form of `relations`, and `install-service` with apply, including apply together with dry-run.
-
-`guardian --version` prints only the version and exits 0.
 
 A gap is not safe, not zero, and not complete. Exit code 3 is not success. An empty outbox is not all clear. Unknown prices stay null. Do not enable GoPlus or Chainabuse. Do not claim that the 72-hour shadow validation is finished, that CI passed, or that this package was published on PyPI. Call only flags that the installed `--help` lists. There is no MCP server in this tree.
 
