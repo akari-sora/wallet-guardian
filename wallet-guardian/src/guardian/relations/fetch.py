@@ -369,6 +369,9 @@ def _host_block_reason(outcome: Outcome) -> str:
         reason = part.get("reason")
         if reason in _CODE_SKIP:
             return str(reason)
+        stamped = part.get("timestamp_reason")
+        if stamped in _CODE_SKIP:
+            return str(stamped)
     return ""
 
 
@@ -404,9 +407,9 @@ def _attach_payer_code(outcome: Outcome, transport: Any, source_id: str, adapter
     outcome.contract_withhold = False
 
 
-def _time_failure(edges: list[Edge], why: str) -> tuple[str, str]:
+def _time_failure(edges: list[Edge], why: str, *, accepted: bool = False) -> tuple[str, str]:
     reason = why or "window_unchecked"
-    if edges or reason in _CAP_REASONS:
+    if edges or accepted or reason in _CAP_REASONS:
         return "partial", reason
     return "gap", reason
 
@@ -468,6 +471,7 @@ def read_club(
         if failed or not isinstance(logs, list):
             status, reason = ("gap", failed or "read_error") if not saw else ("partial", failed or "read_error")
             break
+        prior = saw
         saw = True
         part_edges, part_zeros, part_bad, _blocks = _club_logs(
             logs, address, direction, network, family, source_id,
@@ -477,7 +481,9 @@ def read_club(
         if start != 0:
             opening, why = lookups.one(start)
             if opening is None:
-                status, reason = _time_failure(edges, why)
+                # A finished chunk, or this chunk's empty log read, is a successful request.
+                # Rows waiting for their first stamp stay a gap.
+                status, reason = _time_failure(edges, why, accepted=prior or not part_edges)
                 break
             if opening <= stop_timestamp:
                 covered = True
@@ -595,17 +601,18 @@ def _nodereal_part(client, address, direction, category, head, page_cap, stop_ti
     items: list[Any] = []
     cursor = head
     pages_left = page_cap
-    saw = False
+    accepted = False
     while pages_left > 0 and cursor >= 0:
         start = max(0, cursor - MAX_BLOCK_SPAN)
         room = _NODEREAL_ITEM_CAP - len(items)
-        page, reason, done, used = _nodereal_chunk(
+        page, reason, done, used, ok = _nodereal_chunk(
             client, address, direction, category, start, cursor, pages_left, room,
         )
         pages_left -= used
+        accepted = accepted or ok
         if not done:
             items.extend(page)
-            if not saw and not items:
+            if not accepted:
                 why = reason or "read_error"
                 if why in _CAP_REASONS:
                     return [], "partial", why
@@ -615,7 +622,6 @@ def _nodereal_part(client, address, direction, category, head, page_cap, stop_ti
             if len(items) >= _NODEREAL_ITEM_CAP and why == "item_cap":
                 return kept, "partial", "item_cap"
             return kept, "partial", why
-        saw = True
         items.extend(page)
         if len(items) >= _NODEREAL_ITEM_CAP:
             return items[:_NODEREAL_ITEM_CAP], "partial", "item_cap"
@@ -624,7 +630,7 @@ def _nodereal_part(client, address, direction, category, head, page_cap, stop_ti
         opening, why = lookups.one(start)
         if opening is None:
             why = why or "window_unchecked"
-            if not items and why not in _CAP_REASONS:
+            if not accepted and why not in _CAP_REASONS:
                 return [], "gap", why
             return items, "partial", why
         if opening <= stop_timestamp:
@@ -637,6 +643,7 @@ def _nodereal_chunk(client: NodeRealClient, address, direction, category, start,
     kept: list[Any] = []
     token: str | None = None
     used = 0
+    succeeded = False
     pause, rng = client.sleep, client.random
     while used < page_budget and len(kept) < item_budget:
         used += 1
@@ -652,43 +659,45 @@ def _nodereal_chunk(client: NodeRealClient, address, direction, category, start,
                 clock=client.clock,
             )
         except BudgetExhausted as exc:
-            return kept, str(getattr(exc, "reason", "") or "") or "budget_exhausted", False, used
+            return kept, str(getattr(exc, "reason", "") or "") or "budget_exhausted", False, used, succeeded
         except SecurityError as exc:
             if getattr(exc, "reason", "") != "redirect_host":
                 raise
-            return kept, "redirect_host", False, used
+            return kept, "redirect_host", False, used, succeeded
         except TransportError as exc:
             if exc.reason == "fixture_miss":
                 raise
-            return kept, exc.reason or "read_error", False, used
+            return kept, exc.reason or "read_error", False, used, succeeded
         refusal = _method_refusal(getattr(result, "body", None))
         if refusal:
-            return kept, refusal, False, used
+            return kept, refusal, False, used, succeeded
         payload, reason = _rpc_payload(result)
         if reason:
-            return kept, reason, False, used
+            return kept, reason, False, used, succeeded
         if not isinstance(payload, Mapping) or not isinstance(payload.get("transfers"), list):
-            return kept, "missing_transfers", False, used
+            return kept, "missing_transfers", False, used, succeeded
         batch = payload["transfers"]
         room = item_budget - len(kept)
         if len(batch) > room:
             kept.extend(batch[:room])
-            return kept, "item_cap", False, used
+            return kept, "item_cap", False, used, True
         kept.extend(batch)
         page_key = payload.get("pageKey")
         if page_key is None or page_key == "":
-            return kept, "", True, used
+            return kept, "", True, used, True
         if not isinstance(page_key, str):
-            return kept, "bad_page_key", False, used
+            return kept, "bad_page_key", False, used, succeeded
+        succeeded = True
         token = page_key
     if len(kept) >= item_budget:
-        return kept[:item_budget], "item_cap", False, used
-    return kept, "page_cap", False, used
+        return kept[:item_budget], "item_cap", False, used, True
+    return kept, "page_cap", False, used, succeeded
 
 
 def _stamp_nodereal_rows(rows: list[Any], lookups: _Lookups) -> tuple[list[Any], str]:
     stamped: list[Any] = []
     reason = ""
+    halted = False
     for item in rows:
         if not isinstance(item, Mapping) or _nodereal_stamp(item) is not None or _failed(item):
             stamped.append(item)
@@ -697,9 +706,13 @@ def _stamp_nodereal_rows(rows: list[Any], lookups: _Lookups) -> tuple[list[Any],
         if block is None:
             stamped.append(item)
             continue
+        if halted:
+            continue
         stamp, why = lookups.one(block)
         if stamp is None:
             reason = why or "window_unchecked"
+            if reason in _CODE_SKIP:
+                halted = True
             continue
         copied = dict(item)
         meta = copied.get("metadata")

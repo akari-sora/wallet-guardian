@@ -1194,6 +1194,159 @@ def test_r5_empty_page_with_page_key_is_partial(tmp_path, monkeypatch, capsys) -
     assert body["counterparties"] is None
 
 
+def test_f1_expand_rate_limit_skips_code_and_stops_stamp_lookups(tmp_path, monkeypatch, capsys) -> None:
+    """Page cap plus a timestamp 429 must not call eth_getCode or keep stamping."""
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    backend = _nodereal_install(tmp_path, monkeypatch)
+    kept = _nr_row(r1.PAYER, r1.OTHER, 3, block=140_000)
+    kept["metadata"] = {"blockTimestamp": INSIDE}
+    limited = _nr_row(r1.PAYER, r1.RIGHT, 4, block=120_000)
+    later = _nr_row(r1.PAYER, r1.LEFT, 5, block=130_000)
+
+    def answer(call):
+        body = r1.rpc_call(call)
+        if body["method"] == "eth_blockNumber":
+            return r1.rpc(hex(HEAD))
+        if body["method"] == "eth_getBlockByNumber":
+            number = int(body["params"][0], 16)
+            if number == 120_000:
+                return RawResponse(429, {"content-type": "application/json"}, b"")
+            return r1.rpc({"number": body["params"][0], "timestamp": hex(INSIDE)})
+        if body["method"] == "eth_getCode":
+            return r1.rpc("0x")
+        if body["method"] == "nr_getAssetTransfers":
+            params = body["params"][0]
+            if params["category"][0] == "20" and int(params["fromBlock"], 16) == 150_000 and not params.get("pageKey"):
+                return r1.rpc({"pageKey": "next", "transfers": [kept, limited, later]})
+            return r1.rpc({"pageKey": "next", "transfers": []})
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code, body, _captured = _run(capsys, r1.expand_argv(
+        tmp_path / "monitor.json", "--yes", "--max-pages", "1", "--payer", r1.PAYER,
+        "--network", "bsc-mainnet", "--seed", r1.SEED,
+    ), backend)
+    assert code == 0, body
+    token = _parts(body["reads"][0])["token-transfers"]
+    assert token["read_status"] == "partial"
+    assert token["reason"] == "page_cap"
+    assert token["timestamp_reason"] == "rate_limited"
+    assert body["contract_check"] == {"status": "gap", "reason": "rate_limited"}
+    assert body["recipient_count"] == 1
+    assert "co_recipients" not in body
+    methods = [r1.rpc_call(call)["method"] for call in backend.calls]
+    assert "eth_getCode" not in methods
+    stamps = [
+        int(r1.rpc_call(call)["params"][0], 16)
+        for call in backend.calls
+        if r1.rpc_call(call)["method"] == "eth_getBlockByNumber"
+    ]
+    assert stamps == [120_000]
+
+
+def test_f2_nodereal_empty_page_then_server_error_is_partial(tmp_path, monkeypatch, capsys) -> None:
+    backend = _nodereal_install(tmp_path, monkeypatch)
+
+    def block(_number, raw):
+        return r1.rpc({"number": raw, "timestamp": hex(INSIDE)})
+
+    def transfers(params):
+        if params["category"][0] != "20":
+            return r1.rpc({"transfers": []})
+        if params.get("pageKey"):
+            return RawResponse(500, {"content-type": "application/json"}, b"")
+        if int(params["fromBlock"], 16) == 150_000:
+            return r1.rpc({"pageKey": "next", "transfers": []})
+        return r1.rpc({"transfers": []})
+
+    backend.add(lambda _call: True, _nr_window(block, transfers))
+    code, body, _captured = _run(capsys, r1.inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--max-pages", "2", "--seed", r1.DISPERSE, "--network", "bsc-mainnet",
+    ), backend)
+    assert code == 0, body
+    token_pages = [
+        r1.rpc_call(call) for call in backend.calls
+        if r1.rpc_call(call)["method"] == "nr_getAssetTransfers"
+        and r1.rpc_call(call)["params"][0]["category"][0] == "20"
+    ]
+    assert len(token_pages) == 2
+    token = _parts(body["reads"][0])["token-transfers"]
+    assert token["read_status"] == "partial"
+    assert token["reason"] == "http_5xx"
+    assert body["reads"][0]["read_status"] == "partial"
+    assert body["reads"][0]["reason"] == "http_5xx"
+    assert body["counterparties"] is None
+
+
+def test_f2_nodereal_next_chunk_timestamp_failure_is_partial(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    backend = _nodereal_install(tmp_path, monkeypatch)
+
+    def block(number, raw):
+        if number == 150_000:
+            return r1.rpc({"number": raw, "timestamp": hex(INSIDE)})
+        return RawResponse(429, {"content-type": "application/json"}, b"")
+
+    def transfers(_params):
+        return r1.rpc({"transfers": []})
+
+    backend.add(lambda _call: True, _nr_window(block, transfers))
+    code, body, _captured = _run(capsys, r1.inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--max-pages", "2", "--seed", r1.DISPERSE, "--network", "bsc-mainnet",
+    ), backend)
+    assert code == 0, body
+    stamps = [
+        int(r1.rpc_call(call)["params"][0], 16)
+        for call in backend.calls
+        if r1.rpc_call(call)["method"] == "eth_getBlockByNumber"
+    ]
+    assert 150_000 in stamps
+    assert 49_999 in stamps
+    token = _parts(body["reads"][0])["token-transfers"]
+    assert token["read_status"] == "partial"
+    assert token["reason"] == "rate_limited"
+    assert body["reads"][0]["read_status"] == "partial"
+    assert body["reads"][0]["reason"] == "rate_limited"
+    assert body["counterparties"] is None
+
+
+def test_f2_club_next_chunk_timestamp_failure_is_partial(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    backend = _club_install(tmp_path, monkeypatch)
+
+    def answer(call):
+        body = r1.rpc_call(call)
+        if body["method"] == "eth_blockNumber":
+            return r1.rpc(hex(2500))
+        if body["method"] == "eth_getLogs":
+            return r1.rpc([])
+        if body["method"] == "eth_getBlockByNumber":
+            number = int(body["params"][0], 16)
+            if number == 1501:
+                return r1.rpc({"number": body["params"][0], "timestamp": hex(INSIDE)})
+            return RawResponse(429, {"content-type": "application/json"}, b"")
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code, body, _captured = _run(capsys, r1.inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--max-pages", "2", "--seed", r1.DISPERSE, "--network", "bsc-mainnet",
+    ), backend)
+    assert code == 0, body
+    stamps = [
+        int(r1.rpc_call(call)["params"][0], 16)
+        for call in backend.calls
+        if r1.rpc_call(call)["method"] == "eth_getBlockByNumber"
+    ]
+    assert 1501 in stamps
+    assert 501 in stamps
+    token = _parts(body["reads"][0])["token-transfers"]
+    assert token["read_status"] == "partial"
+    assert token["reason"] == "rate_limited"
+    assert body["reads"][0]["read_status"] == "gap"
+    assert body["reads"][0]["reason"] == "not_in_keyless_logs"
+    assert body["counterparties"] is None
+
+
 def test_r6_failed_code_is_visible(tmp_path, monkeypatch, capsys) -> None:
     backend = _club_install(tmp_path, monkeypatch)
     monkeypatch.setattr(time, "sleep", lambda _seconds: None)
@@ -1317,7 +1470,9 @@ def test_r10_docs_match_cap_versus_failure() -> None:
     assert "A page cap or a timestamp cap is `partial` even when no row is kept." in page
     assert "A page cap or a timestamp cap on the token part is `partial` even when no row is kept." in page
     assert "A failure of the first request, when no row is kept, is `gap`." in page
+    assert "After one successful request that returned no row, a later failure is `partial`, and the reason is that failure." in page
     assert "When rows are kept, a later failure is `partial`." in page
+    assert "A chunk that returns rows is `gap` when its first block-timestamp lookup fails before any row is kept." in page
 
 
 def test_r11_configured_explorer_without_a_key_stays_keyless(tmp_path, monkeypatch, capsys) -> None:
