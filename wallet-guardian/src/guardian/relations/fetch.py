@@ -31,6 +31,7 @@ _TOKEN_KINDS = frozenset({"token-transfers"})
 _NFT = frozenset({"ERC-721", "ERC-1155", "ERC721", "ERC1155"})
 _CLUB_RANGE = 1000
 _NATIVE_LOG_GAP = "not_in_keyless_logs"
+_TRON_UNREAD_GAP = "not_in_trc20_endpoint"
 # One part shares this many nr_getAssetTransfers pages. It is not per chunk.
 _NODEREAL_ITEM_CAP = 5_000
 # eth_getBlockByNumber calls per part. Cached hits are free. The cache lives for one command.
@@ -174,32 +175,45 @@ def read_tron(
     else:
         window["only_to"] = "true"
     path = f"/v1/accounts/{address}/transactions/trc20"
+    page_lengths: list[int] = []
+
+    def accept_page(batch: list[Any]) -> bool:
+        page_lengths.append(len(batch))
+        return True
+
     try:
-        walk = client.history(path, window, None, page_cap=page_cap)
+        walk = client.history(
+            path, window, None, page_cap=page_cap, accept_page=accept_page,
+        )
     except BudgetExhausted as exc:
-        return _part_outcome("gap", str(getattr(exc, "reason", "") or "") or "budget_exhausted", "trc20")
+        return _tron_outcome("gap", str(getattr(exc, "reason", "") or "") or "budget_exhausted")
     except SecurityError as exc:
         if getattr(exc, "reason", "") != "redirect_host":
             raise
-        return _part_outcome("gap", "redirect_host", "trc20")
+        return _tron_outcome("gap", "redirect_host")
     caught = tap.security_error
     if caught is not None and getattr(caught, "reason", "") != "redirect_host":
         raise caught
     if caught is not None:
-        return _part_outcome("gap", "redirect_host", "trc20")
-    if walk.complete and not walk.error:
+        status, reason = "gap", "redirect_host"
+    elif walk.complete and not walk.error:
         status, reason = "complete", ""
     elif walk.reason in {"page_cap", "request_cap"}:
         status, reason = "partial", walk.reason
     else:
         status, reason = "gap", walk.reason or "read_error"
-    if status == "gap":
-        return _part_outcome(status, reason, "trc20")
     edges: list[Edge] = []
     unreadable = False
     zeros = 0
     contract: bool | None = None
-    for row in walk.rows:
+    # The page that repeated a fingerprint is already in walk.rows. That cursor
+    # is unusable, so those rows are not counted. Earlier pages stay.
+    rows = walk.rows
+    if walk.reason == "repeated_fingerprint" and page_lengths:
+        drop = page_lengths[-1]
+        if drop > 0:
+            rows = rows[:-drop]
+    for row in rows:
         parsed = _tron_edge(row, address, direction, network, source_id, stop_timestamp)
         if parsed == "bad":
             unreadable = True
@@ -214,18 +228,23 @@ def read_tron(
             contract = True
     if unreadable and status == "complete":
         status, reason = "partial", "unreadable_row"
-    return _note_contract(_part_outcome(status, reason, "trc20", edges, contract, zeros), direction)
+    return _note_contract(_tron_outcome(status, reason, edges, contract, zeros), direction)
 
 
-def _part_outcome(status: str, reason: str, part: str, edges: list[Edge] | None = None, contract: bool | None = None, zeros: int = 0) -> Outcome:
-    return Outcome(
-        status,
-        reason,
-        edges or [],
-        contract,
-        [{"part": part, "read_status": status, "reason": reason}],
-        zeros,
-    )
+def _tron_outcome(
+    status: str,
+    reason: str,
+    edges: list[Edge] | None = None,
+    contract: bool | None = None,
+    zeros: int = 0,
+) -> Outcome:
+    """TRC-20 keeps its own status. Native TRX and TRC-10 were not requested."""
+    recorded = [
+        {"part": "trc20", "read_status": status, "reason": reason},
+        {"part": "trx", "read_status": "gap", "reason": _TRON_UNREAD_GAP},
+        {"part": "trc10", "read_status": "gap", "reason": _TRON_UNREAD_GAP},
+    ]
+    return _rolled(recorded, edges or [], zeros, contract)
 
 
 def _gap_history(reason: str, capability: str = "unspecified") -> HistoryRead:
@@ -1095,6 +1114,8 @@ def _tron_edge(row, address, direction, network, source_id, stop_timestamp):
         return "bad"
     symbol = token.get("symbol") if isinstance(token.get("symbol"), str) and token.get("symbol") else None
     raw = _amount(row.get("value"))
+    if raw is None:
+        return "bad"
     if raw == 0:
         return "zero"
     return Edge(
@@ -1114,12 +1135,16 @@ def _blockscout_asset(kind, item, family, native_symbol, native_decimals):
             return "bad"
         total = item.get("total") if isinstance(item.get("total"), Mapping) else {}
         raw = _amount(total.get("value") if "value" in total else item.get("value"))
+        if raw is None:
+            return "bad"
         decimals = _decimals(token.get("decimals"))
         if decimals is None:
             decimals = _decimals(total.get("decimals"))
         symbol = token.get("symbol") if isinstance(token.get("symbol"), str) and token.get("symbol") else None
         return "token", contract, symbol, decimals, raw
     raw = _amount(item.get("value"))
+    if raw is None:
+        return "bad"
     return "native", None, native_symbol, native_decimals, raw
 
 
