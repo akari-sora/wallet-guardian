@@ -1,6 +1,6 @@
 # Relations status (2026-10-16)
 
-Handoff for the address-relations goal: `guardian relations inbound` and `guardian relations expand`. `main` at the time of writing is `94d851c2e6f4a70fae59eac4f88a3d78c415d957` (`Merge branch 'fix/relations-disclose-before-send' into 'main'`). SHAs in the package table are merge commits on `main`.
+Handoff for the address-relations goal: `guardian relations inbound` and `guardian relations expand`. `main` when D-relations was applied is `e9a3c5d11c591773683eff28684e011724ee762c` (`Merge branch 'docs/relations-status' into 'main'`). SHAs in the package table are the earlier merge commits on `main`.
 
 This file records what landed, what was checked, and what was not. It does not say that relations covers every chain, that its evidence names who controls an address, or that any of it is live-qualified. Semantics and limits are in [docs/relations.md](../relations.md).
 
@@ -54,11 +54,11 @@ Full `uv run pytest -q` on macOS, compared with a baseline taken at the start of
 
 Implementation ran in Cursor on a Windows host, with tests in WSL (Ubuntu 24.04 and uv 0.7.21, per the !93 description). Cursor's own WSL reports, as recorded in each MR description: R-1 4 failed, 866 passed, 4 errors (!93); R-2 4 failed, 922 passed, 4 errors (!94); R-3 4 failed, 928 passed, 4 errors (!95); R-4 failures within the allowed set, with no count recorded (!96). Each description calls those failures allowed environmental failures; !93 and !94 name them as the uv `--clear` install tests and two tests that need a `.git` directory the copied packet did not have. These are the implementer's own reports and were not independently verified; the macOS runs above are the gate.
 
-End-to-end fixture tests cover the four usage cases: inbound across EVM networks and TRON, expand for a chosen payer with a transaction hash on every row, evidence ranking with confidence and reasons, and the same EVM address merged across chains. Negative tests cover zero requests without `--yes` and with `--dry-run`, isolation from `run-once`, `watchdog`, `balance-probe`, the scheduler and `install-service` (a static scan of all of `src/guardian` allows the `guardian.relations` import only in `cli.py`; the repository has no MCP module and no Grok Bot code that could call relations), `partial` on a page cap, a gap rather than an empty list on a failed read, hub rows hidden by default, BSC as `credential_missing`, Solana and Bitcoin as `unsupported`, forbidden wording in stdout, the JSON result and the Markdown report, and 0600 result files.
+End-to-end fixture tests cover the four usage cases: inbound across EVM networks and TRON, expand for a chosen payer with a transaction hash on every row, evidence ranking with confidence and reasons, and the same EVM address merged across chains. Negative tests cover zero requests without `--yes` and with `--dry-run`, isolation from `run-once`, `watchdog`, `balance-probe`, the scheduler and `install-service` (a static scan of all of `src/guardian` allows the `guardian.relations` import only in `cli.py`; the repository has no MCP module and no Grok Bot code that could call relations), `partial` on a page cap, a gap rather than an empty list on a failed read, hub rows hidden by default, Solana and Bitcoin as `unsupported`, forbidden wording in stdout, the JSON result and the Markdown report, and 0600 result files. R-1 had covered BSC as `credential_missing`. D-relations replaces that gate. Fixture tests read 48club with the public Disperse address `0xD152f549545093347A162Dce210e7293f1452150` and do not put a monitored address on those requests. Optimism fixtures assert `explorer.optimism.io`. Arbitrum, Polygon, and Base stay unqueried when the only routed history source is Etherscan.
 
 ## Live probes
 
-Run on 2026-10-15 against public addresses only: the Disperse contract `0xD152f549545093347A162Dce210e7293f1452150`, the USDT-TRC20 contract `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t` and the address publicly labelled Tether Treasury, `TKHuVq1oKVruCGLvqVexFs6dawKv6fQgFs`. Results are not stored as fixtures. The probe table and the R-1 smoke rows are also in the [!93](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/93) description; the R-2 smoke rows are in the [!94](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/94) description.
+Run on 2026-10-15 against public addresses only: the Disperse contract `0xD152f549545093347A162Dce210e7293f1452150`, the USDT-TRC20 contract `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t` and the address publicly labelled Tether Treasury, `TKHuVq1oKVruCGLvqVexFs6dawKv6fQgFs`. Results are not stored as fixtures. The probe table and the R-1 smoke rows are also in the [!93](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/93) description; the R-2 smoke rows are in the [!94](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/94) description. The Optimism row is that day's probe of `optimism.blockscout.com`. Relations now requests `explorer.optimism.io` instead and does not follow the redirect. D-relations did not repeat the live probe. The 48club and Optimism checks in this change are fixture tests, not a new live call.
 
 | Source | Result | Paging | Rate information |
 | --- | --- | --- | --- |
@@ -89,12 +89,12 @@ Command smoke runs on the same day. R-1 rows ran on `3173108`; R-2 rows ran on `
 
 The goal's hard limit says the disclosure plan is printed before any network request. R-1 through R-3 printed the plan and sent nothing without `--yes` or with `--dry-run`, but a run with `--yes` printed the plan only inside the final result. The first review of this file found that gap. The operator chose to fix it without changing the goal, and R-4 ([!96](https://gitlab.com/aa22396584/wallet-guardian/-/merge_requests/96), merge `94d851c2e6f4a70fae59eac4f88a3d78c415d957`) writes the plan to stderr before the first request. `tests/unit/test_relations_r4.py` records stderr at the first request and checks that the line was written and flushed, that it equals the dry-run plan with the same redaction, and that no line is written on a `ConfigError`, without `--yes` or with `--dry-run`.
 
-## Blocked on operator decisions
+## Decided
 
-- BSC source: a NodeReal key or 48club. Until then BSC reads are `credential_missing` with no request.
-- Optimism: whether to route `explorer.optimism.io`, a host relations has not used, as a source. The configured `optimism.blockscout.com` endpoint redirects there and is a `redirect_host` gap.
-- Base, Arbitrum and Polygon: the public Blockscout hosts return a Cloudflare challenge. Whether to register an Etherscan key (Arbitrum and Polygon only) is the operator's call; there is no keyless alternative for Base.
-- Etherscan fallback: deferred until a key is registered and the path is checked live.
+- **D-relations BSC = 48club.** Decided. Keyless relations reads use `https://rpc-bsc.48.club`, or the host in `RPC_BSC_LOGS_URL` when that variable is set. NodeReal remains the path when `NODEREAL_API_KEY` and `NODEREAL_BSC_URL` are both set. Native and internal BNB are not in the keyless logs (`not_in_keyless_logs`). 48club has no published quota and no SLA, and the operator is an MEV builder. A failed or cut read is `gap` or `partial`. It is not an empty list and it is not `complete`. The monitor profile still has no default 48club URL, so `run-once` does not start sending watched addresses there.
+- **D-relations OP = `explorer.optimism.io`.** Decided. That host is the keyless Optimism source. `optimism.blockscout.com` is not requested. A different configured host is left as configured. A redirect to yet another host is still `redirect_host`.
+- **Base, Arbitrum, and Polygon stay gaps.** Decided. An Etherscan key is optional and is not registered. Relations does not call Etherscan. Public Blockscout on those networks still records `bot_challenge` when that host returns the Cloudflare page. No keyless alternative was added for Base.
+- Etherscan fallback stays deferred until a key is registered and the path is checked live. That path was not added.
 
 ## Not verified
 
@@ -117,4 +117,4 @@ Cross-chain bridge pairing, exchange deposit-address clustering, Bitcoin common-
 - R-2: `src/guardian/relations/markdown.py` reads `payload.get("seeds")` twice; the !94 description records this as a mypy `union-attr` minor.
 - R-2: `assert attack not in stored_blank` in `tests/unit/test_relations_r2.py` cannot fail because the JSON text escapes the quote; the effective check is the wording scan.
 - R-3: `docs/relations.md` says an error exit writes neither file. An I/O error while writing results can leave the Markdown file or a partial JSON file.
-- R-3: the BSC and Etherscan paragraphs in `docs/relations.md` open with conditions that read as if the source would start once they are met; the code has no such path, which the third sentence of each paragraph states.
+- R-3: the Etherscan paragraph in `docs/relations.md` used to read as if a registered key would start the fallback. Relations still does not call Etherscan. The BSC paragraph now matches the 48club and NodeReal paths.

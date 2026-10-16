@@ -52,6 +52,8 @@ def iso(stamp: int) -> str:
 
 SEED = evm(1)
 OTHER = evm(2)
+DISPERSE = parse_address("evm", "0xD152f549545093347A162Dce210e7293f1452150").canonical
+MONITORED = evm(0xC0FFEE)
 LEFT = evm(3)
 RIGHT = evm(4)
 PAYER = evm(5)
@@ -86,6 +88,8 @@ class PathBackend:
                 if not response:
                     raise FixtureMiss()
                 chosen = response.pop(0)
+            if callable(chosen):
+                chosen = chosen(call)
             if isinstance(chosen, (SecurityError, BudgetExhausted)):
                 raise chosen
             if isinstance(chosen, FixtureFailure):
@@ -94,6 +98,27 @@ class PathBackend:
                 raise FixtureMiss()
             return chosen
         raise FixtureMiss()
+
+
+def allow_fixture_hosts(monkeypatch: pytest.MonkeyPatch, *hosts: str) -> None:
+    """Answer DNS for the relations hosts under test. Other names still fail closed."""
+    allowed = {host.lower().rstrip(".") for host in hosts}
+
+    def resolve(self, host: str) -> list[str]:
+        name = host.lower().rstrip(".")
+        if name in allowed or name.endswith(".invalid"):
+            return ["1.1.1.1"]
+        raise OSError("dns_failed")
+
+    monkeypatch.setattr("guardian.sources.resolver.HostnameResolver.resolve", resolve)
+
+
+def rpc(result: object, status: int = 200) -> RawResponse:
+    return raw({"id": 1, "jsonrpc": "2.0", "result": result})
+
+
+def rpc_call(call) -> dict:
+    return json.loads(call.body.decode())
 
 
 def raw(payload: dict, status: int = 200) -> RawResponse:
@@ -676,24 +701,335 @@ def test_recipient_count_at_threshold_is_not_a_hub(tmp_path: Path, monkeypatch: 
     assert len(body["co_recipients"]) == 200
 
 
-def test_bsc_is_gated_with_zero_requests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    sources = {"nodereal-bsc": _source("nodereal_transfers", "NODEREAL_BSC_URL", "nodereal-bsc")}
+def test_bsc_without_a_key_plans_48club_and_sends_nothing_before_yes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources = {"nodereal-bsc": _source("nodereal_transfers", "NODEREAL_BSC_URL", "nodereal-bsc", "NODEREAL_API_KEY")}
     routes = [{"network": "bsc-mainnet", "capability": "history.native_external", "source_ids": ["nodereal-bsc"]}]
     backend = install(
         tmp_path, monkeypatch, networks=["bsc-mainnet"], sources=sources, routes=routes,
         secrets={"NODEREAL_BSC_URL": "https://bsc.example.invalid"},
-        address=SEED, family="evm", account_networks=["bsc-mainnet"],
+        address=MONITORED, family="evm", account_networks=["bsc-mainnet"],
     )
     code, body = invoke(capsys, inbound_argv(
-        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "bsc-mainnet",
+        tmp_path / "monitor.json", "--seed", DISPERSE, "--network", "bsc-mainnet",
     ), backend)
-    assert code == 0
+    assert code == 2
     assert backend.calls == []
+    assert body["status"] == "consent_required"
+    assert body["reads"] == []
+    query = body["plan"]["queries"][0]
+    assert query["host"] == "rpc-bsc.48.club"
+    assert query["source_id"] == "bsc-logs-48club"
+    assert query["addresses"] == [DISPERSE]
+    rendered = json.dumps(body).lower()
+    assert MONITORED.lower() not in rendered
+
+
+def _bsc_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sources: dict, secrets: dict, routes: list[dict] | None = None) -> PathBackend:
+    chosen = routes or [
+        {"network": "bsc-mainnet", "capability": "history.native_external", "source_ids": ["nodereal-bsc"]},
+    ]
+    return install(
+        tmp_path, monkeypatch, networks=["bsc-mainnet"], sources=sources, routes=chosen, secrets=secrets,
+        address=MONITORED, family="evm", account_networks=["bsc-mainnet"],
+    )
+
+
+def _assert_public_only(calls, stdout: str, stderr: str) -> None:
+    assert MONITORED.lower() not in stdout.lower()
+    assert MONITORED.lower() not in stderr.lower()
+    for call in calls:
+        blob = (call.url + call.body.decode()).lower()
+        assert MONITORED.lower() not in blob
+        assert "rpc-bsc.48.club" == urlsplit(call.url).hostname or urlsplit(call.url).hostname.endswith(".invalid")
+
+
+def test_bsc_48club_empty_window_is_a_gap_and_not_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources = {"nodereal-bsc": _source("nodereal_transfers", "NODEREAL_BSC_URL", "nodereal-bsc")}
+    backend = _bsc_install(tmp_path, monkeypatch, sources, {"NODEREAL_BSC_URL": "https://bsc.example.invalid"})
+    allow_fixture_hosts(monkeypatch, "rpc-bsc.48.club")
+
+    def answer(call):
+        method = rpc_call(call)["method"]
+        if method == "eth_blockNumber":
+            return rpc(hex(999))
+        if method == "eth_getLogs":
+            params = rpc_call(call)["params"][0]
+            assert DISPERSE[2:].lower() in json.dumps(params).lower()
+            return rpc([])
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code = main(inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", DISPERSE, "--network", "bsc-mainnet",
+    ), backend=backend, clock=lambda: CLOCK)
+    captured = capsys.readouterr()
+    body = json.loads(captured.out)
+    assert code == 0, body
+    _assert_public_only(backend.calls, captured.out, captured.err)
     assert body["status"] == "partial"
     assert body["counterparties"] is None
+    assert body["counterparties"] != []
+    row = body["reads"][0]
+    assert row["read_status"] == "gap"
+    assert row["reason"] == "not_in_keyless_logs"
+    parts = {part["part"]: part for part in row["parts"]}
+    assert parts["token-transfers"]["read_status"] == "complete"
+    assert parts["transactions"]["reason"] == "not_in_keyless_logs"
+    assert parts["internal-transactions"]["reason"] == "not_in_keyless_logs"
+    assert any(rpc_call(call)["method"] == "eth_getLogs" for call in backend.calls)
+
+
+def test_bsc_48club_rate_limit_is_a_gap_and_not_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources = {"nodereal-bsc": _source("nodereal_transfers", "NODEREAL_BSC_URL", "nodereal-bsc")}
+    backend = _bsc_install(tmp_path, monkeypatch, sources, {"NODEREAL_BSC_URL": "https://bsc.example.invalid"})
+    allow_fixture_hosts(monkeypatch, "rpc-bsc.48.club")
+
+    def answer(call):
+        method = rpc_call(call)["method"]
+        if method == "eth_blockNumber":
+            return rpc(hex(999))
+        if method == "eth_getLogs":
+            return RawResponse(429, {"content-type": "application/json"}, b"")
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code = main(inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", DISPERSE, "--network", "bsc-mainnet",
+    ), backend=backend, clock=lambda: CLOCK)
+    captured = capsys.readouterr()
+    body = json.loads(captured.out)
+    assert code == 0, body
+    _assert_public_only(backend.calls, captured.out, captured.err)
+    assert body["status"] == "partial"
+    assert body["status"] != "complete"
+    assert body["counterparties"] is None
     assert body["reads"][0]["read_status"] == "gap"
-    assert body["reads"][0]["gap"] == "credential_missing"
-    assert body["reads"][0]["reason"] == "bsc_source_gated"
+    assert body["reads"][0]["reason"] == "rate_limited"
+    assert body["reads"][0]["parts"][0]["reason"] == "rate_limited"
+
+
+def test_bsc_48club_keeps_rows_when_a_later_chunk_is_limited(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources = {
+        "bsc-logs-48club": {
+            "adapter": "evm_rpc",
+            "budget_group": "bsc-logs-48club",
+            "enabled": True,
+            "endpoint_env": "RPC_BSC_LOGS_URL",
+            "range_limit": 1000,
+        },
+    }
+    routes = [{"network": "bsc-mainnet", "capability": "history.token", "source_ids": ["bsc-logs-48club"]}]
+    backend = _bsc_install(tmp_path, monkeypatch, sources, {}, routes)
+    allow_fixture_hosts(monkeypatch, "rpc-bsc.48.club")
+    log = {
+        "address": TOKEN,
+        "blockNumber": hex(2000),
+        "data": "0x" + f"{4:064x}",
+        "logIndex": "0x0",
+        "topics": [
+            "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+            "0x" + OTHER[2:].rjust(64, "0"),
+            "0x" + DISPERSE[2:].rjust(64, "0"),
+        ],
+        "transactionHash": tx(9),
+    }
+
+    def answer(call):
+        body = rpc_call(call)
+        method = body["method"]
+        if method == "eth_blockNumber":
+            return rpc(hex(2500))
+        if method == "eth_getBlockByNumber":
+            return rpc({"number": body["params"][0], "timestamp": hex(STAMP)})
+        if method == "eth_getLogs":
+            start = int(body["params"][0]["fromBlock"], 16)
+            if start >= 1501:
+                return rpc([log])
+            return RawResponse(429, {}, b"")
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code = main(inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--max-pages", "2", "--seed", DISPERSE, "--network", "bsc-mainnet",
+    ), backend=backend, clock=lambda: CLOCK)
+    captured = capsys.readouterr()
+    body = json.loads(captured.out)
+    assert code == 0, body
+    _assert_public_only(backend.calls, captured.out, captured.err)
+    assert body["status"] == "partial"
+    assert body["counterparties"] is not None
+    assert body["counterparties"] != []
+    assert body["counterparties"][0]["address"] == OTHER
+    row = body["reads"][0]
+    assert row["read_status"] == "gap"
+    assert row["reason"] == "not_in_keyless_logs"
+    token = row["parts"][0]
+    assert token["part"] == "token-transfers"
+    assert token["read_status"] == "partial"
+    assert token["reason"] == "rate_limited"
+
+
+def test_bsc_configured_48club_host_is_used(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources = {
+        "bsc-logs-48club": _source("evm_rpc", "RPC_BSC_LOGS_URL", "bsc-logs-48club"),
+    }
+    routes = [{"network": "bsc-mainnet", "capability": "history.token", "source_ids": ["bsc-logs-48club"]}]
+    backend = _bsc_install(
+        tmp_path, monkeypatch, sources,
+        {"RPC_BSC_LOGS_URL": "https://club.example.invalid"},
+        routes,
+    )
+
+    def answer(call):
+        assert urlsplit(call.url).hostname == "club.example.invalid"
+        method = rpc_call(call)["method"]
+        if method == "eth_blockNumber":
+            return rpc(hex(10))
+        if method == "eth_getLogs":
+            return rpc([])
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code = main(inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", DISPERSE, "--network", "bsc-mainnet",
+    ), backend=backend, clock=lambda: CLOCK)
+    captured = capsys.readouterr()
+    body = json.loads(captured.out)
+    assert code == 0, body
+    assert body["plan"]["queries"][0]["host"] == "club.example.invalid"
+    assert all(urlsplit(call.url).hostname == "club.example.invalid" for call in backend.calls)
+    assert MONITORED.lower() not in captured.err.lower()
+    for call in backend.calls:
+        assert MONITORED.lower() not in (call.url + call.body.decode()).lower()
+
+
+def test_bsc_nodereal_is_used_when_the_key_and_url_are_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    key = "synthetic-nodereal-key-r1"
+    sources = {
+        "nodereal-bsc": _source("nodereal_transfers", "NODEREAL_BSC_URL", "nodereal-bsc", "NODEREAL_API_KEY"),
+        "bsc-logs-48club": _source("evm_rpc", "RPC_BSC_LOGS_URL", "bsc-logs-48club"),
+    }
+    routes = [
+        {"network": "bsc-mainnet", "capability": "history.native_external", "source_ids": ["nodereal-bsc"]},
+        {"network": "bsc-mainnet", "capability": "history.token", "source_ids": ["bsc-logs-48club"]},
+    ]
+    backend = _bsc_install(
+        tmp_path, monkeypatch, sources,
+        {
+            "NODEREAL_API_KEY": key,
+            "NODEREAL_BSC_URL": "https://nodereal.example.invalid",
+            "RPC_BSC_LOGS_URL": "https://club.example.invalid",
+        },
+        routes,
+    )
+
+    def answer(call):
+        assert urlsplit(call.url).hostname == "nodereal.example.invalid"
+        body = rpc_call(call)
+        if body["method"] == "eth_blockNumber":
+            return rpc(hex(1000))
+        if body["method"] == "nr_getAssetTransfers":
+            return rpc({"transfers": []})
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code = main(inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", DISPERSE, "--network", "bsc-mainnet",
+    ), backend=backend, clock=lambda: CLOCK)
+    captured = capsys.readouterr()
+    body = json.loads(captured.out)
+    assert code == 0, body
+    assert body["status"] == "complete"
+    assert body["counterparties"] == []
+    assert body["reads"][0]["read_status"] == "complete"
+    assert body["plan"]["queries"][0]["host"] == "nodereal.example.invalid"
+    assert key not in captured.out
+    assert key not in captured.err
+    assert MONITORED.lower() not in captured.out.lower()
+    for call in backend.calls:
+        blob = call.url + call.body.decode()
+        assert "48.club" not in blob
+        assert "club.example.invalid" not in blob
+        assert MONITORED.lower() not in blob.lower()
+        assert DISPERSE[2:].lower() in blob.lower() or rpc_call(call)["method"] == "eth_blockNumber"
+
+
+def test_optimism_redirect_host_is_read_at_explorer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources, routes, _secrets = blockscout_profile(
+        "optimism-mainnet", "blockscout-optimism-public", "BLOCKSCOUT_OPTIMISM_PUBLIC_URL",
+        "https://optimism.blockscout.com",
+    )
+    backend = install(
+        tmp_path, monkeypatch, networks=["optimism-mainnet"], sources=sources, routes=routes,
+        secrets={"BLOCKSCOUT_OPTIMISM_PUBLIC_URL": "https://optimism.blockscout.com"},
+        address=MONITORED, family="evm", account_networks=["optimism-mainnet"],
+    )
+    allow_fixture_hosts(monkeypatch, "explorer.optimism.io")
+    fill_tails(backend, [token_item(OTHER, DISPERSE, 4, STAMP, tx(1))], [])
+    code = main(inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", DISPERSE, "--network", "optimism-mainnet",
+    ), backend=backend, clock=lambda: CLOCK)
+    captured = capsys.readouterr()
+    body = json.loads(captured.out)
+    assert code == 0, body
+    assert body["status"] == "complete"
+    assert body["plan"]["queries"][0]["host"] == "explorer.optimism.io"
+    assert body["counterparties"][0]["address"] == OTHER
+    assert backend.calls
+    assert all(urlsplit(call.url).hostname == "explorer.optimism.io" for call in backend.calls)
+    assert all("optimism.blockscout.com" not in call.url for call in backend.calls)
+    assert MONITORED.lower() not in captured.out.lower()
+    assert MONITORED.lower() not in captured.err.lower()
+    for call in backend.calls:
+        assert MONITORED.lower() not in (call.url + call.body.decode()).lower()
+        assert not getattr(call, "credential_headers", ())
+
+
+def test_optimism_empty_public_endpoint_uses_explorer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources = {"blockscout-optimism-public": _source("blockscout", "BLOCKSCOUT_OPTIMISM_PUBLIC_URL", "blockscout-optimism-public")}
+    routes = history_routes("optimism-mainnet", ["blockscout-optimism-public"])
+    backend = install(
+        tmp_path, monkeypatch, networks=["optimism-mainnet"], sources=sources, routes=routes, secrets={},
+        address=MONITORED, family="evm", account_networks=["optimism-mainnet"],
+    )
+    allow_fixture_hosts(monkeypatch, "explorer.optimism.io")
+    fill_tails(backend, [], [])
+    code = main(inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", DISPERSE, "--network", "optimism-mainnet",
+    ), backend=backend, clock=lambda: CLOCK)
+    captured = capsys.readouterr()
+    body = json.loads(captured.out)
+    assert code == 0, body
+    assert body["plan"]["queries"][0]["host"] == "explorer.optimism.io"
+    assert body["reads"][0]["read_status"] == "complete"
+    assert body["counterparties"] == []
+    assert all(urlsplit(call.url).hostname == "explorer.optimism.io" for call in backend.calls)
+    assert MONITORED.lower() not in captured.err.lower()
+
+
+def test_optimism_keyed_host_is_not_rewritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sources = {
+        "blockscout-pro": _source("blockscout", "BLOCKSCOUT_PRO_API_BASE", "blockscout-pro", "BLOCKSCOUT_API_KEY"),
+        "blockscout-optimism-public": _source("blockscout", "BLOCKSCOUT_OPTIMISM_PUBLIC_URL", "blockscout-optimism-public"),
+    }
+    routes = history_routes("optimism-mainnet", ["blockscout-pro", "blockscout-optimism-public"])
+    backend = install(
+        tmp_path, monkeypatch, networks=["optimism-mainnet"], sources=sources, routes=routes,
+        secrets={
+            "BLOCKSCOUT_API_KEY": "synthetic-optimism-pro-key-r1",
+            "BLOCKSCOUT_PRO_API_BASE": "https://pro.blockscout.example.invalid",
+            "BLOCKSCOUT_OPTIMISM_PUBLIC_URL": "https://optimism.blockscout.com",
+        },
+        address=SEED, family="evm", account_networks=["optimism-mainnet"],
+    )
+    fill_tails(backend, [], [])
+    code, body = invoke(capsys, inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", SEED, "--network", "optimism-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert body["plan"]["queries"][0]["host"] == "pro.blockscout.example.invalid"
+    assert body["reads"][0]["read_status"] == "complete"
+    assert all(urlsplit(call.url).hostname == "pro.blockscout.example.invalid" for call in backend.calls)
 
 
 def test_etherscan_only_route_is_deferred_without_a_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1316,7 +1652,7 @@ def test_hub_count_uses_the_full_recipient_total(tmp_path: Path, monkeypatch: py
     assert body["noise"] == "high"
 
 
-def test_local_label_marks_a_hub_without_a_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_local_label_marks_a_hub_when_the_bsc_read_is_a_gap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     sources = {"nodereal-bsc": _source("nodereal_transfers", "NODEREAL_BSC_URL", "nodereal-bsc")}
     routes = [{"network": "bsc-mainnet", "capability": "history.native_external", "source_ids": ["nodereal-bsc"]}]
     backend = install(
@@ -1324,14 +1660,23 @@ def test_local_label_marks_a_hub_without_a_request(tmp_path: Path, monkeypatch: 
         secrets={"NODEREAL_BSC_URL": "https://bsc.example.invalid"},
         address=SEED, family="evm", account_networks=["bsc-mainnet"],
     )
-    code, body = invoke(capsys, expand_argv(
+    allow_fixture_hosts(monkeypatch, "rpc-bsc.48.club")
+    code = main(expand_argv(
         tmp_path / "monitor.json", "--yes", "--payer", LISTA, "--network", "bsc-mainnet", "--seed", SEED,
-    ), backend)
+    ), backend=backend, clock=lambda: CLOCK)
+    captured = capsys.readouterr()
+    body = json.loads(captured.out)
     assert code == 0, body
-    assert backend.calls == []
     assert body["hub"] is True
     assert "label" in body["hub_reasons"]
     assert "co_recipients" not in body
+    assert body["status"] != "complete"
+    assert body["reads"][0]["read_status"] == "gap"
+    assert SEED.lower() not in captured.err.lower()
+    for call in backend.calls:
+        blob = (call.url + call.body.decode()).lower()
+        assert SEED.lower() not in blob
+        assert urlsplit(call.url).hostname == "rpc-bsc.48.club"
 
 
 def test_label_hit_on_ethereum_is_a_hub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

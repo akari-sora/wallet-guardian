@@ -57,17 +57,17 @@ When `--network` is set on inbound, a seed is read only on named networks of its
 
 `--network` on expand is required. Repeat it to add another network in the payer's family. A different family is `network_family` and sends nothing. The same enabled-network rule applies, including the Solana and Bitcoin exception.
 
-`--since-days` sets the oldest timestamp kept: `max(0, now - since_days * 86400)`, in whole seconds. An older row is not an edge. Stopping the page walk at a row outside the window applies to Blockscout, and that walk ends as a finished window, not as a gap. TRON sends the time window for the server to filter. Locally, an older row is dropped and that page walk does not stop there.
+`--since-days` sets the oldest timestamp kept: `max(0, now - since_days * 86400)`, in whole seconds. An older row is not an edge. Stopping the page walk at a row outside the window applies to Blockscout, and that walk ends as a finished window, not as a gap. TRON sends the time window for the server to filter. Locally, an older row is dropped and that page walk does not stop there. BSC uses block timestamps. A chunk that has not reached that cutoff is not a finished window.
 
 `--max-nodes` is checked twice. Before any request, the number of distinct `(network, address)` pairs that would actually be queried must be at most the cap. Skip-only jobs do not count. Above the cap, the command exits 2 with `max_nodes` and sends nothing. After a read, `counterparties` or `co_recipients` are cut to that many rows, in the order already sorted. `truncated` is `{"reason": "node_cap", "total": <full row count>}`. If the command status would have been `complete`, it becomes `partial`. The source `read_status` can stay `complete`. `recipient_count` still uses the full recipient set.
 
-`--max-pages` is the page cap passed to each Blockscout tail and to the TRON walk.
+`--max-pages` is the page cap passed to each Blockscout tail and to the TRON walk. On BSC it is the maximum number of block chunks read for each part.
 
 Address text is classified, then parsed. A `0x` string of length 42 is EVM. A `T` string of length 34 is tried as TRON and, if that parse fails, as Solana. A `bc1`, `tb1`, or `bcrt1` prefix is Bitcoin. A leading `1` or `3` is tried as Bitcoin and, if that parse fails, as Solana. Anything else is tried as Solana. An unparsable address exits 2 and sends nothing. Solana and Bitcoin are parsed and then returned as `unsupported`. They are not queried.
 
 ## Sources by network
 
-No new source is registered. Blockscout is used only when the profile already routes it. The route scan walks `history.native_external`, `history.native_internal`, `history.fungible`, then `history.token`, and keeps the first usable source.
+Relations does not edit the saved profile and does not add a source to `run-once`. Blockscout is used only when the profile already routes it. The route scan walks `history.native_external`, `history.native_internal`, `history.fungible`, then `history.token`, and keeps the first usable source.
 
 | Networks | What is read | Status when not read | Requests |
 | --- | --- | --- | --- |
@@ -75,12 +75,18 @@ No new source is registered. Blockscout is used only when the profile already ro
 | Those five, when no Blockscout source is usable and at least one enabled routed Blockscout source is missing its credential | | `read_status` `gap`, reason `credential_missing`, `gap` `credential_missing` | None. This is chosen before the Etherscan row. |
 | Those five, when no Blockscout source is usable and an enabled routed `etherscan_v2` source exists | | `read_status` `gap`, reason `source_gated`, `gap` `etherscan_deferred` | None. A key in the environment does not start an Etherscan call. |
 | Those five, when nothing above matches | | `read_status` `gap`, reason `endpoint_missing` | None. |
-| `bsc-mainnet` | Not read. The configured sources are ignored. | `read_status` `gap`, reason `bsc_source_gated`, `gap` `credential_missing` | None. |
+| `bsc-mainnet` | NodeReal `nr_getAssetTransfers` when an enabled routed `nodereal_transfers` source has both a credential and a host. Otherwise keyless ERC-20 `eth_getLogs` on `bsc-logs-48club`. | A missing NodeReal key does not skip the network. See below. | That one host. |
 | `tron-mainnet` | Enabled `tron_grid` source with a host. A source whose `endpoint_env` is `TRONGRID_API_URL` is preferred. One part: `trc20`, from `/v1/accounts/{address}/transactions/trc20`. | No host: `gap`, reason `endpoint_missing` | That host only. No native TRX request. |
 | Solana, Bitcoin, Sui, Aptos, TON, Cosmos | Address parse only. Homes: `solana-mainnet`, `bitcoin-mainnet`, `sui-mainnet`, `aptos-mainnet`, `ton-mainnet`, `cosmos-hub`. | `read_status` `unsupported`, reason `unsupported` | None. |
 | Any other network, including any other EVM network | Not read. | `read_status` `unsupported`, reason `unsupported` | None. |
 
 A Blockscout credential is taken from the secret profile first, then from the process environment. The Blockscout client sends it as a bearer header on that source, not in the query string. Inbound's first request uses `filter=to`. Expand's first request uses `filter=from`. Later Blockscout pages follow `next_page_params`. Rows are still dropped unless the queried address is the `to` side (inbound) or the `from` side (expand).
+
+On `optimism-mainnet`, a keyless Blockscout source whose endpoint is empty, and any routed Blockscout source whose host is `optimism.blockscout.com`, is read at `https://explorer.optimism.io` with no credential. A routed Blockscout host that is already a different host, including a PRO host whose key is present, is left as configured. The saved profile is not rewritten. `run-once` still uses the endpoint the profile resolved.
+
+On `bsc-mainnet`, NodeReal is selected only when the credential and the URL are both present. The read has three parts, in order `token-transfers` (category `20`), `transactions` (`external`), and `internal-transactions` (`internal`). Each part walks at most `--max-pages` chunks of 100000 blocks back from the chain head. That part is `complete` only when a chunk reaches block 0 or a timestamp at or before the `--since-days` cutoff. Otherwise it is `partial`, with reason `page_cap` or `window_unchecked`. The first failed chunk is `gap`. A later failure keeps the earlier rows and is `partial`.
+
+Without that NodeReal key, relations reads ERC-20 `Transfer` logs from `bsc-logs-48club`. A set `RPC_BSC_LOGS_URL` is the host that receives the address. When that variable is empty, or the profile has no enabled source for it, this command uses `https://rpc-bsc.48.club`. That URL is not written into the profile. `run-once` still skips `bsc-logs-48club` until `RPC_BSC_LOGS_URL` is set, so a monitor round does not start sending watched addresses there. Chunks are at most 1000 blocks, or the source `range_limit` when that value is from 1 to 1000. The same `--max-pages` cap applies. `transactions` and `internal-transactions` are `gap` with reason `not_in_keyless_logs`, because these logs do not contain native or internal BNB. The read is `gap` even when the token part is `complete`, and the command is not `complete`. `counterparties` and `co_recipients` are not `[]` for that read. 48club publishes no quota and no SLA. The operator is an MEV builder. The first failed chunk, including `rate_limited`, is `gap` when no earlier chunk succeeded. A later failure is `partial` on the token part and the rows already read are kept. A cut or failed read is not an empty list and is not `complete`.
 
 TRON sends `only_to` or `only_from` for the same direction. The window is the same `--since-days` cutoff, in milliseconds. A TRON row whose type is set and is not `transfer` is dropped. A fungible row needs a token contract. There is no native TRX part.
 
@@ -92,7 +98,7 @@ Each Blockscout tail also stops after 5000 kept items (`item_cap`). That part is
 
 Each read has `read_status`, `reason`, `parts`, `ignored_zero_value`, and `gap` when the choice set one. A skip has an empty `parts` list and a null `source_id`.
 
-`parts` is the per-call record. Blockscout writes three objects, in tail order `token-transfers`, `transactions`, `internal-transactions`. TRON writes one object, `trc20`. Each object has `part`, `read_status`, and `reason`.
+`parts` is the per-call record. Blockscout writes three objects, in tail order `token-transfers`, `transactions`, `internal-transactions`. BSC writes the same three part names. TRON writes one object, `trc20`. Each object has `part`, `read_status`, and `reason`.
 
 A Blockscout part is `complete` when the client category is `ok` or `empty`, pagination is complete, and the read is not blocked. Category `partial` stays `partial` (reasons include `page_cap` and `item_cap`). Anything else is `gap`, and the reason is kept (`bot_challenge`, `redirect_host`, `connection_error`, `daily_cap`, and the rest). A part that would be `complete` but contains a row that cannot be parsed becomes `partial` with reason `unreadable_row`.
 
@@ -187,10 +193,10 @@ A null `counterparties`, `co_recipients`, `merged_addresses`, or `seed_receipts`
 
 ## Limits
 
-- Which source reads BSC is the user's choice (a NodeReal key or 48club). Until that choice is made, `bsc-mainnet` is a `credential_missing` gap, reason `bsc_source_gated`, and it sends nothing. Relations ignores configured sources for that network.
+- BSC keyless relations reads use 48club (`https://rpc-bsc.48.club`, or the host in `RPC_BSC_LOGS_URL`). NodeReal is used when its key and URL are both set. Keyless logs do not include native or internal BNB, so those parts are `not_in_keyless_logs` and the read is `gap`. There is no published quota. A rate limit or a failed chunk is `gap` or `partial`, never an empty list and never `complete`. `run-once` does not gain a default 48club URL.
 - Solana and Bitcoin are parsed as addresses and then returned as `unsupported`. No request is sent. Sui, Aptos, TON, and Cosmos are the same.
-- Etherscan is added only after the user has registered a key and live verification is finished. Until both are done, relations does not call Etherscan. A network that only has an enabled routed `etherscan_v2` source is `gap` / `source_gated` / `etherscan_deferred` and sends nothing, even when a key is present.
-- `optimism.blockscout.com` answers HTTP 301 to another host (`explorer.optimism.io`, recorded since at least 2026-10-09). This recorded `redirect_host` gap appears only when the endpoint is set to `optimism.blockscout.com`. The default and the recommended origin are in `docs/api-keys.md`. A redirect whose host differs from the registered host is refused. Relations stores that as a `redirect_host` gap and does not follow it.
+- Etherscan is not registered for relations. A network that only has an enabled routed `etherscan_v2` source is `gap` / `source_gated` / `etherscan_deferred` and sends nothing, even when a key is present. Base, Arbitrum, and Polygon stay on that rule when they have no usable Blockscout host.
+- The keyless Optimism source is `https://explorer.optimism.io`. An endpoint whose host is `optimism.blockscout.com`, and a keyless Optimism Blockscout source with an empty endpoint, are read there and no credential is sent. A different configured host is kept. A redirect whose host differs from the registered host is refused. Relations stores that as a `redirect_host` gap and does not follow it.
 - Keyless public Blockscout for Base (`base.blockscout.com`), Arbitrum (`arbitrum.blockscout.com`), and Polygon (`polygon.blockscout.com`) has returned HTTP 403 with a Cloudflare page (`Just a moment`) to the recorded Linux host. That result is host-specific. Relations stores the reason `bot_challenge` as a `gap`. The Blockscout call does not set a User-Agent, and this command does not invent one to pass the challenge.
 - TRON reads TRC-20 transfers only. There is no native TRX read.
 - `--max-pages` stops a walk and the read is `partial` with reason `page_cap`. The TRON client has a fixed cap of 48 requests (`request_cap`); that cap is not `--max-pages`. Each Blockscout tail also stops at 5000 items (`item_cap`) and that part is `partial`. A query count above `--max-nodes` exits 2 and sends nothing. An output row count above `--max-nodes` keeps the first `--max-nodes` rows and the status becomes `partial`. The cut sets `truncated.reason` to `node_cap`. If the status would have been `complete`, it becomes `partial`.

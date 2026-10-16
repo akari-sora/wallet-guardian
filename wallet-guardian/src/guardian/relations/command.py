@@ -8,6 +8,7 @@ import re
 import sys
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,14 +23,15 @@ from guardian.identities import parse_address
 from guardian.locations import secure_write_text
 from guardian.network_registry import load_registry
 from guardian.pipeline import _secrets, _transport, default_backend
-from guardian.relations.fetch import Outcome, read_blockscout, read_tron
+from guardian.relations.fetch import Outcome, read_blockscout, read_club, read_nodereal, read_tron
 from guardian.relations.labels import load_user_labels
 from guardian.relations.markdown import render_markdown
 from guardian.relations.report import expand_report, inbound_report, overall
-from guardian.relations.select import Job, _expand_targets, build_jobs, plan_for
+from guardian.relations.select import CLUB_BUDGET, Job, _expand_targets, build_jobs, plan_for
 from guardian.resources import resource_path
 from guardian.security.redact import redact
-from guardian.sources.transport import build_endpoint_registry
+from guardian.sources.budget import BudgetGroup, BudgetSpec
+from guardian.sources.transport import RegisteredSource, build_endpoint_registry
 
 _CREDENTIAL_ENV = re.compile(r"^[A-Z][A-Z0-9_]{0,95}$")
 
@@ -156,6 +158,7 @@ def _perform(jobs, transport, document, secrets, registry, page_cap, stop_timest
 
 
 def _run_choice(job: Job, choice, transport, sources, secrets, registry, page_cap, stop_timestamp, clock) -> Outcome:
+    _bind_choice(transport, choice, clock)
     source = sources.get(choice.source_id) or {}
     entry = registry[job.network]
     family = entry["family"]
@@ -163,7 +166,7 @@ def _run_choice(job: Job, choice, transport, sources, secrets, registry, page_ca
         return read_blockscout(
             transport,
             choice.source_id,
-            credential=_credential(source, secrets),
+            credential=None if choice.omit_credential else _credential(source, secrets),
             address=job.address,
             direction=job.direction,
             network=job.network,
@@ -184,7 +187,78 @@ def _run_choice(job: Job, choice, transport, sources, secrets, registry, page_ca
             stop_timestamp=stop_timestamp,
             clock=clock,
         )
+    if choice.adapter == "nodereal_transfers":
+        return read_nodereal(
+            transport,
+            choice.source_id,
+            address=job.address,
+            direction=job.direction,
+            network=job.network,
+            family=family,
+            page_cap=page_cap,
+            stop_timestamp=stop_timestamp,
+            entry=entry,
+            clock=clock,
+        )
+    if choice.adapter == "evm_rpc":
+        return read_club(
+            transport,
+            choice.source_id,
+            address=job.address,
+            direction=job.direction,
+            network=job.network,
+            family=family,
+            page_cap=page_cap,
+            stop_timestamp=stop_timestamp,
+            entry=entry,
+            clock=clock,
+            range_limit=_range_limit(source),
+        )
     return Outcome("gap", "endpoint_missing", [])
+
+
+def _bind_choice(transport, choice, clock) -> None:
+    """Point this command at the relations host. The saved profile is not written."""
+    if not choice.endpoint and not choice.omit_credential:
+        return
+    registry = transport.endpoints
+    current = registry.sources.get(choice.source_id)
+    if current is None:
+        if choice.adapter != "evm_rpc" or not choice.endpoint:
+            return
+        registry.sources[choice.source_id] = RegisteredSource(
+            source_id=choice.source_id,
+            adapter="evm_rpc",
+            endpoint=choice.endpoint,
+            budget_group=CLUB_BUDGET,
+            allow_private_network=False,
+            credential=None,
+        )
+        _ensure_budget(transport, CLUB_BUDGET, clock)
+        return
+    endpoint = choice.endpoint or current.endpoint
+    credential = None if choice.omit_credential else current.credential
+    if endpoint != current.endpoint or credential is not current.credential:
+        registry.sources[choice.source_id] = replace(current, endpoint=endpoint, credential=credential)
+
+
+def _ensure_budget(transport, name: str, clock) -> None:
+    book = transport.budgets
+    groups = book._groups
+    if name in groups:
+        return
+    sample = next(iter(groups.values()), None)
+    group_clock = sample._clock if sample is not None else clock
+    group_sleep = sample._sleep if sample is not None else (lambda _seconds: None)
+    spec = BudgetSpec(max_rps=1, max_concurrency=1, max_requests_per_day=10000, retry_attempts=0)
+    groups[name] = BudgetGroup(name, spec, clock=group_clock, sleep=group_sleep)
+
+
+def _range_limit(source: Mapping[str, Any]) -> int:
+    value = source.get("range_limit") if isinstance(source, Mapping) else None
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 1000:
+        return value
+    return 1000
 
 
 def _credential(source: Mapping[str, Any], secrets: Mapping[str, str]) -> str | None:
