@@ -8,11 +8,13 @@ the caller already selected it.
 from __future__ import annotations
 
 import random
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from guardian.balances.internal import _receipt_state
 from guardian.chains.evm.accounting import TRANSFER_TOPIC, pad_address
 from guardian.errors import ConfigError, SecurityError
 from guardian.identities import parse_address
@@ -33,6 +35,8 @@ _NATIVE_LOG_GAP = "not_in_keyless_logs"
 _NODEREAL_ITEM_CAP = 5_000
 # eth_getBlockByNumber calls per part. Cached hits are free. The cache lives for one command.
 _TIME_LOOKUP_CAP = 32
+_CAP_REASONS = frozenset({"page_cap", "item_cap", "time_lookup_cap"})
+_CODE_SKIP = frozenset({"rate_limited", "daily_cap", "redirect_host"})
 _NODEREAL_PARTS = (
     ("20", "token-transfers"),
     ("external", "transactions"),
@@ -67,6 +71,7 @@ class Outcome:
     parts: list[dict[str, str]] | None = None
     ignored_zero_value: int = 0
     contract_withhold: bool = False
+    contract_check: dict[str, str] | None = None
 
 
 def read_blockscout(
@@ -290,14 +295,24 @@ def _note_contract(outcome: Outcome, direction: str) -> Outcome:
     return outcome
 
 
+def _retry_sleep(seconds: float) -> None:
+    """Wait out one retry. ``read_with_retry`` already caps this at 30 seconds."""
+    time.sleep(max(0.0, float(seconds)))
+
+
 def _retry_controls(transport: Any, source_id: str) -> tuple[Callable[[float], None], Callable[[], float]]:
-    """Budget sleep and a real random unit. A missing group does not invent a wait."""
+    """Uncapped retry sleep and a real random unit. A missing group does not invent a wait.
+
+    The token bucket still uses the sleeper installed on the budget group. This
+    wait does not pass through that sleeper, so the 10 second budget cap does
+    not shorten ``Retry-After``.
+    """
     try:
         source = transport.endpoints.get(source_id)
-        group = transport.budgets.group(source.budget_group)
+        transport.budgets.group(source.budget_group)
     except (AttributeError, ConfigError, SecurityError):
         return (lambda _seconds: None), random.random
-    return group.pause, random.random
+    return _retry_sleep, random.random
 
 
 class _Lookups:
@@ -347,19 +362,41 @@ class _Lookups:
         return stamp, ""
 
 
+def _host_block_reason(outcome: Outcome) -> str:
+    if outcome.reason in _CODE_SKIP:
+        return outcome.reason
+    for part in outcome.parts or []:
+        reason = part.get("reason")
+        if reason in _CODE_SKIP:
+            return str(reason)
+    return ""
+
+
 def _attach_payer_code(outcome: Outcome, transport: Any, source_id: str, adapter: str, address: str, clock) -> None:
     """One eth_getCode for the payer on the host this read already uses."""
+    blocked = _host_block_reason(outcome)
+    if blocked:
+        outcome.contract_check = {"status": "gap", "reason": blocked}
+        outcome.contract_withhold = True
+        if outcome.payer_is_contract is not True:
+            outcome.payer_is_contract = None
+        return
     payload, reason = _jsonrpc(transport, source_id, adapter, "eth_getCode", [address, "latest"], clock)
+    text = payload.strip().lower() if isinstance(payload, str) else ""
+    digits = text[2:] if text.startswith("0x") else None
+    invalid = bool(reason) or digits is None or any(char not in "0123456789abcdef" for char in digits)
+    if invalid:
+        outcome.contract_check = {"status": "gap", "reason": reason or "read_error"}
+    else:
+        outcome.contract_check = {"status": "complete", "reason": ""}
     if outcome.payer_is_contract is True:
         outcome.contract_withhold = False
         return
-    text = payload.strip().lower() if isinstance(payload, str) else ""
-    digits = text[2:] if text.startswith("0x") else None
-    if reason or digits is None or any(char not in "0123456789abcdef" for char in digits):
+    if invalid:
         outcome.payer_is_contract = None
         outcome.contract_withhold = True
         return
-    if digits == "" or int(digits, 16) == 0:
+    if digits == "":
         outcome.payer_is_contract = False
         outcome.contract_withhold = False
         return
@@ -369,7 +406,7 @@ def _attach_payer_code(outcome: Outcome, transport: Any, source_id: str, adapter
 
 def _time_failure(edges: list[Edge], why: str) -> tuple[str, str]:
     reason = why or "window_unchecked"
-    if edges:
+    if edges or reason in _CAP_REASONS:
         return "partial", reason
     return "gap", reason
 
@@ -525,10 +562,12 @@ def read_nodereal(
         time_reason = ""
         if state != "gap":
             rows, time_reason = _stamp_nodereal_rows(rows, lookups)
-            if time_reason and not rows and state == "complete":
-                state, why = "gap", time_reason
-            elif time_reason and state == "complete":
-                state, why = "partial", time_reason
+            if time_reason:
+                capped = time_reason in _CAP_REASONS
+                if not rows and state == "complete" and not capped:
+                    state, why = "gap", time_reason
+                elif not rows or state == "complete":
+                    state, why = "partial", time_reason
         if state != "gap":
             for item in rows:
                 parsed = _nodereal_edge(
@@ -545,7 +584,10 @@ def read_nodereal(
                 edges.append(parsed)
             if state == "complete" and part_bad:
                 state, why = "partial", "unreadable_row"
-        recorded.append({"part": part, "read_status": state, "reason": why})
+        record = {"part": part, "read_status": state, "reason": why}
+        if time_reason:
+            record["timestamp_reason"] = time_reason
+        recorded.append(record)
     return finish(_rolled(recorded, edges, zeros, None))
 
 
@@ -564,7 +606,10 @@ def _nodereal_part(client, address, direction, category, head, page_cap, stop_ti
         if not done:
             items.extend(page)
             if not saw and not items:
-                return [], "gap", reason or "read_error"
+                why = reason or "read_error"
+                if why in _CAP_REASONS:
+                    return [], "partial", why
+                return [], "gap", why
             kept = items[:_NODEREAL_ITEM_CAP]
             why = reason or "read_error"
             if len(items) >= _NODEREAL_ITEM_CAP and why == "item_cap":
@@ -578,9 +623,10 @@ def _nodereal_part(client, address, direction, category, head, page_cap, stop_ti
             return items, "complete", ""
         opening, why = lookups.one(start)
         if opening is None:
-            if not items:
-                return [], "gap", why or "window_unchecked"
-            return items, "partial", why or "window_unchecked"
+            why = why or "window_unchecked"
+            if not items and why not in _CAP_REASONS:
+                return [], "gap", why
+            return items, "partial", why
         if opening <= stop_timestamp:
             return items, "complete", ""
         cursor = start - 1
@@ -1064,6 +1110,8 @@ def _blockscout_asset(kind, item, family, native_symbol, native_decimals):
 
 
 def _failed(item: Mapping[str, Any]) -> bool:
+    if _receipt_state(item) == "failure":
+        return True
     if item.get("success") is False:
         return True
     status = item.get("status")

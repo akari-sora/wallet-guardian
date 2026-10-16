@@ -1409,13 +1409,15 @@ def test_complete_and_gap_with_zero_receipts_stays_partial(
     status = {row["network"]: row["read_status"] for row in body["reads"]}
     assert status[ETH] == "complete"
     assert status[BASE] == "gap"
-    assert body["seed_receipts"] == {"assets": [], "count": 0}
-    assert body["evidence_note"] == "no_seed_receipts_in_partial_read"
+    assert body["status"] == "partial"
+    assert body["recipient_count"] is None
+    assert body["seed_receipts"] is None
+    assert "evidence_note" not in body
     text = Path(body["markdown_path"]).read_text(encoding="utf-8")
     section = _section(text, "## Seed receipts")
-    assert "Note: no_seed_receipts_in_partial_read" in section
-    assert "Note: no_seed_receipts\n" not in section
-    assert "Count: 0" in section
+    assert "Note: no_seed_receipts_in_partial_read" not in section
+    assert "Count: 0" not in section
+    assert "unknown" in section
 
 
 def test_markdown_reasons_keep_spaces_and_escape_backticks(

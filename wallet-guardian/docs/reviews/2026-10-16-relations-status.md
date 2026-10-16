@@ -79,7 +79,7 @@ Command smoke runs on the same day. R-1 rows ran on `3173108`; R-2 rows ran on `
 | `expand` without `--yes` | exit 2, `consent_required`, no request |
 | `inbound`, Ethereum and Optimism, Disperse as seed | exit 0, overall `partial`. Ethereum: token transfers `complete`, transactions `partial` (page cap), internal transactions `gap` (timeout). Optimism: every part `gap` (`redirect_host`) |
 | `expand`, Ethereum, Disperse as payer | hub (contract); co-recipients hidden by default |
-| `expand`, TRON, the address publicly labelled Tether Treasury as payer | `complete`; seven recipients; `hub: false` |
+| `expand`, TRON, the address publicly labelled Tether Treasury as payer | `complete`; seven recipients; `hub: false`. This row is a result from before !98. |
 | `expand`, Ethereum and Base, Disperse as payer | `partial`; Base `bot_challenge`; hub (contract); `recipient_count_complete: false` |
 | `expand`, TRON, the address publicly labelled Tether Treasury as payer, with one of its recipients as seed | `complete`; three co-recipients at `medium` (`same_asset` and `amount_band`); Markdown report 0600 with a Mermaid graph and no URL |
 

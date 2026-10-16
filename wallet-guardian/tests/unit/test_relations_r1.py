@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import time
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -784,6 +785,7 @@ def test_bsc_48club_empty_window_is_a_gap_and_not_zero(tmp_path: Path, monkeypat
 
 
 def test_bsc_48club_rate_limit_is_a_gap_and_not_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
     sources = {"nodereal-bsc": _source("nodereal_transfers", "NODEREAL_BSC_URL", "nodereal-bsc")}
     backend = _bsc_install(tmp_path, monkeypatch, sources, {"NODEREAL_BSC_URL": "https://bsc.example.invalid"})
     allow_fixture_hosts(monkeypatch, "rpc-bsc.48.club")
@@ -813,6 +815,7 @@ def test_bsc_48club_rate_limit_is_a_gap_and_not_zero(tmp_path: Path, monkeypatch
 
 
 def test_bsc_48club_keeps_rows_when_a_later_chunk_is_limited(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
     sources = {
         "bsc-logs-48club": {
             "adapter": "evm_rpc",
@@ -1657,6 +1660,7 @@ def test_hub_count_uses_the_full_recipient_total(tmp_path: Path, monkeypatch: py
 
 
 def test_local_label_marks_a_hub_when_the_bsc_read_is_a_gap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
     sources = {"nodereal-bsc": _source("nodereal_transfers", "NODEREAL_BSC_URL", "nodereal-bsc")}
     routes = [{"network": "bsc-mainnet", "capability": "history.native_external", "source_ids": ["nodereal-bsc"]}]
     backend = install(

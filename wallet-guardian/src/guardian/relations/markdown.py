@@ -35,6 +35,7 @@ def render_markdown(payload: Mapping, *, max_nodes: int = 500) -> str:
     elif payload.get("network"):
         lines.append(f"Network: {payload.get('network')}")
     lines.extend(_window_hub(payload))
+    lines.extend(_contract_check_lines(payload))
     lines.extend(["", "## Disclosure plan"])
     lines.extend(_plan_lines(payload.get("plan") or {}))
     if payload.get("status") in {"dry_run", "consent_required"}:
@@ -190,6 +191,18 @@ def _gap_lines(payload: Mapping) -> list[str]:
             f"- {row.get('network')} {row.get('address')} {row.get('read_status')} {row.get('reason')}"
         )
     return lines or ["None"]
+
+
+def _contract_check_lines(payload: Mapping) -> list[str]:
+    check = payload.get("contract_check")
+    if not isinstance(check, Mapping):
+        return []
+    status = check.get("status")
+    if status in {None, "", "complete", "ok"}:
+        return []
+    if "co_recipients" in payload:
+        return []
+    return ["Contract check failed; pass --expand-hub to list them."]
 
 
 def _window_hub(payload: Mapping) -> list[str]:

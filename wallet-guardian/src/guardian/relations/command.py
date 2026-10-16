@@ -30,7 +30,7 @@ from guardian.relations.report import expand_report, inbound_report, overall
 from guardian.relations.select import CLUB_BUDGET, Job, _expand_targets, build_jobs, plan_for
 from guardian.resources import resource_path
 from guardian.security.redact import redact
-from guardian.sources.budget import BudgetSpec
+from guardian.sources.budget import BudgetBook, BudgetGroup, BudgetSpec
 from guardian.sources.transport import RegisteredSource, build_endpoint_registry
 
 _CREDENTIAL_ENV = re.compile(r"^[A-Z][A-Z0-9_]{0,95}$")
@@ -99,7 +99,7 @@ def execute(
         return payload, 0 if dry_run else 2
     transport = _transport(public, default_backend() if backend is None else backend, now)
     _write_disclosure(plan, secrets, public.document)
-    reads, edges, payer_contract, source_complete, contract_withhold = _perform(
+    reads, edges, payer_contract, source_complete, contract_withhold, contract_check = _perform(
         jobs, transport, public.document, secrets, registry, max_pages, _stop(moment, since_days), now,
     )
     if command == "inbound":
@@ -119,6 +119,7 @@ def execute(
             max_nodes=max_nodes,
             source_complete=source_complete,
             contract_withhold=contract_withhold,
+            contract_check=contract_check,
             labels=labels,
             registry=registry,
         )
@@ -142,6 +143,7 @@ def _perform(jobs, transport, document, secrets, registry, page_cap, stop_timest
     flags: list[bool | None] = []
     withhold = False
     adopted: list[bool] = []
+    contract_check = None
     sources = document["sources"]
     time_cache: dict[tuple[str, int], int] = {}
     for job in jobs:
@@ -157,6 +159,10 @@ def _perform(jobs, transport, document, secrets, registry, page_cap, stop_timest
             flags.append(outcome.payer_is_contract)
             if outcome.contract_withhold:
                 withhold = True
+            if outcome.contract_check is not None and (
+                contract_check is None or contract_check.get("status") == "complete"
+            ):
+                contract_check = outcome.contract_check
             reads.append(_read_row(job, choice, outcome))
             edges.extend(outcome.edges)
             adopted.append(outcome.status == "complete")
@@ -166,7 +172,7 @@ def _perform(jobs, transport, document, secrets, registry, page_cap, stop_timest
         payer_contract = None
     else:
         payer_contract = False
-    return reads, edges, payer_contract, bool(adopted) and all(adopted), withhold
+    return reads, edges, payer_contract, bool(adopted) and all(adopted), withhold, contract_check
 
 
 def _run_choice(job: Job, choice, transport, sources, secrets, registry, page_cap, stop_timestamp, clock, time_cache) -> Outcome:
@@ -214,6 +220,7 @@ def _run_choice(job: Job, choice, transport, sources, secrets, registry, page_ca
             time_cache=time_cache,
         )
     if choice.adapter == "evm_rpc":
+        _pin_club_retries(transport, choice.source_id)
         return read_club(
             transport,
             choice.source_id,
@@ -256,10 +263,34 @@ def _bind_choice(transport, choice, clock) -> None:
         registry.sources[choice.source_id] = replace(current, endpoint=endpoint, credential=credential)
 
 
+def align_club_budget(book: BudgetBook, name: str = CLUB_BUDGET) -> BudgetGroup:
+    """Pin retries for this host. Rate and quota on an existing group stay."""
+    try:
+        group = book.group(name)
+    except ConfigError:
+        return book.ensure_group(name, CLUB_BUDGET_SPEC)
+    pinned = CLUB_BUDGET_SPEC.retry_attempts
+    if group.spec.retry_attempts != pinned:
+        group.spec = replace(group.spec, retry_attempts=pinned)
+    return group
+
+
+def _pin_club_retries(transport, source_id: str) -> None:
+    try:
+        source = transport.endpoints.get(source_id)
+        name = source.budget_group
+    except (AttributeError, ConfigError, SecurityError):
+        align_club_budget(transport.budgets)
+        return
+    if not isinstance(name, str) or not name:
+        name = CLUB_BUDGET
+    align_club_budget(transport.budgets, name)
+
+
 def _ensure_budget(transport, name: str, clock) -> None:
     """Add the fixed relations spec when this profile has no group yet."""
     del clock
-    transport.budgets.ensure_group(name, CLUB_BUDGET_SPEC)
+    align_club_budget(transport.budgets, name)
 
 
 def _range_limit(source: Mapping[str, Any]) -> int:

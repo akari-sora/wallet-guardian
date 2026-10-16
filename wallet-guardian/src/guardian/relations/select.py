@@ -326,7 +326,8 @@ def _first_blockscout(routed, sources, status_map, endpoints, skip_hosts: frozen
 
 
 def _optimism_keyless(routed, sources, status_map, endpoints) -> Choice | None:
-    """Use the official explorer when the keyless host is empty or is the old redirect."""
+    """Use the official explorer for an empty host, that host, or the old redirect."""
+    del status_map
     for source_id in routed:
         source = sources.get(source_id) or {}
         if source.get("adapter") != "blockscout" or source.get("enabled") is not True:
@@ -334,9 +335,8 @@ def _optimism_keyless(routed, sources, status_map, endpoints) -> Choice | None:
         keyed = isinstance(source.get("credential_env"), str) and bool(source.get("credential_env"))
         host = host_of(endpoint_text(endpoints, source_id))
         old_host = host == OPTIMISM_REDIRECT_HOST
-        if not old_host and not (host == "" and not keyed):
-            continue
-        if keyed and not old_host and not _present(status_map, source_id):
+        keyless_host = host == OPTIMISM_KEYLESS_HOST
+        if not old_host and not keyless_host and not (host == "" and not keyed):
             continue
         return Choice(
             "primary",
