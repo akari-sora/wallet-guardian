@@ -13,7 +13,9 @@ import re
 import sys
 from pathlib import Path
 
-_LINK = re.compile(r"\[([^\]]+)\]\((references/[^)]+)\)")
+_LINK = re.compile(r"\[([^\]]+)\]\((references/[^)]+)\)([.。!！?？]*)")
+_ATX = re.compile(r"^(#{1,6})([ \t]+.*)$")
+_ORPHAN_PUNCT = set(".。!！?？")
 _GROK_NOTE = """## Grok Bot host
 
 This file inlines the reference pages because a Grok Bot skill upload keeps only this text. The cloud computer for that account must already have the `guardian` command installed. Bots on the same account share that computer and its data. This host integration was not exercised (未實測).
@@ -142,6 +144,43 @@ def _frontmatter_version(text: str) -> str:
     return match.group(1)
 
 
+def _heading_levels(text: str) -> list[int]:
+    fence = False
+    found: list[int] = []
+    for line in text.splitlines():
+        if line.startswith("```"):
+            fence = not fence
+            continue
+        if fence:
+            continue
+        match = _ATX.match(line)
+        if match:
+            found.append(len(match.group(1)))
+    return found
+
+
+def _demote_headings(text: str, shift: int) -> str:
+    """Lower ATX headings so an inlined page sits under the outer section."""
+    if shift <= 0:
+        return text
+    fence = False
+    lines: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("```"):
+            fence = not fence
+            lines.append(line)
+            continue
+        if not fence:
+            match = _ATX.match(line)
+            if match:
+                level = len(match.group(1)) + shift
+                if level > 6:
+                    raise ValueError("embedded heading would pass level 6")
+                line = ("#" * level) + match.group(2)
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def render_grok(skill: str, references: dict[str, str], catalog_version: str) -> str:
     """Inline reference pages. The result has no relative links."""
     if _frontmatter_version(skill) != catalog_version:
@@ -150,16 +189,27 @@ def render_grok(skill: str, references: dict[str, str], catalog_version: str) ->
     def replace(match: re.Match[str]) -> str:
         label = match.group(1)
         target = match.group(2)
+        punct = match.group(3)
         if target not in references:
             raise ValueError(f"unknown skill reference {target}")
         body = references[target].strip()
-        return f"{label}\n\n{body}\n"
+        levels = _heading_levels(body)
+        if levels:
+            preceding = _heading_levels(skill[: match.start()])
+            parent = preceding[-1] if preceding else 1
+            body = _demote_headings(body, (parent + 1) - min(levels))
+        # Sentence punctuation stays on the label line. Leaving it for the
+        # next line made a file whose only character was ".".
+        return f"{label}{punct}\n\n{body}\n"
 
     flattened = _LINK.sub(replace, skill).rstrip() + "\n\n" + _GROK_NOTE.strip() + "\n"
     if "](" in flattened:
         raise ValueError("grok skill still has a markdown link")
     if "references/" in flattened:
         raise ValueError("grok skill still names a references path")
+    for line in flattened.splitlines():
+        if line.strip() and set(line.strip()) <= _ORPHAN_PUNCT:
+            raise ValueError("flattened skill has a punctuation-only line")
     return flattened
 
 
