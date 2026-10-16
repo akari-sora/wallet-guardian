@@ -40,28 +40,144 @@ def _print(payload: dict) -> None:
     sys.stdout.write("\n")
 
 
+def _package_version() -> str:
+    """Installed distribution version. This reads package metadata, not the network."""
+    from importlib.metadata import version
+
+    return version("wallet-guardian-monitor")
+
+
+def _catalog() -> dict[str, Any]:
+    from guardian.resources import read_resource_json
+
+    payload = read_resource_json("agent-capabilities.json")
+    if not isinstance(payload, dict):
+        raise RuntimeError("agent capabilities catalog is not an object")
+    return payload
+
+
+class _CatalogError(RuntimeError):
+    """The capability catalog cannot be read or is the wrong shape."""
+
+
+def _load_command_helps() -> dict[tuple[str, ...], str]:
+    """Help strings from the catalog.
+
+    A missing file or a bad shape raises ``_CatalogError`` with a fixed message
+    so a path from the environment does not leak into the error text.
+    """
+    try:
+        payload = _catalog()
+    except (OSError, json.JSONDecodeError, RuntimeError, ValueError, TypeError, KeyError):
+        raise _CatalogError("agent capabilities catalog is unreadable") from None
+    if not isinstance(payload, dict):
+        raise _CatalogError("agent capabilities catalog is unreadable")
+    commands = payload.get("commands")
+    if not isinstance(commands, list) or not commands:
+        raise _CatalogError("agent capabilities catalog is unreadable")
+    helps: dict[tuple[str, ...], str] = {}
+    for command in commands:
+        if not isinstance(command, dict):
+            raise _CatalogError("agent capabilities catalog is unreadable")
+        path = command.get("path")
+        text = command.get("help")
+        if not isinstance(path, list) or not path or not all(isinstance(part, str) and part for part in path):
+            raise _CatalogError("agent capabilities catalog is unreadable")
+        if not isinstance(text, str) or not text.strip():
+            raise _CatalogError("agent capabilities catalog is unreadable")
+        key = tuple(path)
+        if key in helps:
+            raise _CatalogError("agent capabilities catalog is unreadable")
+        helps[key] = text
+    return helps
+
+
+def _agent_capabilities() -> dict[str, Any]:
+    """Static catalog plus the installed version. Callers must not write this to disk."""
+    _load_command_helps()
+    payload = dict(_catalog())
+    payload["version"] = _package_version()
+    return payload
+
+
+class _PrintVersion(argparse.Action):
+    """Print the package version and exit 0. Other commands are unchanged."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs["nargs"] = 0
+        super().__init__(*args, **kwargs)
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: Any,
+        option_string: str | None = None,
+    ) -> None:
+        sys.stdout.write(_package_version() + "\n")
+        parser.exit(0)
+
+
 def _db(args: argparse.Namespace) -> Database:
     path = Path(args.db) if args.db else ROOT / "data" / "guardian.sqlite"
     return Database(path)
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI. A bad catalog falls back to argparse's default help text.
+
+    Other subcommands keep working. ``capabilities`` still reports the catalog
+    error, because ``_agent_capabilities`` loads it again.
+    """
+    try:
+        loaded: dict[tuple[str, ...], str] | None = _load_command_helps()
+    except _CatalogError:
+        loaded = None
+
+    def help_for(*parts: str) -> str | None:
+        if loaded is None:
+            return None
+        text = loaded.get(parts)
+        if isinstance(text, str) and text.strip():
+            return text
+        return None
+
+    original_add = argparse._SubParsersAction.add_parser
+
+    def add_parser(self, name, **kwargs):  # type: ignore[no-untyped-def]
+        if not kwargs.get("help"):
+            kwargs.pop("help", None)
+        return original_add(self, name, **kwargs)
+
+    argparse._SubParsersAction.add_parser = add_parser  # type: ignore[method-assign]
+    try:
+        return _assemble_parser(help_for)
+    finally:
+        argparse._SubParsersAction.add_parser = original_add  # type: ignore[method-assign]
+
+
+def _assemble_parser(help_for) -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--db", default=argparse.SUPPRESS, help="sqlite path")
     common.add_argument("--tenant", default=argparse.SUPPRESS, help="local tenant scope (required when ambiguous)")
     common.add_argument("--json", action="store_true", help="print JSON (this is always on)")
     parser = argparse.ArgumentParser(prog="guardian")
+    parser.add_argument(
+        "--version",
+        action=_PrintVersion,
+        help="print the package version and exit",
+    )
     parser.set_defaults(db=None)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    doctor_cmd = sub.add_parser("doctor", parents=[common])
+    doctor_cmd = sub.add_parser("doctor", parents=[common], help=help_for("doctor"))
     doctor_cmd.add_argument("--mcm-config", default=None)
     doctor_cmd.add_argument(
         "--live",
         action="store_true",
         help="live probe with a 5 second whole-call deadline per probe; omitted doctor stays offline",
     )
-    run = sub.add_parser("run-once", parents=[common])
+    run = sub.add_parser("run-once", parents=[common], help=help_for("run-once"))
     selected = run.add_mutually_exclusive_group(required=True)
     selected.add_argument("--config")
     selected.add_argument("--mcm-config")
@@ -69,30 +185,30 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--news-input", default=None, help="caller-supplied RSS, Atom, or structured news; not fetched")
     run.add_argument("--price-input", default=None, help="caller-supplied price quotes; not fetched")
 
-    balance_probe = sub.add_parser("balance-probe", parents=[common])
+    balance_probe = sub.add_parser("balance-probe", parents=[common], help=help_for("balance-probe"))
     balance_probe.add_argument("--mcm-config", required=True)
     balance_probe.add_argument("--probe-state", required=True)
     balance_probe.add_argument("--no-send", action="store_true")
     balance_probe.add_argument("--trigger", choices=("run-once", "none"), default="run-once")
 
-    sub.add_parser("snapshot", parents=[common])
-    sub.add_parser("reconcile", parents=[common])
-    sub.add_parser("claims", parents=[common])
-    providers = sub.add_parser("providers", parents=[common])
+    sub.add_parser("snapshot", parents=[common], help=help_for("snapshot"))
+    sub.add_parser("reconcile", parents=[common], help=help_for("reconcile"))
+    sub.add_parser("claims", parents=[common], help=help_for("claims"))
+    providers = sub.add_parser("providers", parents=[common], help=help_for("providers"))
     providers_sub = providers.add_subparsers(dest="providers_command", required=True)
     providers_sub.add_parser(
         "verify",
         parents=[common],
-        help="legacy provider probe; does not prove a selected profile's connectivity",
+        help=help_for("providers", "verify"),
     )
 
-    wallets = sub.add_parser("wallets", parents=[common])
+    wallets = sub.add_parser("wallets", parents=[common], help=help_for("wallets"))
     wallets_sub = wallets.add_subparsers(dest="wallets_command", required=True)
-    discover = wallets_sub.add_parser("discover", parents=[common])
+    discover = wallets_sub.add_parser("discover", parents=[common], help=help_for("wallets", "discover"))
     discover.add_argument("--config", required=True)
 
-    sub.add_parser("approvals", parents=[common])
-    explain = sub.add_parser("explain", parents=[common])
+    sub.add_parser("approvals", parents=[common], help=help_for("approvals"))
+    explain = sub.add_parser("explain", parents=[common], help=help_for("explain"))
     explain.add_argument("--event-id", required=True)
     explain.add_argument("--mcm-config", default=None)
     explain.add_argument(
@@ -100,57 +216,57 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="re-read historical state through --mcm-config; read-only, no send",
     )
-    coverage = sub.add_parser("coverage", parents=[common])
+    coverage = sub.add_parser("coverage", parents=[common], help=help_for("coverage"))
     coverage.add_argument("--mcm-config", default=None)
-    replay = sub.add_parser("replay", parents=[common])
+    replay = sub.add_parser("replay", parents=[common], help=help_for("replay"))
     replay.add_argument("--fixture", required=True)
     replay.add_argument("--no-send", action="store_true")
-    alerts = sub.add_parser("alerts", parents=[common])
+    alerts = sub.add_parser("alerts", parents=[common], help=help_for("alerts"))
     alerts_sub = alerts.add_subparsers(dest="alerts_command", required=True)
-    dry = alerts_sub.add_parser("test", parents=[common])
+    dry = alerts_sub.add_parser("test", parents=[common], help=help_for("alerts", "test"))
     dry.add_argument("--dry-run", action="store_true", required=True)
-    sub.add_parser("self-check", parents=[common])
+    sub.add_parser("self-check", parents=[common], help=help_for("self-check"))
 
-    diagnose = sub.add_parser("diagnose", parents=[common])
+    diagnose = sub.add_parser("diagnose", parents=[common], help=help_for("diagnose"))
     diagnose.add_argument("--task", required=True)
-    actions = sub.add_parser("actions", parents=[common])
+    actions = sub.add_parser("actions", parents=[common], help=help_for("actions"))
     actions_sub = actions.add_subparsers(dest="actions_command", required=True)
-    listed = actions_sub.add_parser("list", parents=[common])
+    listed = actions_sub.add_parser("list", parents=[common], help=help_for("actions", "list"))
     listed.add_argument("--wallet", required=True)
 
-    action = sub.add_parser("action", parents=[common])
+    action = sub.add_parser("action", parents=[common], help=help_for("action"))
     action_sub = action.add_subparsers(dest="action_command", required=True)
-    plan = action_sub.add_parser("plan", parents=[common])
+    plan = action_sub.add_parser("plan", parents=[common], help=help_for("action", "plan"))
     plan.add_argument("--intent-file", required=True)
-    simulate = action_sub.add_parser("simulate", parents=[common])
+    simulate = action_sub.add_parser("simulate", parents=[common], help=help_for("action", "simulate"))
     simulate.add_argument("--plan-id", required=True)
-    export = action_sub.add_parser("export", parents=[common])
+    export = action_sub.add_parser("export", parents=[common], help=help_for("action", "export"))
     export.add_argument("--plan-id", required=True)
     export.add_argument("--unsigned-only", action="store_true", required=True)
-    status = action_sub.add_parser("status", parents=[common])
+    status = action_sub.add_parser("status", parents=[common], help=help_for("action", "status"))
     status.add_argument("--task-id", required=True)
-    reconcile = action_sub.add_parser("reconcile", parents=[common])
+    reconcile = action_sub.add_parser("reconcile", parents=[common], help=help_for("action", "reconcile"))
     reconcile.add_argument("--task-id", required=True)
 
-    sub.add_parser("rescue", parents=[common])
-    sub.add_parser("operation-coverage", parents=[common])
-    sub.add_parser("workbench", parents=[common])
+    sub.add_parser("rescue", parents=[common], help=help_for("rescue"))
+    sub.add_parser("operation-coverage", parents=[common], help=help_for("operation-coverage"))
+    sub.add_parser("workbench", parents=[common], help=help_for("workbench"))
 
-    config = sub.add_parser("config")
+    config = sub.add_parser("config", help=help_for("config"))
     config_sub = config.add_subparsers(dest="config_command", required=True)
-    validate = config_sub.add_parser("validate", parents=[common])
+    validate = config_sub.add_parser("validate", parents=[common], help=help_for("config", "validate"))
     validate.add_argument("--mcm-config", required=True)
 
-    sources = sub.add_parser("sources")
+    sources = sub.add_parser("sources", help=help_for("sources"))
     sources_sub = sources.add_subparsers(dest="sources_command", required=True)
-    probe = sources_sub.add_parser("probe", parents=[common])
+    probe = sources_sub.add_parser("probe", parents=[common], help=help_for("sources", "probe"))
     probe.add_argument("--mcm-config", required=True)
 
-    exported = sub.add_parser("export", parents=[common])
+    exported = sub.add_parser("export", parents=[common], help=help_for("export"))
     exported.add_argument("--public", action="store_true")
     exported.add_argument("--mcm-config", required=True)
 
-    compared = sub.add_parser("compare-legacy", parents=[common])
+    compared = sub.add_parser("compare-legacy", parents=[common], help=help_for("compare-legacy"))
     compared.add_argument("--mcm-config", required=True)
     compared.add_argument("--legacy-state", required=True)
     compared.add_argument("--since", default=None, help="ISO window start")
@@ -160,15 +276,15 @@ def build_parser() -> argparse.ArgumentParser:
     compared.add_argument("--slot-end", default=None)
     compared.add_argument("--legacy-max-age-seconds", type=int, default=12600)
 
-    news = sub.add_parser("news")
+    news = sub.add_parser("news", help=help_for("news"))
     news_sub = news.add_subparsers(dest="news_command", required=True)
-    health = news_sub.add_parser("health", parents=[common])
+    health = news_sub.add_parser("health", parents=[common], help=help_for("news", "health"))
     health.add_argument("--mcm-config", required=True)
     health.add_argument("--offline", action="store_true", help="read stored feed health and do not fetch")
 
-    capture = sub.add_parser("legacy-capture")
+    capture = sub.add_parser("legacy-capture", help=help_for("legacy-capture"))
     capture_sub = capture.add_subparsers(dest="capture_command", required=True)
-    begin = capture_sub.add_parser("begin")
+    begin = capture_sub.add_parser("begin", help=help_for("legacy-capture", "begin"))
     begin.add_argument("--runs-dir", required=True)
     begin.add_argument("--run-id", required=True)
     begin.add_argument("--legacy-state", required=True)
@@ -179,41 +295,41 @@ def build_parser() -> argparse.ArgumentParser:
     begin.add_argument("--scope-hash", required=True)
     begin.add_argument("--account", action="append", required=True, help="label=<sha256 of the identity key>")
     begin.add_argument("--started-at", required=True)
-    recorded = capture_sub.add_parser("record")
+    recorded = capture_sub.add_parser("record", help=help_for("legacy-capture", "record"))
     recorded.add_argument("--runs-dir", required=True)
     recorded.add_argument("--run-id", required=True)
     recorded.add_argument("--window-json", action="append", default=[])
     recorded.add_argument("--event-json", action="append", default=[])
-    finished = capture_sub.add_parser("finish")
+    finished = capture_sub.add_parser("finish", help=help_for("legacy-capture", "finish"))
     finished.add_argument("--runs-dir", required=True)
     finished.add_argument("--run-id", required=True)
     finished.add_argument("--legacy-state", required=True)
     finished.add_argument("--exit-code", type=int, required=True)
     finished.add_argument("--finished-at", required=True)
 
-    outbox = sub.add_parser("outbox")
+    outbox = sub.add_parser("outbox", help=help_for("outbox"))
     outbox_sub = outbox.add_subparsers(dest="outbox_command", required=True)
-    pending = outbox_sub.add_parser("pending", parents=[common])
+    pending = outbox_sub.add_parser("pending", parents=[common], help=help_for("outbox", "pending"))
     pending.add_argument("--mcm-config", required=True)
-    ack = outbox_sub.add_parser("ack", parents=[common])
+    ack = outbox_sub.add_parser("ack", parents=[common], help=help_for("outbox", "ack"))
     ack.add_argument("--mcm-config", required=True)
     ack.add_argument("--id", required=True, type=int)
 
-    watchdog = sub.add_parser("watchdog", parents=[common])
+    watchdog = sub.add_parser("watchdog", parents=[common], help=help_for("watchdog"))
     watchdog.add_argument("--mcm-config", required=True)
     watchdog.add_argument("--no-send", action="store_true")
 
-    monitor = sub.add_parser("monitor")
+    monitor = sub.add_parser("monitor", help=help_for("monitor"))
     monitor_sub = monitor.add_subparsers(dest="monitor_command", required=True)
-    plan = monitor_sub.add_parser("plan", parents=[common])
+    plan = monitor_sub.add_parser("plan", parents=[common], help=help_for("monitor", "plan"))
     plan.add_argument("--mcm-config", required=True)
 
-    egress = sub.add_parser("egress-doctor", parents=[common])
+    egress = sub.add_parser("egress-doctor", parents=[common], help=help_for("egress-doctor"))
     egress.add_argument("--mcm-config", default=None)
     egress.add_argument("--egress-config", default=None)
     egress.add_argument("--qualification", choices=("formal", "preview"), default="formal")
     egress.add_argument("--mode", choices=("system", "doh"), default=None)
-    init = sub.add_parser("init", parents=[common], help="write a read-only monitor profile")
+    init = sub.add_parser("init", parents=[common], help=help_for("init"))
     init.add_argument("--dir", dest="directory", default=None, help="private directory (default: XDG config dir)")
     init.add_argument("--from", dest="answers_from", default=None, help="non-interactive answers JSON")
     init.add_argument("--yes", action="store_true", help="record data-sharing consent and write files")
@@ -222,7 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
     service = sub.add_parser(
         "install-service",
         parents=[common],
-        help="print a dry-run install plan; units stay disabled without --apply",
+        help=help_for("install-service"),
     )
     service.add_argument("--dry-run", action="store_true", help="print the plan and do not enable units")
     service.add_argument("--apply", action="store_true", help="install rendered units; refused when omitted")
@@ -241,9 +357,9 @@ def build_parser() -> argparse.ArgumentParser:
     service.add_argument("--offset-minutes", type=int, default=5)
     service.add_argument("--legacy-executable", default=None)
 
-    relations = sub.add_parser("relations", parents=[common])
+    relations = sub.add_parser("relations", parents=[common], help=help_for("relations"))
     relations_sub = relations.add_subparsers(dest="relations_command", required=True)
-    inbound = relations_sub.add_parser("inbound", parents=[common])
+    inbound = relations_sub.add_parser("inbound", parents=[common], help=help_for("relations", "inbound"))
     inbound.add_argument("--mcm-config", required=True)
     inbound.add_argument("--seed", action="append", default=None, help="address to read; repeat to add another")
     inbound.add_argument("--network", action="append", default=None, help="limit the read to this network; repeat to add another")
@@ -253,7 +369,7 @@ def build_parser() -> argparse.ArgumentParser:
     inbound.add_argument("--dry-run", action="store_true", help="print the disclosure plan and do not send")
     inbound.add_argument("--yes", action="store_true", help="send the disclosed reads")
     inbound.add_argument("--markdown", action="store_true", help="also write a Markdown report next to the JSON result")
-    expand = relations_sub.add_parser("expand", parents=[common])
+    expand = relations_sub.add_parser("expand", parents=[common], help=help_for("relations", "expand"))
     expand.add_argument("--mcm-config", required=True)
     expand.add_argument("--payer", required=True)
     expand.add_argument("--network", action="append", required=True, help="network to read; repeat to add another network in the same family")
@@ -266,6 +382,7 @@ def build_parser() -> argparse.ArgumentParser:
     expand.add_argument("--dry-run", action="store_true", help="print the disclosure plan and do not send")
     expand.add_argument("--yes", action="store_true", help="send the disclosed reads")
     expand.add_argument("--markdown", action="store_true", help="also write a Markdown report next to the JSON result")
+    sub.add_parser("capabilities", help=help_for("capabilities"))
     return parser
 
 
@@ -280,6 +397,8 @@ def dispatch(
     notification_resolve: Any = None,
     service_runner: Any = None,
 ) -> tuple[dict, int]:
+    if args.command == "capabilities":
+        return _agent_capabilities(), 0
     if args.command == "egress-doctor":
         return _egress_doctor(args, egress_hooks)
     if args.command == "doctor":

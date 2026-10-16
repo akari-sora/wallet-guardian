@@ -4,6 +4,10 @@ Sources: ``pyproject.toml``, ``guardian.__version__`` when that assignment is
 present, the ``guardian`` entry in ``uv.lock``, the first versioned changelog heading,
 and ``release/manifest.draft.json``.
 
+When the files exist, this also checks ``agent-capabilities.json`` and the
+wallet-guardian skill ``metadata.version``. A checkout that does not contain
+those files omits them.
+
 PEP 440 ``0.4.0rc4`` maps to ``v0.4.0-rc.4``.
 This tool does not create a tag.
 """
@@ -54,13 +58,20 @@ def collect_versions(root: Path) -> dict[str, str | None]:
     change_match = headings[0] if headings else None
     manifest = json.loads((root / "release" / "manifest.draft.json").read_text(encoding="utf-8"))
     manifest_version = manifest.get("version") if isinstance(manifest, dict) else None
-    return {
+    found: dict[str, str | None] = {
         "pyproject": None if py_match is None else py_match.group(1),
         "guardian": guardian,
         "uv_lock": lock,
         "changelog": change_match,
         "manifest": manifest_version if isinstance(manifest_version, str) else None,
     }
+    capabilities = _optional_capabilities_version(root)
+    if capabilities is not None:
+        found["capabilities"] = capabilities
+    skill = _optional_skill_version(root)
+    if skill is not None:
+        found["skill"] = skill
+    return found
 
 
 def consistency_errors(root: Path) -> list[str]:
@@ -105,6 +116,32 @@ def main(argv: list[str] | None = None) -> int:
     }
     sys.stdout.write(json.dumps(report, indent=2) + "\n")
     return 0 if report["ok"] else 1
+
+
+def _optional_capabilities_version(root: Path) -> str | None:
+    path = root / "src" / "guardian" / "_resources" / "agent-capabilities.json"
+    if not path.is_file():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("version"), str):
+        raise ValueError("capabilities version missing")
+    return payload["version"]
+
+
+def _optional_skill_version(root: Path) -> str | None:
+    path = root.parent / "skills" / "wallet-guardian" / "SKILL.md"
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith("---\n"):
+        raise ValueError("skill frontmatter missing")
+    end = text.find("\n---\n", 4)
+    if end < 0:
+        raise ValueError("skill frontmatter missing")
+    match = re.search(r'(?m)^  version:\s*"([^"]+)"\s*$', text[4:end])
+    if match is None:
+        raise ValueError("skill metadata.version missing")
+    return match.group(1)
 
 
 def _lock_version(text: str) -> str | None:

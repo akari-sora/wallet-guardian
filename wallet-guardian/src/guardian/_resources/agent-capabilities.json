@@ -1,0 +1,1201 @@
+{
+  "version": "0.4.0rc4",
+  "classes": {
+    "A_read_only_offline": "No network. Does not write any local state.",
+    "B_network_requires_owner_ok": "Contacts a configured host or resolver. The owner must agree before an agent runs it.",
+    "C_writes_local_state_owner_decides": "Writes local state, or is an install decision the owner must make. It does not broadcast.",
+    "D_never_from_agent": "An agent must not run this command."
+  },
+  "exit_codes": [
+    {
+      "code": 0,
+      "meaning": "ok"
+    },
+    {
+      "code": 1,
+      "meaning": "general error, or install-service when nothing was installed"
+    },
+    {
+      "code": 2,
+      "meaning": "config error, consent required, or bad arguments"
+    },
+    {
+      "code": 3,
+      "meaning": "degraded or stale"
+    },
+    {
+      "code": 4,
+      "meaning": "security error"
+    }
+  ],
+  "gap_rules": [
+    "These states are gaps. Do not describe them as safe, as zero, or as complete: credential_missing, partial, unknown, error, blocked, identity_unreadable, rate_limited, plan_not_supported, feed_not_supplied, expansion_pending, not_observable, unsupported, degraded, stale.",
+    "Exit code 3 is not success.",
+    "An empty outbox is not an all-clear.",
+    "live_verified false is not a live pass. A canary value of NOT_RUN is not a completed canary.",
+    "A missing or unknown price stays null. A failed read is not a zero balance.",
+    "approvals returns status PARTIAL because allowance history is not indexed.",
+    "action plan returns BLOCKED for an ordinary intent. That is not a finished plan.",
+    "A watch-only address is not proof of control."
+  ],
+  "classification_notes": [
+    {
+      "id": "actions-list",
+      "note": "actions list is C_writes_local_state_owner_decides because opening the local database can create a missing --db file or apply additive migrations. The plan list did not name this command. dispatch sends actions to the local stored-claims reader."
+    },
+    {
+      "id": "watchdog-no-send",
+      "note": "watchdog with the no-send flag is C_writes_local_state_owner_decides, not B. Watchdog.evaluate and deliver(mode=no_send) do not open a socket. They persist monitor health and may insert alerts."
+    },
+    {
+      "id": "news-health",
+      "note": "news health never fetches, with or without the offline flag. It opens the monitor database, so the class is C_writes_local_state_owner_decides, not A."
+    },
+    {
+      "id": "balance-probe",
+      "note": "balance-probe without the no-send flag raises ConfigError and exits 2. It does not send, so there is no D variant. The successful command is B, requires the no-send flag, and writes the probe database."
+    },
+    {
+      "id": "install-service-dry-run",
+      "note": "install-service without apply does not write unit files unless the output flag is set, and it exits 1 because installed is false. The class stays C. Exit 1 is not a reason to pass apply. Passing apply together with dry-run stays D, because an agent must not pass apply."
+    },
+    {
+      "id": "legacy-offline",
+      "note": "replay, compare-legacy, and legacy-capture do not open a socket. They stay D because they are legacy paths. replay requires the no-send flag. legacy-capture writes capture files."
+    },
+    {
+      "id": "relations-dry-run",
+      "note": "relations dry-run still writes a result under the state directory and does not send. Every form, including dry-run, stays D."
+    },
+    {
+      "id": "explain-refresh",
+      "note": "explain with the refresh flag re-reads history over the network and writes an explanation revision. The class is B."
+    },
+    {
+      "id": "doctor-writes",
+      "note": "Offline doctor is C_writes_local_state_owner_decides. doctor --live, providers, and providers verify stay B_network_requires_owner_ok. All of them write environment_report.json, source_registry.json, and provider_benchmark.json in the state directory, and they write then delete .write-probe."
+    },
+    {
+      "id": "sqlite-open",
+      "note": "Opening a monitor database can create the file or apply additive migrations. That is writes_local_state. This build has no read-only database open. Commands that do not open a database and do not write a file stay A."
+    },
+    {
+      "id": "install-service-apply-dry-run",
+      "note": "install-service allows --apply and --dry-run together. dry-run wins, so units are not enabled. Without --output, unit files are not written. With --output, rendered units are written. Every variant that includes --apply is D_never_from_agent. An agent must not pass --apply."
+    }
+  ],
+  "commands": [
+    {
+      "path": [
+        "doctor"
+      ],
+      "help": "offline host and credential report unless the live flag is set",
+      "variants": [
+        {
+          "id": "doctor",
+          "when": "live flag omitted",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Writes environment_report.json, source_registry.json, and provider_benchmark.json in the state directory (GUARDIAN_STATE_DIR, otherwise $XDG_STATE_HOME/guardian, otherwise ~/.local/state/guardian). Also creates that directory, writes .write-probe, and deletes it. Does not probe and does not open the monitor database. Optional mcm-config only names credentials."
+        },
+        {
+          "id": "doctor --live",
+          "when": "live flag set",
+          "class": "B_network_requires_owner_ok",
+          "network": true,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Bounded provider probe. Writes environment_report.json, source_registry.json, and provider_benchmark.json in the state directory (GUARDIAN_STATE_DIR, otherwise $XDG_STATE_HOME/guardian, otherwise ~/.local/state/guardian). Also creates that directory, writes .write-probe, and deletes it. With mcm-config this remains the legacy provider probe and does not prove the selected profile."
+        }
+      ]
+    },
+    {
+      "path": [
+        "run-once"
+      ],
+      "help": "one monitor pass for a legacy config or a monitor profile",
+      "variants": [
+        {
+          "id": "run-once --mcm-config --no-send",
+          "when": "monitor profile and the no-send flag",
+          "class": "B_network_requires_owner_ok",
+          "network": true,
+          "writes_local_state": true,
+          "requires_no_send": true,
+          "requires_yes": false,
+          "notes": "Reads configured endpoints and writes local coverage, alerts, and outbox rows. It does not hand the outbox to a sender. May create the monitor database, or apply additive migrations to an existing database."
+        },
+        {
+          "id": "run-once --mcm-config",
+          "when": "monitor profile without the no-send flag",
+          "class": "D_never_from_agent",
+          "network": true,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "May construct a sender and hand pending outbox rows to it. May create the monitor database, or apply additive migrations to an existing database."
+        },
+        {
+          "id": "run-once --config",
+          "when": "legacy config path",
+          "class": "D_never_from_agent",
+          "network": true,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Legacy path. It contacts the legacy RPC and writes the legacy database. Creates the legacy database when the file is missing, and may apply migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "balance-probe"
+      ],
+      "help": "read balances into probe state; the no-send flag is required",
+      "variants": [
+        {
+          "id": "balance-probe --no-send",
+          "when": "no-send flag set",
+          "class": "B_network_requires_owner_ok",
+          "network": true,
+          "writes_local_state": true,
+          "requires_no_send": true,
+          "requires_yes": false,
+          "notes": "Omitting the no-send flag exits 2 and does not send. The probe writes its state file. The default trigger may start one run-once that also passes the no-send flag. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "snapshot"
+      ],
+      "help": "print the latest stored snapshot",
+      "variants": [
+        {
+          "id": "snapshot",
+          "when": "always",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Reads stored rows when a database is opened. Passing --db for a missing file creates the database and applies the schema. With no --db and no default guardian.sqlite, the command returns empty and does not create a file. Opening an existing database may apply additive migrations."
+        }
+      ]
+    },
+    {
+      "path": [
+        "reconcile"
+      ],
+      "help": "count stored items without a live reconciliation",
+      "variants": [
+        {
+          "id": "reconcile",
+          "when": "always",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "The handler states that no live reconciliation was performed. Passing --db for a missing file creates the database and applies the schema. With no --db and no default guardian.sqlite, the command returns empty and does not create a file. Opening an existing database may apply additive migrations."
+        }
+      ]
+    },
+    {
+      "path": [
+        "claims"
+      ],
+      "help": "list stored Lista claim rows from the local database",
+      "variants": [
+        {
+          "id": "claims",
+          "when": "always",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Local rows only. wallet_request_allowed stays false. Passing --db for a missing file creates the database and applies the schema. With no --db and no default guardian.sqlite, the command returns empty and does not create a file. Opening an existing database may apply additive migrations."
+        }
+      ]
+    },
+    {
+      "path": [
+        "providers"
+      ],
+      "help": "legacy provider probe group",
+      "variants": [
+        {
+          "id": "providers",
+          "when": "subcommand required",
+          "class": "B_network_requires_owner_ok",
+          "network": true,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "The only child is verify, and dispatch runs a live legacy probe. That probe writes the three doctor report files in the state directory and the short-lived .write-probe."
+        }
+      ]
+    },
+    {
+      "path": [
+        "providers",
+        "verify"
+      ],
+      "help": "legacy provider probe; does not prove a selected profile's connectivity",
+      "variants": [
+        {
+          "id": "providers verify",
+          "when": "always",
+          "class": "B_network_requires_owner_ok",
+          "network": true,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Calls doctor with live set and writes the three doctor report files in the state directory. It does not prove the selected profile."
+        }
+      ]
+    },
+    {
+      "path": [
+        "wallets"
+      ],
+      "help": "legacy wallet command group",
+      "variants": [
+        {
+          "id": "wallets",
+          "when": "subcommand required",
+          "class": "D_never_from_agent",
+          "network": true,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "dispatch calls the legacy run_once path. Creates the legacy database when the file is missing, and may apply migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "wallets",
+        "discover"
+      ],
+      "help": "legacy discovery through the old config file",
+      "variants": [
+        {
+          "id": "wallets discover",
+          "when": "legacy config flag required",
+          "class": "D_never_from_agent",
+          "network": true,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Legacy path. It runs the same writer as run-once with a legacy config. Creates the legacy database when the file is missing, and may apply migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "approvals"
+      ],
+      "help": "stored allowance view; history is not indexed",
+      "variants": [
+        {
+          "id": "approvals",
+          "when": "always",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Returns status PARTIAL and an empty item list. That partial result is a gap. Passing --db for a missing file creates the database and applies the schema. With no --db and no default guardian.sqlite, the command returns empty and does not create a file. Opening an existing database may apply additive migrations."
+        }
+      ]
+    },
+    {
+      "path": [
+        "explain"
+      ],
+      "help": "render one stored alert; the refresh flag re-reads history",
+      "variants": [
+        {
+          "id": "explain",
+          "when": "refresh flag omitted",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Reads one stored alert. A missing database file is not created. Opening an existing database may apply additive migrations."
+        },
+        {
+          "id": "explain --refresh",
+          "when": "refresh flag set",
+          "class": "B_network_requires_owner_ok",
+          "network": true,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Requires mcm-config or it exits 2. refresh_event re-reads history and stores an explanation revision. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "coverage"
+      ],
+      "help": "print stored or static coverage without a live probe",
+      "variants": [
+        {
+          "id": "coverage",
+          "when": "monitor profile omitted",
+          "class": "A_read_only_offline",
+          "network": false,
+          "writes_local_state": false,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "No monitor profile. Prints a static coverage record and does not open a database or probe hosts."
+        },
+        {
+          "id": "coverage --mcm-config",
+          "when": "monitor profile set",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Sets live_verified false and does not probe hosts. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "replay"
+      ],
+      "help": "replay a local fixture; the no-send flag is required",
+      "variants": [
+        {
+          "id": "replay --no-send",
+          "when": "local fixture and the no-send flag",
+          "class": "D_never_from_agent",
+          "network": false,
+          "writes_local_state": false,
+          "requires_no_send": true,
+          "requires_yes": false,
+          "notes": "Legacy path. It reads a local fixture and does not open a socket. Omitting the no-send flag is an error. A send method in the fixture exits 4 and is not sent."
+        }
+      ]
+    },
+    {
+      "path": [
+        "alerts"
+      ],
+      "help": "alert format check group",
+      "variants": [
+        {
+          "id": "alerts",
+          "when": "subcommand required",
+          "class": "A_read_only_offline",
+          "network": false,
+          "writes_local_state": false,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "The only child prints one dry-run alert and sets delivered false."
+        }
+      ]
+    },
+    {
+      "path": [
+        "alerts",
+        "test"
+      ],
+      "help": "print one dry-run alert and do not deliver it",
+      "variants": [
+        {
+          "id": "alerts test --dry-run",
+          "when": "dry-run flag required",
+          "class": "A_read_only_offline",
+          "network": false,
+          "writes_local_state": false,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "The dry-run flag is required by argparse. delivered is false. Nothing is sent."
+        }
+      ]
+    },
+    {
+      "path": [
+        "self-check"
+      ],
+      "help": "create a local self-check database and report table health",
+      "variants": [
+        {
+          "id": "self-check",
+          "when": "always",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Creates the self-check database (or the path given by the db flag) and reports whether expected tables exist."
+        }
+      ]
+    },
+    {
+      "path": [
+        "diagnose"
+      ],
+      "help": "print one stored task from the local database",
+      "variants": [
+        {
+          "id": "diagnose",
+          "when": "always",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Reads one stored task. wallet_request_allowed stays false. A missing database file is not created. Opening an existing database may apply additive migrations."
+        }
+      ]
+    },
+    {
+      "path": [
+        "actions"
+      ],
+      "help": "stored claim list group",
+      "variants": [
+        {
+          "id": "actions",
+          "when": "subcommand required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "The only child lists stored claims. Passing --db for a missing file creates the database and applies the schema. With no --db and no default guardian.sqlite, the command returns empty and does not create a file. Opening an existing database may apply additive migrations."
+        }
+      ]
+    },
+    {
+      "path": [
+        "actions",
+        "list"
+      ],
+      "help": "list stored Lista claims for one wallet label",
+      "variants": [
+        {
+          "id": "actions list",
+          "when": "wallet flag required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Same local reader as claims. The plan text did not name this command. Passing --db for a missing file creates the database and applies the schema. With no --db and no default guardian.sqlite, the command returns empty and does not create a file. Opening an existing database may apply additive migrations."
+        }
+      ]
+    },
+    {
+      "path": [
+        "action"
+      ],
+      "help": "unsigned local action views",
+      "variants": [
+        {
+          "id": "action",
+          "when": "subcommand required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "action plan does not open a database and does not write. simulate, export, status, and reconcile open an existing database and may apply additive migrations. A missing file is not created. None of them sign or broadcast."
+        }
+      ]
+    },
+    {
+      "path": [
+        "action",
+        "plan"
+      ],
+      "help": "refuse raw calldata; this does not plan a live transaction",
+      "variants": [
+        {
+          "id": "action plan",
+          "when": "intent file required",
+          "class": "A_read_only_offline",
+          "network": false,
+          "writes_local_state": false,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "An ordinary intent returns BLOCKED and does not write. A forbidden intent exits 4. This is not a finished plan. Does not open a database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "action",
+        "simulate"
+      ],
+      "help": "read a stored simulation without calling the network",
+      "variants": [
+        {
+          "id": "action simulate",
+          "when": "plan id required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Reads a stored task. It does not perform a live call. usable_as_live_evidence stays false. A missing database file is not created. Opening an existing database may apply additive migrations."
+        }
+      ]
+    },
+    {
+      "path": [
+        "action",
+        "export"
+      ],
+      "help": "export one stored unsigned task",
+      "variants": [
+        {
+          "id": "action export --unsigned-only",
+          "when": "unsigned-only flag required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "The unsigned-only flag is required. A stored signature is removed. wallet_request_allowed stays false. A missing database file is not created. Opening an existing database may apply additive migrations."
+        }
+      ]
+    },
+    {
+      "path": [
+        "action",
+        "status"
+      ],
+      "help": "read one stored task without chain reconciliation",
+      "variants": [
+        {
+          "id": "action status",
+          "when": "task id required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "reconciled_onchain stays false. A missing database file is not created. Opening an existing database may apply additive migrations."
+        }
+      ]
+    },
+    {
+      "path": [
+        "action",
+        "reconcile"
+      ],
+      "help": "read one stored task and leave on-chain completion unset",
+      "variants": [
+        {
+          "id": "action reconcile",
+          "when": "task id required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Does not mark postconditions complete. reconciled_onchain stays false. A missing database file is not created. Opening an existing database may apply additive migrations."
+        }
+      ]
+    },
+    {
+      "path": [
+        "rescue"
+      ],
+      "help": "report that rescue packaging is blocked in this build",
+      "variants": [
+        {
+          "id": "rescue",
+          "when": "always",
+          "class": "A_read_only_offline",
+          "network": false,
+          "writes_local_state": false,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Static report. status is BLOCKED. Does not open a database and does not write a file."
+        }
+      ]
+    },
+    {
+      "path": [
+        "operation-coverage"
+      ],
+      "help": "print the static operation coverage record",
+      "variants": [
+        {
+          "id": "operation-coverage",
+          "when": "always",
+          "class": "A_read_only_offline",
+          "network": false,
+          "writes_local_state": false,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Static record. wallet_requests_enabled is false. Does not open a database and does not write a file."
+        }
+      ]
+    },
+    {
+      "path": [
+        "workbench"
+      ],
+      "help": "print the static workbench status",
+      "variants": [
+        {
+          "id": "workbench",
+          "when": "always",
+          "class": "A_read_only_offline",
+          "network": false,
+          "writes_local_state": false,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Static status. wallet_request_allowed is false. Evidence fields may say UNTESTED. Does not open a database and does not write a file."
+        }
+      ]
+    },
+    {
+      "path": [
+        "config"
+      ],
+      "help": "monitor profile command group",
+      "variants": [
+        {
+          "id": "config",
+          "when": "subcommand required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "The only child validates a profile offline and opens the monitor database. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "config",
+        "validate"
+      ],
+      "help": "check a monitor profile offline",
+      "variants": [
+        {
+          "id": "config validate",
+          "when": "monitor profile required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Opens the profile and reports source status. live_verified is false. It does not probe hosts. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "sources"
+      ],
+      "help": "source command group",
+      "variants": [
+        {
+          "id": "sources",
+          "when": "subcommand required",
+          "class": "B_network_requires_owner_ok",
+          "network": true,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "The only child probes enabled sources and opens the monitor database. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "sources",
+        "probe"
+      ],
+      "help": "contact enabled RPC sources and report chain identity",
+      "variants": [
+        {
+          "id": "sources probe",
+          "when": "monitor profile required",
+          "class": "B_network_requires_owner_ok",
+          "network": true,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Enabled RPC sources get a chain-id or genesis read. Disabled or blocked sources are not probed. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "export"
+      ],
+      "help": "print a public redacted profile",
+      "variants": [
+        {
+          "id": "export --public",
+          "when": "public flag required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Omitting the public flag exits 1 before the database is opened. The public form redacts the profile and does not probe hosts. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "compare-legacy"
+      ],
+      "help": "compare local legacy state with the monitor database",
+      "variants": [
+        {
+          "id": "compare-legacy",
+          "when": "legacy state file required",
+          "class": "D_never_from_agent",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Legacy path. It compares local files and the monitor database. It does not open a socket. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "news"
+      ],
+      "help": "news command group",
+      "variants": [
+        {
+          "id": "news",
+          "when": "subcommand required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "The only child reads stored feed health, does not fetch, and opens the monitor database. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "news",
+        "health"
+      ],
+      "help": "read stored feed health; this command does not fetch",
+      "variants": [
+        {
+          "id": "news health",
+          "when": "monitor profile required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Does not fetch even when the offline flag is omitted. live_verified and live_pass stay false. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "legacy-capture"
+      ],
+      "help": "legacy capture command group",
+      "variants": [
+        {
+          "id": "legacy-capture",
+          "when": "subcommand required",
+          "class": "D_never_from_agent",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Legacy path. Every child writes capture files and does not open a socket."
+        }
+      ]
+    },
+    {
+      "path": [
+        "legacy-capture",
+        "begin"
+      ],
+      "help": "start a legacy capture directory",
+      "variants": [
+        {
+          "id": "legacy-capture begin",
+          "when": "capture arguments required",
+          "class": "D_never_from_agent",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Writes a capture directory on this machine."
+        }
+      ]
+    },
+    {
+      "path": [
+        "legacy-capture",
+        "record"
+      ],
+      "help": "append windows and events to a legacy capture",
+      "variants": [
+        {
+          "id": "legacy-capture record",
+          "when": "capture arguments required",
+          "class": "D_never_from_agent",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Appends local capture records."
+        }
+      ]
+    },
+    {
+      "path": [
+        "legacy-capture",
+        "finish"
+      ],
+      "help": "finish a legacy capture directory",
+      "variants": [
+        {
+          "id": "legacy-capture finish",
+          "when": "capture arguments required",
+          "class": "D_never_from_agent",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Finishes a local capture directory."
+        }
+      ]
+    },
+    {
+      "path": [
+        "outbox"
+      ],
+      "help": "local outbox command group",
+      "variants": [
+        {
+          "id": "outbox",
+          "when": "subcommand required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Group. pending and ack both open the monitor database. pending lists rows. ack records a local receipt. Neither sends. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "outbox",
+        "pending"
+      ],
+      "help": "list pending outbox rows without sending",
+      "variants": [
+        {
+          "id": "outbox pending",
+          "when": "monitor profile required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Lists pending rows. An empty list is not an all-clear. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "outbox",
+        "ack"
+      ],
+      "help": "record a local acknowledgement for one outbox row",
+      "variants": [
+        {
+          "id": "outbox ack",
+          "when": "row id required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Records a local acknowledgement. It does not send. A missing row exits 2. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "watchdog"
+      ],
+      "help": "evaluate local monitor health and maybe hand off the outbox",
+      "variants": [
+        {
+          "id": "watchdog --no-send",
+          "when": "no-send flag set",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": true,
+          "requires_yes": false,
+          "notes": "Does not open a socket. It writes monitor health and may insert alerts. This is not class B. May create the monitor database, or apply additive migrations to an existing database."
+        },
+        {
+          "id": "watchdog",
+          "when": "no-send flag omitted",
+          "class": "D_never_from_agent",
+          "network": true,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Uses the send path and may call a configured sender. It also writes monitor health. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "monitor"
+      ],
+      "help": "schedule command group",
+      "variants": [
+        {
+          "id": "monitor",
+          "when": "subcommand required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "The only child describes the schedule, does not start it, and opens the monitor database. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "monitor",
+        "plan"
+      ],
+      "help": "describe the schedule; this does not start it",
+      "variants": [
+        {
+          "id": "monitor plan",
+          "when": "monitor profile required",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Prints the schedule from the profile. started stays false. live_verified stays false. May create the monitor database, or apply additive migrations to an existing database."
+        }
+      ]
+    },
+    {
+      "path": [
+        "egress-doctor"
+      ],
+      "help": "diagnose host DNS and egress without opening wallet secrets",
+      "variants": [
+        {
+          "id": "egress-doctor",
+          "when": "always",
+          "class": "B_network_requires_owner_ok",
+          "network": true,
+          "writes_local_state": false,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Resolves and may connect for host diagnosis. It does not open account files. Any non-OK verdict, such as BLOCKED_EGRESS, exits 4."
+        }
+      ]
+    },
+    {
+      "path": [
+        "init"
+      ],
+      "help": "write a read-only monitor profile",
+      "variants": [
+        {
+          "id": "init",
+          "when": "consent required before writing",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": true,
+          "notes": "Without consent the command writes nothing and exits 2. The yes flag, or typing yes, records consent and writes the profile. It does not start a sender."
+        }
+      ]
+    },
+    {
+      "path": [
+        "install-service"
+      ],
+      "help": "print a dry-run install plan; units stay disabled without --apply",
+      "variants": [
+        {
+          "id": "install-service --dry-run",
+          "when": "apply omitted and the output flag omitted",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": false,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Prints a plan and exits 1 because installed is false. Exit 1 is not a reason to pass apply. It does not fetch code and it does not write unit files."
+        },
+        {
+          "id": "install-service --output",
+          "when": "apply omitted and the output flag set",
+          "class": "C_writes_local_state_owner_decides",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Writes rendered unit files under the output directory and does not enable them. Exits 1 because installed is false. It does not fetch code."
+        },
+        {
+          "id": "install-service --apply",
+          "when": "apply set and dry-run omitted",
+          "class": "D_never_from_agent",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "An agent must not pass apply. systemd or cron apply writes units and enables them. launchd_agent apply does not call launchctl and writes only when output is set. fetches_code stays false."
+        },
+        {
+          "id": "install-service --apply --dry-run",
+          "when": "apply set, dry-run set, and the output flag omitted",
+          "class": "D_never_from_agent",
+          "network": false,
+          "writes_local_state": false,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "dry-run wins, so units are not enabled and installed stays false (exit 1). Without output, unit files are not written. An agent must not pass apply, including together with dry-run. It does not fetch code."
+        },
+        {
+          "id": "install-service --apply --dry-run --output",
+          "when": "apply set, dry-run set, and the output flag set",
+          "class": "D_never_from_agent",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "dry-run wins, so units are not enabled and installed stays false (exit 1). The output flag still writes rendered unit files and does not enable them. An agent must not pass apply. It does not fetch code."
+        }
+      ]
+    },
+    {
+      "path": [
+        "relations"
+      ],
+      "help": "manual inbound and payer reads; an agent must not run this",
+      "variants": [
+        {
+          "id": "relations",
+          "when": "any child, including dry-run",
+          "class": "D_never_from_agent",
+          "network": true,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Group. Both children are D in every form. Only the owner may run them, by hand."
+        }
+      ]
+    },
+    {
+      "path": [
+        "relations",
+        "inbound"
+      ],
+      "help": "manual inbound read; an agent must not run this",
+      "variants": [
+        {
+          "id": "relations inbound",
+          "when": "dry-run, or yes omitted",
+          "class": "D_never_from_agent",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Still forbidden for an agent. Writes a result under the state directory and does not send. Missing consent exits 2."
+        },
+        {
+          "id": "relations inbound --yes",
+          "when": "yes set and dry-run omitted",
+          "class": "D_never_from_agent",
+          "network": true,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": true,
+          "notes": "Performs the disclosed reads. An agent must not run this."
+        }
+      ]
+    },
+    {
+      "path": [
+        "relations",
+        "expand"
+      ],
+      "help": "manual payer expansion; an agent must not run this",
+      "variants": [
+        {
+          "id": "relations expand",
+          "when": "dry-run, or yes omitted",
+          "class": "D_never_from_agent",
+          "network": false,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Still forbidden for an agent. Writes a result under the state directory and does not send. Missing consent exits 2."
+        },
+        {
+          "id": "relations expand --yes",
+          "when": "yes set and dry-run omitted",
+          "class": "D_never_from_agent",
+          "network": true,
+          "writes_local_state": true,
+          "requires_no_send": false,
+          "requires_yes": true,
+          "notes": "Performs the disclosed reads. An agent must not run this."
+        }
+      ]
+    },
+    {
+      "path": [
+        "capabilities"
+      ],
+      "help": "print the static agent capability catalog",
+      "variants": [
+        {
+          "id": "capabilities",
+          "when": "always",
+          "class": "A_read_only_offline",
+          "network": false,
+          "writes_local_state": false,
+          "requires_no_send": false,
+          "requires_yes": false,
+          "notes": "Prints this catalog. It does not open a socket and does not write a file."
+        }
+      ]
+    }
+  ]
+}
