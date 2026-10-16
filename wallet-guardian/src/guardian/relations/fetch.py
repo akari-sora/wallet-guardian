@@ -175,8 +175,16 @@ def read_tron(
     else:
         window["only_to"] = "true"
     path = f"/v1/accounts/{address}/transactions/trc20"
+    page_lengths: list[int] = []
+
+    def accept_page(batch: list[Any]) -> bool:
+        page_lengths.append(len(batch))
+        return True
+
     try:
-        walk = client.history(path, window, None, page_cap=page_cap)
+        walk = client.history(
+            path, window, None, page_cap=page_cap, accept_page=accept_page,
+        )
     except BudgetExhausted as exc:
         return _tron_outcome("gap", str(getattr(exc, "reason", "") or "") or "budget_exhausted")
     except SecurityError as exc:
@@ -198,7 +206,14 @@ def read_tron(
     unreadable = False
     zeros = 0
     contract: bool | None = None
-    for row in walk.rows:
+    # The page that repeated a fingerprint is already in walk.rows. That cursor
+    # is unusable, so those rows are not counted. Earlier pages stay.
+    rows = walk.rows
+    if walk.reason == "repeated_fingerprint" and page_lengths:
+        drop = page_lengths[-1]
+        if drop > 0:
+            rows = rows[:-drop]
+    for row in rows:
         parsed = _tron_edge(row, address, direction, network, source_id, stop_timestamp)
         if parsed == "bad":
             unreadable = True

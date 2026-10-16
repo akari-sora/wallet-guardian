@@ -257,11 +257,10 @@ def test_tron_second_page_failure_keeps_the_first_page_rows(
         assert read["parts"] == _gap_parts(reason)
         assert read["ignored_zero_value"] == 1
         assert [row["address"] for row in body["counterparties"]] == [r1.TRON_SEED]
-        assert body["counterparties"][0]["count"] == (2 if reason == "repeated_fingerprint" else 1)
-        assert body["counterparties"][0]["assets"][0]["raw_amount"] == (
-            "13" if reason == "repeated_fingerprint" else "9"
-        )
+        assert body["counterparties"][0]["count"] == 1
+        assert body["counterparties"][0]["assets"][0]["raw_amount"] == "9"
         assert inbound_good in body["counterparties"][0]["tx_hashes"]
+        assert "44" * 32 not in body["counterparties"][0]["tx_hashes"]
         assert "33" * 32 not in body["counterparties"][0]["tx_hashes"]
         assert "22" * 32 not in body["counterparties"][0]["tx_hashes"]
         assert len(backend.calls) == 2
@@ -287,15 +286,113 @@ def test_tron_second_page_failure_keeps_the_first_page_rows(
         assert read["ignored_zero_value"] == 1
         assert [row["address"] for row in body["co_recipients"]] == [r1.TRON_DEST]
         assert r1.TRON_SEED not in [row["address"] for row in body["co_recipients"]]
-        assert body["co_recipients"][0]["count"] == (2 if reason == "repeated_fingerprint" else 1)
-        assert body["co_recipients"][0]["assets"][0]["raw_amount"] == (
-            "13" if reason == "repeated_fingerprint" else "9"
-        )
+        assert body["co_recipients"][0]["count"] == 1
+        assert body["co_recipients"][0]["assets"][0]["raw_amount"] == "9"
         assert expand_good in body["co_recipients"][0]["tx_hashes"]
+        assert "99" * 32 not in body["co_recipients"][0]["tx_hashes"]
         assert "88" * 32 not in body["co_recipients"][0]["tx_hashes"]
         assert "22" * 32 not in body["co_recipients"][0]["tx_hashes"]
         assert len(backend.calls) == 2
         _assert_trc20_only(backend)
+
+
+def _identical_trc20_pages(sender: str, recipient: str, digest: str, fingerprint: str) -> list:
+    """Two responses with the same rows and the same fingerprint."""
+    return [
+        r1.tron_page([r1.tron_row(sender, recipient, "9", digest)], fingerprint),
+        r1.tron_page([r1.tron_row(sender, recipient, "9", digest)], fingerprint),
+    ]
+
+
+def _assert_repeated_gap(read: dict) -> None:
+    assert read["read_status"] == "gap"
+    assert read["reason"] == "repeated_fingerprint"
+    assert read["parts"] == _gap_parts("repeated_fingerprint")
+
+
+def test_tron_resent_page_is_counted_once_on_inbound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Requesting fingerprint X returns the same page and the same fingerprint."""
+    digest = "ab" * 32
+    backend = _tron_backend(tmp_path, monkeypatch)
+    backend.add(
+        lambda call: "transactions/trc20" in call.url,
+        _identical_trc20_pages(r1.TRON_SEED, r1.TRON_PAYER, digest, "X"),
+    )
+    code, body = r1.invoke(capsys, r1.inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--seed", r1.TRON_PAYER, "--network", "tron-mainnet",
+    ), backend)
+    assert code == 0, body
+    read = body["reads"][0]
+    _assert_repeated_gap(read)
+    assert [row["address"] for row in body["counterparties"]] == [r1.TRON_SEED]
+    assert body["counterparties"][0]["count"] == 1
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "9"
+    assert body["counterparties"][0]["tx_hashes"] == [digest]
+    assert len(backend.calls) == 2
+    assert r1.call_query(backend.calls[1]).get("fingerprint") == ["X"]
+    _assert_trc20_only(backend)
+
+
+def test_tron_resent_page_is_counted_once_on_expand(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The same resent page must not double an expand co-recipient."""
+    digest = "cd" * 32
+    backend = _tron_backend(tmp_path, monkeypatch)
+    backend.add(
+        lambda call: "transactions/trc20" in call.url,
+        _identical_trc20_pages(r1.TRON_PAYER, r1.TRON_DEST, digest, "X"),
+    )
+    code, body = r1.invoke(capsys, r1.expand_argv(
+        tmp_path / "monitor.json", "--yes", "--payer", r1.TRON_PAYER, "--network", "tron-mainnet",
+        "--seed", r1.TRON_SEED,
+    ), backend)
+    assert code == 0, body
+    read = body["reads"][0]
+    _assert_repeated_gap(read)
+    assert [row["address"] for row in body["co_recipients"]] == [r1.TRON_DEST]
+    assert body["co_recipients"][0]["count"] == 1
+    assert body["co_recipients"][0]["assets"][0]["raw_amount"] == "9"
+    assert body["co_recipients"][0]["tx_hashes"] == [digest]
+    assert len(backend.calls) == 2
+    assert r1.call_query(backend.calls[1]).get("fingerprint") == ["X"]
+    _assert_trc20_only(backend)
+
+
+def test_tron_page_pointing_back_at_an_earlier_fingerprint_is_not_counted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The third page's fingerprint is the first page's. That page is not counted."""
+    first = "11" * 32
+    second = "22" * 32
+    third_a = "33" * 32
+    third_b = "44" * 32
+    backend = _tron_backend(tmp_path, monkeypatch)
+    backend.add(lambda call: "transactions/trc20" in call.url, [
+        r1.tron_page([r1.tron_row(r1.TRON_SEED, r1.TRON_PAYER, "9", first)], "pageOne"),
+        r1.tron_page([r1.tron_row(r1.TRON_SEED, r1.TRON_PAYER, "4", second)], "pageTwo"),
+        r1.tron_page([
+            r1.tron_row(r1.TRON_SEED, r1.TRON_PAYER, "7", third_a),
+            r1.tron_row(r1.TRON_SEED, r1.TRON_PAYER, "1", third_b),
+        ], "pageOne"),
+    ])
+    code, body = r1.invoke(capsys, r1.inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--max-pages", "3", "--seed", r1.TRON_PAYER,
+        "--network", "tron-mainnet",
+    ), backend)
+    assert code == 0, body
+    read = body["reads"][0]
+    _assert_repeated_gap(read)
+    assert [row["address"] for row in body["counterparties"]] == [r1.TRON_SEED]
+    assert body["counterparties"][0]["count"] == 2
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "13"
+    assert body["counterparties"][0]["tx_hashes"] == [first, second]
+    assert third_a not in body["counterparties"][0]["tx_hashes"]
+    assert third_b not in body["counterparties"][0]["tx_hashes"]
+    assert len(backend.calls) == 3
+    _assert_trc20_only(backend)
 
 
 def _raise_history(monkeypatch: pytest.MonkeyPatch, exc: BaseException) -> None:
