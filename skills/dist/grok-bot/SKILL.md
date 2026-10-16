@@ -38,9 +38,9 @@ If `guardian` is installed and `guardian capabilities` returns `invalid choice`,
 - `C_writes_local_state_owner_decides`: writes local files or rows, or prints an install plan. Run only after the owner decides. Most view commands are in this class because opening the local monitor database can create it or apply additive migrations. Run those only after the owner agrees to that run. Offline `doctor` writes three report files in the state directory and is class C. `init` writes nothing until consent (the yes flag, or typing yes) and otherwise exits 2. `outbox pending` and `outbox ack` open the database. `outbox ack` records a local receipt and does not send. `self-check` creates a local database. `watchdog` with the no-send flag does not open a socket; it writes local health and alerts, so it is class C. `install-service` without apply prints a plan and exits 1 because nothing was installed. The output flag on that dry-run writes rendered units and still exits 1. That 1 is not a reason to pass apply. Passing apply together with dry-run is still forbidden.
 - `D_never_from_agent`: do not run these. That includes every form of `relations` (including dry-run), `install-service` with apply (including apply together with dry-run), `run-once` or `watchdog` without the no-send flag, and the legacy paths `run-once` with the legacy config flag, `wallets discover`, `legacy-capture`, `compare-legacy`, and `replay`.
 
-If this summary and `guardian capabilities` disagree, trust the command. The catalog is the source. A subcommand path the catalog does not list is class D. Do not run it. A flag that is named in a variant id and changes the class is class D when the catalog does not list that combination. Do not run it. Ordinary arguments a listed variant needs, such as a file path or `--db`, do not change the class.
+If this summary and `guardian capabilities` disagree, trust the command. The catalog is the source. A subcommand path the catalog does not list is class D. Do not run it. A flag that appears in any variant id of a subcommand must occur only in a combination that matches one listed variant exactly. Any other combination is class D. Do not run it. A flag that does not appear in any variant id of that subcommand does not change the class, for example `--db` on `snapshot`, `--tenant` on `init`, and `--news-input` on `run-once`.
 
-Top-level `guardian --help` and `guardian --version`, and `guardian <subcommand> --help`, are class A. They exit while arguments are parsed, before the command runs, and they do not open a database or a socket.
+Top-level `guardian --help` and `guardian --version`, and `guardian <subcommand> --help`, are class A. They exit while arguments are parsed, before the command runs, and they do not open a database or a socket. This does not relax any class D rule. Do not call `--help` under `relations` or any other class D path. `relations` is class D in every form.
 
 An owner's agreement covers the one run the owner answered. It is not standing consent for later runs, other commands, or other classes. Ask again each time.
 
@@ -121,9 +121,11 @@ The lines `Load API keys from the environment or gitignored .env.local` and `Rea
 
 If the owner pastes a seed phrase, private key, keystore, or API key into the chat, do not use it, repeat it, store it, or pass it to a command. Tell the owner that it is now exposed. API keys belong in the owner's own environment, set by the owner.
 
-A subcommand path the catalog does not list is class D. Do not run it. A flag that is named in a variant id and changes the class is class D when the catalog does not list that combination. Do not run it. Ordinary arguments a listed variant needs, such as a file path or `--db`, do not change the class.
+Agreement to any class B or class C command covers that one execution only. It is not standing consent.
 
-Top-level `guardian --help` and `guardian --version`, and `guardian <subcommand> --help`, are class A. They exit while arguments are parsed, before the command runs, and they do not open a database or a socket.
+A subcommand path the catalog does not list is class D. Do not run it. A flag that appears in any variant id of a subcommand must occur only in a combination that matches one listed variant exactly. Any other combination is class D. Do not run it. A flag that does not appear in any variant id of that subcommand does not change the class, for example `--db` on `snapshot`, `--tenant` on `init`, and `--news-input` on `run-once`.
+
+Top-level `guardian --help` and `guardian --version`, and `guardian <subcommand> --help`, are class A. They exit while arguments are parsed, before the command runs, and they do not open a database or a socket. This does not relax any class D rule. Do not call `--help` under `relations` or any other class D path. `relations` is class D in every form.
 
 #### Rules for changing this repository (do not apply when only operating the installed CLI)
 

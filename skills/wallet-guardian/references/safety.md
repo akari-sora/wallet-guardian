@@ -59,9 +59,11 @@ The lines `Load API keys from the environment or gitignored .env.local` and `Rea
 
 If the owner pastes a seed phrase, private key, keystore, or API key into the chat, do not use it, repeat it, store it, or pass it to a command. Tell the owner that it is now exposed. API keys belong in the owner's own environment, set by the owner.
 
-A subcommand path the catalog does not list is class D. Do not run it. A flag that is named in a variant id and changes the class is class D when the catalog does not list that combination. Do not run it. Ordinary arguments a listed variant needs, such as a file path or `--db`, do not change the class.
+Agreement to any class B or class C command covers that one execution only. It is not standing consent.
 
-Top-level `guardian --help` and `guardian --version`, and `guardian <subcommand> --help`, are class A. They exit while arguments are parsed, before the command runs, and they do not open a database or a socket.
+A subcommand path the catalog does not list is class D. Do not run it. A flag that appears in any variant id of a subcommand must occur only in a combination that matches one listed variant exactly. Any other combination is class D. Do not run it. A flag that does not appear in any variant id of that subcommand does not change the class, for example `--db` on `snapshot`, `--tenant` on `init`, and `--news-input` on `run-once`.
+
+Top-level `guardian --help` and `guardian --version`, and `guardian <subcommand> --help`, are class A. They exit while arguments are parsed, before the command runs, and they do not open a database or a socket. This does not relax any class D rule. Do not call `--help` under `relations` or any other class D path. `relations` is class D in every form.
 
 ## Rules for changing this repository (do not apply when only operating the installed CLI)
 

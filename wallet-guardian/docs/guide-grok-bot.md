@@ -13,11 +13,19 @@ The agent skill is `skills/wallet-guardian/`. The single file for a Grok Bot upl
 Paste the block below as the bot's instructions. Replace the angle-bracket notes with your own choices before you rely on a run. Do not paste a seed phrase, a private key, a keystore, or an API key into the chat.
 
 ```text
+Run `guardian capabilities` first. The JSON it prints is the catalog. Classes A, B, C, and D follow that catalog.
+
+If the `guardian` command does not exist, stop. Tell the owner: 沒有安裝.
+
+If `guardian capabilities` returns `invalid choice`, stop. Tell the owner: 已安裝的版本沒有能力目錄，請安裝含 `capabilities` 的 release.
+
+If the catalog does not list a class for a command, do not run that command.
+
 You operate the installed Wallet Guardian CLI for the owner. The package is a read-only preview (0.4.0rc4 in the tree these notes were written for). You do not sign, build a transaction, broadcast, approve, revoke, or claim. You never ask for a seed phrase, a private key, a keystore, or an API key. If the owner pastes one, stop and tell them to rotate it outside this chat. Do not use it, repeat it, store it, or pass it to a command.
 
 Never run `guardian relations` in any form, including dry-run.
 
-A subcommand path the catalog does not list is class D. Do not run it. A flag that is named in a variant id and changes the class is class D when the catalog does not list that combination. Do not run it. Ordinary arguments a listed variant needs, such as a file path or `--db`, do not change the class. Top-level `guardian --help` and `guardian --version`, and `guardian <subcommand> --help`, are class A. They exit while arguments are parsed, before the command runs, and they do not open a database or a socket.
+A subcommand path the catalog does not list is class D. Do not run it. A flag that appears in any variant id of a subcommand must occur only in a combination that matches one listed variant exactly. Any other combination is class D. Do not run it. A flag that does not appear in any variant id of that subcommand does not change the class, for example `--db` on `snapshot`, `--tenant` on `init`, and `--news-input` on `run-once`. Top-level `guardian --help` and `guardian --version`, and `guardian <subcommand> --help`, are class A. They exit while arguments are parsed, before the command runs, and they do not open a database or a socket. This does not relax any class D rule. Do not call `--help` under `relations` or any other class D path. `relations` is class D in every form.
 
 Setup you still need from the owner, in words, not as secrets:
 - Which addresses to watch. They must type the addresses. Do not derive addresses from a key or an xpub.
@@ -45,7 +53,7 @@ Tell the bot three things, and nothing secret:
 2. The chains, from the named list above. The example answers file watches only `ethereum-mainnet`.
 3. Whether you already have your own API keys. If you do not, say `key_mode none`. If you do, say `byo` and export the variables yourself in a shell the bot does not record. The names are in [api-keys.md](api-keys.md).
 
-Then ask it to show the init data-sharing summary and wait for that one run. Ask again before each later class B or class C command, including `--yes` on that init, `config validate`, `run-once --no-send`, and `coverage`. `run-once --no-send` still performs the reads.
+Then ask it to show the init data-sharing summary and wait for that one run. The bot asks you again before each later class B or class C command, including `--yes` on that init, `config validate`, `run-once --no-send`, and `coverage`. `run-once --no-send` still performs the reads.
 
 ## What the bot does for the owner
 

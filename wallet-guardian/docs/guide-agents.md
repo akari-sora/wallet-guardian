@@ -4,15 +4,17 @@ This page says how an agent should call the installed `guardian` command. The pa
 
 The monitor is watch-only. An agent must not sign, approve, revoke, claim, or broadcast. It must not ask for a seed phrase, a private key, a keystore, or an API key. It must not run `guardian relations`, including inbound, expand, and dry-run. Only the owner may run that command, by hand, in their own terminal.
 
+If the owner pastes a seed phrase, private key, keystore, or API key into the chat, do not use it, repeat it, store it, or pass it to a command. Tell the owner that it is now exposed. API keys belong in the owner's own environment, set by the owner.
+
 ## Before any other command
 
 Run `guardian capabilities`. It prints the package version, a class for every subcommand, and the exit-code map. It does not open a socket and it does not write a file. If this page and that JSON disagree, trust the command. The catalog is the source.
 
-A subcommand path the catalog does not list is class D. Do not run it. A flag that is named in a variant id and changes the class is class D when the catalog does not list that combination. Do not run it. Ordinary arguments a listed variant needs, such as a file path or `--db`, do not change the class.
+A subcommand path the catalog does not list is class D. Do not run it. A flag that appears in any variant id of a subcommand must occur only in a combination that matches one listed variant exactly. Any other combination is class D. Do not run it. A flag that does not appear in any variant id of that subcommand does not change the class, for example `--db` on `snapshot`, `--tenant` on `init`, and `--news-input` on `run-once`.
 
-Top-level `guardian --help` and `guardian --version`, and `guardian <subcommand> --help`, are class A. They exit while arguments are parsed, before the command runs, and they do not open a database or a socket. `guardian --version` prints only the version and exits 0.
+Top-level `guardian --help` and `guardian --version`, and `guardian <subcommand> --help`, are class A. They exit while arguments are parsed, before the command runs, and they do not open a database or a socket. This does not relax any class D rule. Do not call `--help` under `relations` or any other class D path. `relations` is class D in every form. `guardian --version` prints only the version and exits 0.
 
-An owner's agreement covers the one run the owner answered; it is not standing consent.
+An owner's agreement covers the one run the owner answered; it is not standing consent. Agreement to any class B or class C command covers that one execution only. It is not standing consent.
 
 - `A_read_only_offline`: no network and no local writes. Commands that open a database are not in this class.
 - `B_network_requires_owner_ok`: contacts a configured host. Run it only after the owner agrees to that read. Some of these commands also write local files.
@@ -26,6 +28,8 @@ The longer limits are in `wallet-guardian/AGENTS.md` and in `skills/wallet-guard
 ## Install the command
 
 Install only a wheel file whose SHA256 you have checked. The release page named in the project README is `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.4`. Download `SHA256SUMS` and every file it lists, including `constraints.txt`, into one directory, and check the hashes before install. The steps are in [install.md](install.md). Do not install `guardian` or `wallet-guardian-monitor` by name from any index (pip, uv, or pipx). A package in an index with one of those names is not this project.
+
+The rc.4 wheel currently on that release page is older than this skill and does not include `capabilities`. Wait for the next release. The first command `guardian capabilities` returns `invalid choice` on that wheel. If it does, stop.
 
 ## Install the skill
 

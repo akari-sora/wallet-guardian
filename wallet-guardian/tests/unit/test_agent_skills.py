@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import socket
 import sqlite3
 import subprocess
@@ -38,6 +39,28 @@ _CLASS_A_HELP = (
     "Top-level `guardian --help` and `guardian --version`, and "
     "`guardian <subcommand> --help`, are class A."
 )
+_NO_D_RELAX = (
+    "This does not relax any class D rule. "
+    "Do not call `--help` under `relations` or any other class D path. "
+    "`relations` is class D in every form."
+)
+_VARIANT_COMBINATION = (
+    "A flag that appears in any variant id of a subcommand must occur only in a combination "
+    "that matches one listed variant exactly. Any other combination is class D. Do not run it."
+)
+_NEUTRAL_FLAGS = (
+    "A flag that does not appear in any variant id of that subcommand does not change the class, "
+    "for example `--db` on `snapshot`, `--tenant` on `init`, and `--news-input` on `run-once`."
+)
+_PASTED_SECRET = (
+    "If the owner pastes a seed phrase, private key, keystore, or API key into the chat, "
+    "do not use it, repeat it, store it, or pass it to a command. Tell the owner that it is now exposed. "
+    "API keys belong in the owner's own environment, set by the owner."
+)
+_ONE_RUN_CONSENT = (
+    "Agreement to any class B or class C command covers that one execution only. It is not standing consent."
+)
+_NEUTRAL_FLAG_EXAMPLE = re.compile(r"`(--[A-Za-z0-9-]+)` on `([a-z0-9-]+)`")
 _CLASSES = {
     "A_read_only_offline",
     "B_network_requires_owner_ok",
@@ -620,12 +643,90 @@ def test_render_grok_rejects_fences_and_indented_headings() -> None:
             tool.render_grok(skill, {"references/safety.md": body}, "0.4.0rc4")
     allowed = tool.render_grok(skill, {"references/safety.md": "# Safety\n\nColumn zero.\n"}, "0.4.0rc4")
     assert "Column zero." in allowed
-    four_spaces = tool.render_grok(
-        skill,
-        {"references/safety.md": "    # not an atx heading\n"},
-        "0.4.0rc4",
+    with pytest.raises(ValueError, match="fence or an indented heading"):
+        tool.render_grok(
+            skill,
+            {"references/safety.md": "    # not an atx heading\n"},
+            "0.4.0rc4",
+        )
+
+
+def test_render_grok_rejects_indented_code_empty_atx_and_setext() -> None:
+    tool = _load("build_agent_skills_literal_reject", ROOT / "tools" / "build_agent_skills.py")
+    skill = _synthetic_skill("# Doc\n\n## Section\n\nSee [Safety rules](references/safety.md).\n\n## Later\n")
+    for body in (
+        "    # literal\n",
+        "\t# literal\n",
+        "#\n",
+        "===\n",
+        "---\n",
+    ):
+        try:
+            tool.render_grok(skill, {"references/safety.md": body}, "0.4.0rc4")
+        except ValueError as exc:
+            assert "fence or an indented heading" in str(exc), (body, exc)
+        else:
+            raise AssertionError(body)
+
+
+def test_render_grok_keeps_frontmatter_indentation_and_fence_headings() -> None:
+    tool = _load("build_agent_skills_literal_keep", ROOT / "tools" / "build_agent_skills.py")
+    skill = _synthetic_skill(
+        "# Doc\n"
+        "\n"
+        "## Section\n"
+        "\n"
+        "~~~\n"
+        "# Fake\n"
+        "~~~\n"
+        "\n"
+        "See [Safety rules](references/safety.md).\n"
+        "\n"
+        "## Later\n"
     )
-    assert "not an atx heading" in four_spaces
+    reference = "\n\n  kept indent\n\n# Safety\n\nBody.\n\n"
+    rendered = tool.render_grok(skill, {"references/safety.md": reference}, "0.4.0rc4")
+    expected = "\n".join(
+        [
+            "---",
+            "name: wallet-guardian",
+            'description: "synthetic"',
+            "license: AGPL-3.0-only",
+            'compatibility: "synthetic"',
+            "metadata:",
+            '  version: "0.4.0rc4"',
+            "---",
+            "",
+            "# Doc",
+            "",
+            "## Section",
+            "",
+            "~~~",
+            "# Fake",
+            "~~~",
+            "",
+            "See Safety rules.",
+            "",
+            "  kept indent",
+            "",
+            "### Safety",
+            "",
+            "Body.",
+            "",
+            "",
+            "## Later",
+            "",
+            "## Grok Bot host",
+            "",
+            (
+                "This file inlines the reference pages because a Grok Bot skill upload keeps only this text. "
+                "The cloud computer for that account must already have the `guardian` command installed. "
+                "Bots on the same account share that computer and its data. "
+                "This host integration was not exercised (未實測)."
+            ),
+        ]
+    ) + "\n"
+    assert rendered == expected
 
 
 def test_render_grok_keeps_one_trailing_punctuation() -> None:
@@ -653,24 +754,49 @@ def test_render_grok_keeps_one_trailing_punctuation() -> None:
 def test_help_and_version_are_class_a_when_absent_from_the_catalog() -> None:
     catalog = _catalog()
     flags = {"--help", "--version"}
-    listed: set[str] = set()
+    listed: list[dict] = []
     for command in catalog["commands"]:
-        for part in command["path"]:
-            if part in flags:
-                listed.add(part)
+        path_has_flag = any(part in flags for part in command["path"])
         for variant in command["variants"]:
-            for token in str(variant["id"]).split():
-                if token in flags:
-                    listed.add(token)
-    assert listed == set()
-    for path in (
+            id_has_flag = any(token in flags for token in str(variant["id"]).split())
+            if path_has_flag or id_has_flag:
+                listed.append(variant)
+    prose = (
         SKILL / "SKILL.md",
         SKILL / "references" / "safety.md",
         GROK,
         ROOT / "docs" / "guide-agents.md",
         ROOT / "docs" / "guide-grok-bot.md",
-    ):
-        assert _CLASS_A_HELP in path.read_text(encoding="utf-8"), path
+    )
+    if listed:
+        assert [variant["class"] for variant in listed] == ["A_read_only_offline"] * len(listed)
+    else:
+        for path in prose:
+            assert _CLASS_A_HELP in path.read_text(encoding="utf-8"), path
+    for path in prose:
+        assert _NO_D_RELAX in path.read_text(encoding="utf-8"), path
+
+
+def test_neutral_flag_examples_are_absent_from_variant_ids() -> None:
+    catalog = _catalog()
+    paths = (
+        SKILL / "SKILL.md",
+        SKILL / "references" / "safety.md",
+        GROK,
+        ROOT / "docs" / "guide-agents.md",
+        ROOT / "docs" / "guide-grok-bot.md",
+    )
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        assert _VARIANT_COMBINATION in text, path
+        assert _NEUTRAL_FLAGS in text, path
+        found = _NEUTRAL_FLAG_EXAMPLE.findall(text)
+        assert found, path
+        for flag, name in found:
+            commands = [command for command in catalog["commands"] if command["path"] == [name]]
+            assert len(commands) == 1, (path, name)
+            for variant in commands[0]["variants"]:
+                assert flag not in str(variant["id"]).split(), (path, name, flag, variant["id"])
 
 
 def test_check_rejects_a_changed_grok_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -723,6 +849,11 @@ def test_skill_stops_when_installed_capabilities_are_missing() -> None:
         assert "Do not guess a command." in section
         assert "Do not install or upgrade." in section
         assert "Wait for the next release." in section
+    guide = (ROOT / "docs" / "guide-agents.md").read_text(encoding="utf-8")
+    install = guide[guide.index("## Install the command"):guide.index("## Install the skill")]
+    assert "The rc.4 wheel currently on that release page is older than this skill and does not include `capabilities`." in install
+    assert "Wait for the next release." in install
+    assert "The first command `guardian capabilities` returns `invalid choice` on that wheel. If it does, stop." in install
 
 
 def test_safety_has_repository_change_section() -> None:
@@ -769,8 +900,10 @@ def test_skill_scopes_consent_and_refuses_pasted_secrets() -> None:
         text = path.read_text(encoding="utf-8")
         classes = text[text.index("## Classes"):text.index("## Hard limits")]
         assert "A subcommand path the catalog does not list is class D." in classes
-        assert "Ordinary arguments a listed variant needs, such as a file path or `--db`, do not change the class." in classes
+        assert _VARIANT_COMBINATION in classes
+        assert _NEUTRAL_FLAGS in classes
         assert _CLASS_A_HELP in classes
+        assert _NO_D_RELAX in classes
         assert "It is not standing consent for later runs, other commands, or other classes." in classes
         assert "already agreed" not in text
         limits = text[text.index("## Hard limits"):]
@@ -782,20 +915,33 @@ def test_skill_scopes_consent_and_refuses_pasted_secrets() -> None:
     assert "An earlier agreement is not standing consent." in safety
     assert "A subcommand path the catalog does not list is class D." in safety
     assert _CLASS_A_HELP in safety
+    assert _NO_D_RELAX in safety
+    operating = safety.split("## Operating the installed command\n", 1)[1].split("\n## ", 1)[0]
+    assert _PASTED_SECRET in operating
+    assert _ONE_RUN_CONSENT in operating
     assert "describe how the installed CLI loads keys." in safety
     assert "does not open a file that holds one." in safety
     guide = (ROOT / "docs" / "guide-agents.md").read_text(encoding="utf-8")
     assert "already agreed" not in guide
     assert "A subcommand path the catalog does not list is class D." in guide
     assert _CLASS_A_HELP in guide
+    assert _NO_D_RELAX in guide
+    assert _PASTED_SECRET in guide
+    assert _ONE_RUN_CONSENT in guide
     grok_guide = (ROOT / "docs" / "guide-grok-bot.md").read_text(encoding="utf-8")
     assert "already agreed" not in grok_guide
     assert "After you agree, it can pass" not in grok_guide
-    assert "Ask again before each later class B or class C command" in grok_guide
+    assert "The bot asks you again before each later class B or class C command" in grok_guide
     start = grok_guide.index("```text\n") + len("```text\n")
     end = grok_guide.index("\n```", start)
     block = grok_guide[start:end]
     assert "Never run `guardian relations` in any form, including dry-run." in block
+    assert "Run `guardian capabilities` first." in block
+    assert "invalid choice" in block
+    assert "If the `guardian` command does not exist, stop." in block
+    assert _OWNER_CAPABILITIES in block
+    assert "If the catalog does not list a class for a command, do not run that command." in block
+    assert _NO_D_RELAX in block
     assert "A subcommand path the catalog does not list is class D." in block
     assert "Do not use it, repeat it, store it, or pass it to a command." in block
     assert "or an API key" in block
@@ -817,6 +963,9 @@ def test_grok_paste_block_forbids_relations() -> None:
     end = text.index("\n```", start)
     block = text[start:end]
     assert "Never run `guardian relations` in any form, including dry-run." in block
+    assert "Run `guardian capabilities` first." in block
+    assert "invalid choice" in block
+    assert "If the `guardian` command does not exist, stop." in block
 
 
 def test_agent_guide_installs_from_a_checkout_without_uv_run() -> None:

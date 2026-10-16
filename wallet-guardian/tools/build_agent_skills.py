@@ -19,7 +19,11 @@ _LINK = re.compile(
 )
 _REF_LINK = re.compile(r"\[([^\]]+)\]\((references/[^)]+)\)")
 _ATX = re.compile(r"^(#{1,6})([ \t]+.*)$")
-_FENCE_OR_INDENTED_ATX = re.compile(r"^(?:[ ]{0,3}(?:`{3,}|~{3,})|[ ]{1,3}#{1,6}(?:[ \t]|$))")
+_FENCE_LINE = re.compile(r"^[ ]{0,3}(?:`{3,}|~{3,})")
+_INDENTED_ATX = re.compile(r"^[ ]{1,3}#{1,6}(?:[ \t]|$)")
+_EMPTY_ATX = re.compile(r"^#{1,6}[ \t]*$")
+_SETEXT_LINE = re.compile(r"^[ ]{0,3}(?:=+|-{2,})[ \t]*$")
+_FLEX_ATX = re.compile(r"^[ ]{0,3}(#{1,6})(?:[ \t]|$)")
 _ORPHAN_PUNCT = set(".。!！?？:：;；,")
 _GROK_NOTE = """## Grok Bot host
 
@@ -149,16 +153,51 @@ def _frontmatter_version(text: str) -> str:
     return match.group(1)
 
 
+def _is_indented_code(line: str) -> bool:
+    return line.startswith("\t") or line.startswith("    ")
+
+
+def _is_fence_line(line: str) -> bool:
+    return _FENCE_LINE.match(line) is not None
+
+
+def _frontmatter_body_start(text: str) -> int:
+    """Index just after a leading YAML frontmatter block, or 0 when absent."""
+    if not text.startswith("---\n"):
+        return 0
+    end = text.find("\n---\n", 4)
+    if end < 0:
+        return 0
+    return end + len("\n---\n")
+
+
+def _trim_blank_edges(text: str) -> str:
+    """Drop blank lines at the ends. Keep each remaining line's indentation."""
+    lines = text.splitlines()
+    start = 0
+    end = len(lines)
+    while start < end and lines[start] == "":
+        start += 1
+    while end > start and lines[end - 1] == "":
+        end -= 1
+    return "\n".join(lines[start:end])
+
+
 def _heading_levels(text: str) -> list[int]:
+    body = text[_frontmatter_body_start(text):]
     fence = False
     found: list[int] = []
-    for line in text.splitlines():
-        if line.startswith("```"):
-            fence = not fence
-            continue
+    for line in body.splitlines():
         if fence:
+            if _is_fence_line(line):
+                fence = False
             continue
-        match = _ATX.match(line)
+        if _is_indented_code(line):
+            continue
+        if _is_fence_line(line):
+            fence = True
+            continue
+        match = _FLEX_ATX.match(line)
         if match:
             found.append(len(match.group(1)))
     return found
@@ -171,17 +210,24 @@ def _demote_headings(text: str, shift: int) -> str:
     fence = False
     lines: list[str] = []
     for line in text.splitlines():
-        if line.startswith("```"):
-            fence = not fence
+        if fence:
+            if _is_fence_line(line):
+                fence = False
             lines.append(line)
             continue
-        if not fence:
-            match = _ATX.match(line)
-            if match:
-                level = len(match.group(1)) + shift
-                if level > 6:
-                    raise ValueError("embedded heading would pass level 6")
-                line = ("#" * level) + match.group(2)
+        if _is_indented_code(line):
+            lines.append(line)
+            continue
+        if _is_fence_line(line):
+            fence = True
+            lines.append(line)
+            continue
+        match = _ATX.match(line)
+        if match:
+            level = len(match.group(1)) + shift
+            if level > 6:
+                raise ValueError("embedded heading would pass level 6")
+            line = ("#" * level) + match.group(2)
         lines.append(line)
     return "\n".join(lines)
 
@@ -198,32 +244,61 @@ def _validate_reference_links(skill: str) -> None:
 
 
 def _reject_unhandled_reference(text: str, target: str) -> None:
-    """Fences and indented ATX headings are rejected instead of being reinterpreted."""
+    """Fences, indented code, empty ATX headings, and setext underlines are rejected."""
     for line in text.splitlines():
-        if _FENCE_OR_INDENTED_ATX.match(line):
+        if (
+            _is_fence_line(line)
+            or _INDENTED_ATX.match(line)
+            or _is_indented_code(line)
+            or _EMPTY_ATX.match(line)
+            or _SETEXT_LINE.match(line)
+        ):
             raise ValueError(f"{target} has a fence or an indented heading")
+
+
+def _reject_outer_setext(skill: str) -> None:
+    """Reject setext underlines in the outer skill. YAML frontmatter is not one."""
+    body = skill[_frontmatter_body_start(skill):]
+    fence = False
+    for line in body.splitlines():
+        if fence:
+            if _is_fence_line(line):
+                fence = False
+            continue
+        if _is_indented_code(line):
+            continue
+        if _is_fence_line(line):
+            fence = True
+            continue
+        if _SETEXT_LINE.match(line):
+            raise ValueError("skill has a setext underline")
 
 
 def _outer_content_follows(skill: str, match_end: int, parent_level: int) -> bool:
     """True when the link's section still has text before its next heading."""
+    body_start = _frontmatter_body_start(skill)
     fence = False
     after = False
     offset = 0
     for line in skill.splitlines(keepends=True):
         raw = line.removesuffix("\n").removesuffix("\r")
         end = offset + len(line)
+        if end <= body_start:
+            offset = end
+            continue
+        indented = (not fence) and _is_indented_code(raw)
+        fence_edge = (not indented) and _is_fence_line(raw)
         if not after:
-            if raw.startswith("```"):
+            if fence_edge:
                 fence = not fence
             if offset < match_end <= end:
                 after = True
             offset = end
             continue
-        if raw.startswith("```"):
-            fence = not fence
+        if fence_edge:
             return True
-        if not fence:
-            match = _ATX.match(raw)
+        if not fence and not indented:
+            match = _FLEX_ATX.match(raw)
             if match and len(match.group(1)) <= parent_level:
                 return False
         if raw.strip():
@@ -237,6 +312,7 @@ def render_grok(skill: str, references: dict[str, str], catalog_version: str) ->
     if _frontmatter_version(skill) != catalog_version:
         raise ValueError("skill metadata.version does not match the catalog")
     _validate_reference_links(skill)
+    _reject_outer_setext(skill)
 
     def replace(match: re.Match[str]) -> str:
         label = match.group(1)
@@ -246,7 +322,7 @@ def render_grok(skill: str, references: dict[str, str], catalog_version: str) ->
             raise ValueError(f"unknown skill reference {target}")
         raw = references[target]
         _reject_unhandled_reference(raw, target)
-        body = raw.strip()
+        body = _trim_blank_edges(raw)
         levels = _heading_levels(body)
         if levels:
             preceding = _heading_levels(skill[: match.start()])
