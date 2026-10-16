@@ -493,7 +493,7 @@ def read_club(
         for edge, block in part_edges:
             stamp, why = lookups.one(block)
             if stamp is None:
-                status, reason = _time_failure(edges, why)
+                status, reason = _time_failure(edges, why, accepted=prior)
                 stopped = True
                 break
             if stamp < stop_timestamp:
@@ -567,10 +567,10 @@ def read_nodereal(
         part_bad = False
         time_reason = ""
         if state != "gap":
-            rows, time_reason = _stamp_nodereal_rows(rows, lookups)
+            rows, time_reason = _stamp_nodereal_rows(rows, lookups, why if why in _CODE_SKIP else "")
             if time_reason:
                 capped = time_reason in _CAP_REASONS
-                if not rows and state == "complete" and not capped:
+                if not rows and state == "complete" and not capped and time_reason not in _CODE_SKIP:
                     state, why = "gap", time_reason
                 elif not rows or state == "complete":
                     state, why = "partial", time_reason
@@ -630,8 +630,6 @@ def _nodereal_part(client, address, direction, category, head, page_cap, stop_ti
         opening, why = lookups.one(start)
         if opening is None:
             why = why or "window_unchecked"
-            if not accepted and why not in _CAP_REASONS:
-                return [], "gap", why
             return items, "partial", why
         if opening <= stop_timestamp:
             return items, "complete", ""
@@ -676,6 +674,7 @@ def _nodereal_chunk(client: NodeRealClient, address, direction, category, start,
             return kept, reason, False, used, succeeded
         if not isinstance(payload, Mapping) or not isinstance(payload.get("transfers"), list):
             return kept, "missing_transfers", False, used, succeeded
+        succeeded = True
         batch = payload["transfers"]
         room = item_budget - len(kept)
         if len(batch) > room:
@@ -687,20 +686,22 @@ def _nodereal_chunk(client: NodeRealClient, address, direction, category, start,
             return kept, "", True, used, True
         if not isinstance(page_key, str):
             return kept, "bad_page_key", False, used, succeeded
-        succeeded = True
         token = page_key
     if len(kept) >= item_budget:
         return kept[:item_budget], "item_cap", False, used, True
     return kept, "page_cap", False, used, succeeded
 
 
-def _stamp_nodereal_rows(rows: list[Any], lookups: _Lookups) -> tuple[list[Any], str]:
+def _stamp_nodereal_rows(rows: list[Any], lookups: _Lookups, stopped: str = "") -> tuple[list[Any], str]:
     stamped: list[Any] = []
     reason = ""
     halted = False
     for item in rows:
         if not isinstance(item, Mapping) or _nodereal_stamp(item) is not None or _failed(item):
             stamped.append(item)
+            continue
+        if stopped:
+            reason = stopped
             continue
         block = _flexible_block(item)
         if block is None:

@@ -1347,6 +1347,218 @@ def test_f2_club_next_chunk_timestamp_failure_is_partial(tmp_path, monkeypatch, 
     assert body["counterparties"] is None
 
 
+def _stamp_blocks(backend) -> list[int]:
+    return [
+        int(r1.rpc_call(call)["params"][0], 16)
+        for call in backend.calls
+        if r1.rpc_call(call)["method"] == "eth_getBlockByNumber"
+    ]
+
+
+def test_b1_first_page_bad_page_key_keeps_the_row(tmp_path, monkeypatch, capsys) -> None:
+    """A usable first page with a non-string pageKey stays partial and keeps that row."""
+    backend = _nodereal_install(tmp_path, monkeypatch)
+    row = _kept_row()
+
+    def block(_number, raw):
+        return r1.rpc({"number": raw, "timestamp": hex(INSIDE)})
+
+    def transfers(params):
+        if params["category"][0] == "20" and int(params["fromBlock"], 16) == 150_000:
+            return r1.rpc({"transfers": [row], "pageKey": 7})
+        return r1.rpc({"transfers": []})
+
+    backend.add(lambda _call: True, _nr_window(block, transfers))
+    code, body, _captured = _run(capsys, r1.inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--max-pages", "1", "--seed", r1.DISPERSE, "--network", "bsc-mainnet",
+    ), backend)
+    assert code == 0, body
+    token = _parts(body["reads"][0])["token-transfers"]
+    assert token["read_status"] == "partial"
+    assert token["reason"] == "bad_page_key"
+    assert body["counterparties"][0]["address"] == r1.OTHER
+
+
+def test_b2_row_timestamp_after_empty_chunk_is_partial(tmp_path, monkeypatch, capsys) -> None:
+    """An earlier empty chunk counts: a later row timestamp 429 is partial."""
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    backend = _club_install(tmp_path, monkeypatch)
+    log = _club_log(r1.OTHER, r1.DISPERSE, 800, r1.tx(9))
+
+    def answer(call):
+        body = r1.rpc_call(call)
+        if body["method"] == "eth_blockNumber":
+            return r1.rpc(hex(2500))
+        if body["method"] == "eth_getLogs":
+            start = int(body["params"][0]["fromBlock"], 16)
+            if start >= 1501:
+                return r1.rpc([])
+            return r1.rpc([log])
+        if body["method"] == "eth_getBlockByNumber":
+            number = int(body["params"][0], 16)
+            if number == 800:
+                return RawResponse(429, {"content-type": "application/json"}, b"")
+            return r1.rpc({"number": body["params"][0], "timestamp": hex(INSIDE)})
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code, body, _captured = _run(capsys, r1.inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--max-pages", "2", "--seed", r1.DISPERSE, "--network", "bsc-mainnet",
+    ), backend)
+    assert code == 0, body
+    stamps = _stamp_blocks(backend)
+    assert 1501 in stamps
+    assert 501 in stamps
+    assert 800 in stamps
+    token = _parts(body["reads"][0])["token-transfers"]
+    assert token["read_status"] == "partial"
+    assert token["reason"] == "rate_limited"
+    assert body["counterparties"] is None
+
+
+def test_b5_empty_chunk_opening_failure_is_partial(tmp_path, monkeypatch, capsys) -> None:
+    """The first chunk can be empty and still count when its own opening timestamp fails."""
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    backend = _club_install(tmp_path, monkeypatch)
+
+    def answer(call):
+        body = r1.rpc_call(call)
+        if body["method"] == "eth_blockNumber":
+            return r1.rpc(hex(2500))
+        if body["method"] == "eth_getLogs":
+            return r1.rpc([])
+        if body["method"] == "eth_getBlockByNumber":
+            return RawResponse(429, {"content-type": "application/json"}, b"")
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code, body, _captured = _run(capsys, r1.inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--max-pages", "1", "--seed", r1.DISPERSE, "--network", "bsc-mainnet",
+    ), backend)
+    assert code == 0, body
+    assert set(_stamp_blocks(backend)) == {1501}
+    token = _parts(body["reads"][0])["token-transfers"]
+    assert token["read_status"] == "partial"
+    assert token["reason"] == "rate_limited"
+    assert body["counterparties"] is None
+
+
+def test_b5_next_chunk_rows_opening_failure_is_partial(tmp_path, monkeypatch, capsys) -> None:
+    """A later chunk that has rows is partial when its opening timestamp fails after an empty chunk."""
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    backend = _club_install(tmp_path, monkeypatch)
+    log = _club_log(r1.OTHER, r1.DISPERSE, 800, r1.tx(9))
+
+    def answer(call):
+        body = r1.rpc_call(call)
+        if body["method"] == "eth_blockNumber":
+            return r1.rpc(hex(2500))
+        if body["method"] == "eth_getLogs":
+            start = int(body["params"][0]["fromBlock"], 16)
+            if start >= 1501:
+                return r1.rpc([])
+            return r1.rpc([log])
+        if body["method"] == "eth_getBlockByNumber":
+            number = int(body["params"][0], 16)
+            if number == 1501:
+                return r1.rpc({"number": body["params"][0], "timestamp": hex(INSIDE)})
+            return RawResponse(429, {"content-type": "application/json"}, b"")
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code, body, _captured = _run(capsys, r1.inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--max-pages", "2", "--seed", r1.DISPERSE, "--network", "bsc-mainnet",
+    ), backend)
+    assert code == 0, body
+    stamps = _stamp_blocks(backend)
+    assert 1501 in stamps
+    assert 501 in stamps
+    assert 800 not in stamps
+    token = _parts(body["reads"][0])["token-transfers"]
+    assert token["read_status"] == "partial"
+    assert token["reason"] == "rate_limited"
+    assert body["counterparties"] is None
+
+
+def test_b3_complete_stamp_stop_drops_rows_as_partial(tmp_path, monkeypatch, capsys) -> None:
+    """A finished part that drops every row on a timestamp stop is partial, and the later row is not kept."""
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    backend = _nodereal_install(tmp_path, monkeypatch)
+    first = _nr_row(r1.OTHER, r1.DISPERSE, 3, block=140_000)
+    second = _nr_row(r1.LEFT, r1.DISPERSE, 4, block=130_000)
+
+    def block(number, raw):
+        if number == 150_000:
+            return r1.rpc({"number": raw, "timestamp": hex(STOP)})
+        if number == 140_000:
+            return RawResponse(429, {"content-type": "application/json"}, b"")
+        return r1.rpc({"number": raw, "timestamp": hex(INSIDE)})
+
+    def transfers(params):
+        if params["category"][0] == "20" and int(params["fromBlock"], 16) == 150_000:
+            return r1.rpc({"transfers": [first, second]})
+        return r1.rpc({"transfers": []})
+
+    backend.add(lambda _call: True, _nr_window(block, transfers))
+    code, body, _captured = _run(capsys, r1.inbound_argv(
+        tmp_path / "monitor.json", "--yes", "--max-pages", "1", "--since-days", "90",
+        "--seed", r1.DISPERSE, "--network", "bsc-mainnet",
+    ), backend)
+    assert code == 0, body
+    stamps = _stamp_blocks(backend)
+    assert 140_000 in stamps
+    assert 130_000 not in stamps
+    token = _parts(body["reads"][0])["token-transfers"]
+    assert token["read_status"] == "partial"
+    assert token["reason"] == "rate_limited"
+    assert body["counterparties"] is None
+
+
+def test_b4_stopped_part_skips_extra_stamps_and_code(tmp_path, monkeypatch, capsys) -> None:
+    """A chunk-start 429 drops rows that still need a timestamp and does not ask again or read code."""
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    backend = _nodereal_install(tmp_path, monkeypatch)
+
+    def row(number: int, block: int) -> dict:
+        return _nr_row(r1.PAYER, r1.OTHER if number % 2 else r1.LEFT, number, block=block)
+
+    def answer(call):
+        body = r1.rpc_call(call)
+        if body["method"] == "eth_blockNumber":
+            return r1.rpc(hex(HEAD))
+        if body["method"] == "eth_getBlockByNumber":
+            number = int(body["params"][0], 16)
+            if number == 150_000:
+                return RawResponse(429, {"content-type": "application/json"}, b"")
+            return r1.rpc({"number": body["params"][0]})
+        if body["method"] == "eth_getCode":
+            return r1.rpc("0x")
+        if body["method"] == "nr_getAssetTransfers":
+            params = body["params"][0]
+            if int(params["fromBlock"], 16) != 150_000:
+                return r1.rpc({"transfers": []})
+            category = params["category"][0]
+            base = {"20": 3, "external": 5, "internal": 7}[category]
+            return r1.rpc({"transfers": [row(base, 140_000), row(base + 1, 130_000)]})
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code, body, _captured = _run(capsys, r1.expand_argv(
+        tmp_path / "monitor.json", "--yes", "--max-pages", "1", "--payer", r1.PAYER,
+        "--network", "bsc-mainnet", "--seed", r1.SEED,
+    ), backend)
+    assert code == 0, body
+    assert set(_stamp_blocks(backend)) == {150_000}
+    methods = [r1.rpc_call(call)["method"] for call in backend.calls]
+    assert "eth_getCode" not in methods
+    token = _parts(body["reads"][0])["token-transfers"]
+    assert token["read_status"] == "partial"
+    assert token["reason"] == "rate_limited"
+    assert token["timestamp_reason"] == "rate_limited"
+    assert token["reason"] != "window_unchecked"
+    assert body["contract_check"] == {"status": "gap", "reason": "rate_limited"}
+
+
 def test_r6_failed_code_is_visible(tmp_path, monkeypatch, capsys) -> None:
     backend = _club_install(tmp_path, monkeypatch)
     monkeypatch.setattr(time, "sleep", lambda _seconds: None)
@@ -1472,7 +1684,9 @@ def test_r10_docs_match_cap_versus_failure() -> None:
     assert "A failure of the first request, when no row is kept, is `gap`." in page
     assert "After one successful request that returned no row, a later failure is `partial`, and the reason is that failure." in page
     assert "When rows are kept, a later failure is `partial`." in page
-    assert "A chunk that returns rows is `gap` when its first block-timestamp lookup fails before any row is kept." in page
+    assert "A chunk that returns rows is `gap` when its first block-timestamp lookup fails before any row is kept, and no earlier chunk succeeded." in page
+    assert "When that stop drops every row of a part that already had a successful `nr_getAssetTransfers`, the part is `partial` with that stop reason, including a part that was `complete` before the stop." in page
+    assert "When the part already ended for `rate_limited`, `daily_cap`, or `redirect_host`, rows that still have no timestamp are dropped for that same reason without another block lookup, and the reason is not rewritten as `window_unchecked`." in page
 
 
 def test_r11_configured_explorer_without_a_key_stays_keyless(tmp_path, monkeypatch, capsys) -> None:
