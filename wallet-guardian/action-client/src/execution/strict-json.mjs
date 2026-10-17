@@ -179,21 +179,24 @@ class Parser {
     } else {
       throw new ExecutionRegistryError("bad_json", "number");
     }
+    // Match Python's json number scanner: a "." or exponent without digits is not part of the
+    // number. The number ends before it, and the stray character fails later as bad_json.
+    const isDigit = (c) => c >= "0" && c <= "9";
     let isFloat = false;
-    if (this.peek() === ".") {
+    if (this.peek() === "." && isDigit(this.text[this.i + 1])) {
       this.i += 1;
-      if (this.peek() < "0" || this.peek() > "9") throw new ExecutionRegistryError("bad_json", "number");
-      while (this.peek() >= "0" && this.peek() <= "9") this.i += 1;
+      while (isDigit(this.peek())) this.i += 1;
       isFloat = true;
     }
     const exponent = this.peek();
     if (exponent === "e" || exponent === "E") {
-      this.i += 1;
-      const sign = this.peek();
-      if (sign === "+" || sign === "-") this.i += 1;
-      if (this.peek() < "0" || this.peek() > "9") throw new ExecutionRegistryError("bad_json", "number");
-      while (this.peek() >= "0" && this.peek() <= "9") this.i += 1;
-      isFloat = true;
+      const sign = this.text[this.i + 1];
+      const digitAt = sign === "+" || sign === "-" ? this.i + 2 : this.i + 1;
+      if (isDigit(this.text[digitAt])) {
+        this.i = digitAt;
+        while (isDigit(this.peek())) this.i += 1;
+        isFloat = true;
+      }
     }
     const raw = this.text.slice(start, this.i);
     if (isFloat) throw new ExecutionRegistryError("float_rejected", raw.slice(0, 32));

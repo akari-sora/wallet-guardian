@@ -362,6 +362,36 @@
         ]
       ],
       "code": "integer_out_of_range"
+    },
+    {
+      "id": "unsafe-int-trailing-dot",
+      "loader": "parse",
+      "input": "[9007199254740992.]",
+      "code": "integer_out_of_range"
+    },
+    {
+      "id": "unsafe-int-trailing-e",
+      "loader": "parse",
+      "input": "9007199254740992e",
+      "code": "integer_out_of_range"
+    },
+    {
+      "id": "float-trailing-e",
+      "loader": "parse",
+      "input": "[1.5e]",
+      "code": "float_rejected"
+    },
+    {
+      "id": "int-trailing-dot",
+      "loader": "parse",
+      "input": "[1.]",
+      "code": "bad_json"
+    },
+    {
+      "id": "int-trailing-e-sign",
+      "loader": "parse",
+      "input": "[1e+]",
+      "code": "bad_json"
     }
   ]
 }
