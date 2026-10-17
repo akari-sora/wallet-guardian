@@ -4,6 +4,9 @@ The classification source is ``src/guardian/_resources/agent-capabilities.json``
 ``--check`` compares generated files to the tree and exits non-zero on drift.
 The paste block in ``docs/guide-grok-bot.md`` copies ``## Classes`` and ``## Hard limits``
 from the skill, between fixed markers. ``--check`` fails if that copy differs.
+A relative ``references/`` link in that copy is rewritten to plain text, because a
+pasted block cannot follow it. The setup steps in the same block quote a few skill
+sentences outside the markers; ``--check`` fails if the skill or the guide loses one.
 This tool does not install anything and does not open a network connection.
 """
 
@@ -51,6 +54,12 @@ _ONE_COPY = (
 )
 _GROK_RULES_BEGIN = "<!-- grok-rules:begin -->"
 _GROK_RULES_END = "<!-- grok-rules:end -->"
+# Skill sentences that the Grok guide's setup steps quote outside the markers.
+# A change to either copy must change both, or ``--check`` fails.
+_GUIDE_SKILL_QUOTES = (
+    "The answers file is written only at the path the owner gave.",
+    "`guardian init --yes` may run only after the owner has seen the data-sharing summary and agreed. Being on the list is not enough.",
+)
 _GROK_NOTE = """## Grok Bot host
 
 This file inlines the reference pages because a Grok Bot skill upload keeps only this text. The cloud computer for that account must already have the `guardian` command installed. Bots on the same account share that computer and its data. This host integration was not exercised (未實測).
@@ -535,20 +544,34 @@ def _between_headings(text: str, start_heading: str, end_heading: str) -> str:
     return text[start:end].strip("\n")
 
 
+def _unlink_paste_references(text: str) -> str:
+    """Rewrite ``[label](references/x.md)`` as plain text that names the repository file.
+
+    The pasted block is chat text. A relative link in it points nowhere.
+    """
+
+    def plain(match: re.Match[str]) -> str:
+        return f"{match.group(1)} (`skills/wallet-guardian/{match.group(2)}` in the Wallet Guardian repository)"
+
+    return _REF_LINK.sub(plain, text)
+
+
 def render_grok_paste_rules(skill: str) -> str:
     """Copy the skill's class and hard-limit sections for the Grok paste block."""
     classes = _between_headings(skill, "## Classes", "## Hard limits")
     limits = _between_headings(skill, "## Hard limits", "## Catalog")
-    rules = classes + "\n\n" + limits
+    rules = _unlink_paste_references(classes + "\n\n" + limits)
     if not rules.startswith("## Classes\n") or "\n## Hard limits\n" not in rules:
         raise ValueError("grok paste rules missing")
+    if "](" in rules:
+        raise ValueError("grok paste rules still have a markdown link")
     return rules + "\n"
 
 
-def splice_grok_paste_rules(guide: str, rules: str) -> str:
-    """Replace the marked region inside the paste fence. The fence text stays put.
+def _paste_marker_span(guide: str) -> tuple[int, int]:
+    """Offsets of the begin marker and the end marker inside the paste fence.
 
-    The guide may name the markers in prose. Only the pair inside the fence is replaced.
+    The guide may name the markers in prose. Only the pair inside the fence counts.
     """
     fence = guide.find("```text\n")
     if fence < 0:
@@ -564,6 +587,30 @@ def splice_grok_paste_rules(guide: str, rules: str) -> str:
     )
     if begin_at < 0 or end_at < 0:
         raise ValueError("grok paste markers must sit inside the paste block")
+    return begin_at, end_at
+
+
+def _outside_paste_markers(guide: str) -> str:
+    begin_at, end_at = _paste_marker_span(guide)
+    return guide[:begin_at] + guide[end_at + len(_GROK_RULES_END):]
+
+
+def require_guide_skill_quotes(skill: str, guide: str) -> None:
+    """The guide's setup steps quote skill sentences outside the markers. Both copies must match."""
+    outside = _outside_paste_markers(guide)
+    for sentence in _GUIDE_SKILL_QUOTES:
+        if sentence not in skill:
+            raise ValueError(f"skill no longer has a sentence that guide-grok-bot.md quotes: {sentence}")
+        if sentence not in outside:
+            raise ValueError(f"guide-grok-bot.md setup steps no longer quote the skill: {sentence}")
+
+
+def splice_grok_paste_rules(guide: str, rules: str) -> str:
+    """Replace the marked region inside the paste fence. The fence text stays put.
+
+    The guide may name the markers in prose. Only the pair inside the fence is replaced.
+    """
+    begin_at, end_at = _paste_marker_span(guide)
     head = guide[: begin_at + len(_GROK_RULES_BEGIN)]
     tail = guide[end_at:]
     return f"{head}\n{rules.strip()}\n{tail}"
@@ -584,6 +631,7 @@ def generated_files(root: Path | None = None) -> dict[Path, str]:
     _require_one_copy(grok)
     guide_path = base / "docs" / "guide-grok-bot.md"
     guide = splice_grok_paste_rules(guide_path.read_text(encoding="utf-8"), render_grok_paste_rules(skill))
+    require_guide_skill_quotes(skill, guide)
     for marker, page in (
         ("These rules stand alone.", "references/safety.md"),
         (
