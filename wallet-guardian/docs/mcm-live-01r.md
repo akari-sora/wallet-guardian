@@ -15,7 +15,7 @@ Blockscout PRO 的 key 由使用者自己放在私人 secret profile 的 `BLOCKS
 | Optimism | 日誌走 `op-logs-public`（`RPC_OPTIMISM_LOGS_URL`，`range_limit` 2000）。原生歷史走 Blockscout PRO，然後 keyless instance | PRO：`BLOCKSCOUT_PRO_API_BASE`（預設 `https://api.blockscout.com`）加 `chain_id`。Optimism（10）在免費方案。keyless 預設 `https://explorer.optimism.io`（`optimism.blockscout.com` 已 301 轉址到它）。publicnode 不是 topic-only 日誌來源 |
 | Avalanche | 原生餘額照讀 | 深度歷史維持 `expansion_pending`。沒有重大曝險時，不用它擋住原來六條鏈 |
 
-`plan_not_supported` 記在狀態目錄旁的 `capability-failures.json`（只有來源 id、網路、原因）。同一筆拒絕也涵蓋該來源的 `txlist` 與 `tokentx`：第一個拒絕之後，同一輪的下一個錢包與下一輪都不再打這家。快取帶 TTL（預設 24 小時），過期才再問一次。原因字串仍是 `plan_not_supported`。Blockscout PRO 對 Base 的 featured-chain 402 也走這條 cache。失敗的探針不代表這條鏈沒有資產。`x-credits-remaining` 與 `x-ratelimit-limit` 有出現在回應時，記在 `budget.providers.*.rate_headers`。公開設定裡 `enabled: false` 的來源不會註冊，也不會被呼叫。
+`plan_not_supported` 記在狀態目錄旁的 `capability-failures.json`（只有來源 id、網路、原因）。同一筆拒絕也涵蓋該來源的 `txlist` 與 `tokentx`：第一個拒絕之後，同一輪的下一個錢包與下一輪都不再打這家。快取帶 TTL（預設 24 小時），過期才再問一次。原因字串仍是 `plan_not_supported`。Blockscout PRO 對 Base 的 featured-chain 402 也走這條 cache。失敗的探針不代表這條鏈沒有資產。`x-credits-remaining` 與 `x-ratelimit-limit` 有出現在回應時，記在 `budget.providers.*.rate_headers`。日誌與 indexer 路由會跳過 `enabled: false` 的來源。端點登錄仍會登記它。`ofac_sls` 是例外：端點有值時 `run-once` 仍會抓名單。
 
 沒有 key 的跑法見 `examples/monitor.nokeys.json` 與 `docs/api-keys.md`。GoPlus 沒有 key 是 `credential_missing`，隱私拒絕把地址送出去的政策不變。CoinGecko 沒有 key 走公開無 key 層級，報價讀不到是 `valuation_unknown`，不是 0 也不是 1。Helius 沒有 key 時 parsed events 是 `credential_missing`，已設定的 Solana RPC 仍用。OFAC 公開清單不需要 key；`OFAC_SLS_FEED` 沒設是 `feed_not_supplied`。Alchemy 沒有 key 時 Base 轉帳記 `credential_missing`（說明指向 `docs/api-keys.md#alchemy`），然後改走 Blockscout。不會因為缺 key 當掉，也不會把缺的能力標成 complete。
 

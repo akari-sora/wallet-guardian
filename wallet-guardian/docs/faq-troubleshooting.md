@@ -22,7 +22,7 @@ No-key is a supported mode. Public RPC still runs when its endpoint variable is 
 
 ## Partial history, lookback, and the request cap
 
-A fresh database does not walk from genesis. With no cursor and no `polling.bootstrap_origin`, the origin is `max(0, head - ceil(bootstrap_lookback_days * 86400 / seconds_per_block))`. Init sets `bootstrap_lookback_days` to 30 and `bootstrap_request_cap` to 2000. Built-in block times are ethereum 12s, bsc 0.75s, arbitrum 0.25s, base 2s, optimism 2s, polygon 2.1s, avalanche 2s, and 12s otherwise. When `round_deadline_seconds` is omitted, the round stops after 180 seconds.
+A fresh database does not walk from genesis. With no cursor and no `polling.bootstrap_origin`, the origin is `max(0, head - ceil(bootstrap_lookback_days * 86400 / seconds_per_block))`. Init sets `bootstrap_lookback_days` to 30 and `bootstrap_request_cap` to 2000. The same origin is the start of the approval log scan (`Approval(address,address,uint256)` and `ApprovalForAll`). Logs older than that origin, including approvals that already existed, are not inventoried. `historical_backfill_pending` continues from the saved cursor toward head. It does not walk back to genesis. Set `polling.bootstrap_origin` before the first scan, or point the run at a new state directory that has no cursor and set it before that scan. The value is one block height and applies to every EVM chain. After a `permissions.erc20` cursor is stored, editing the setting does not walk backward and does not reset the cursor: the next approval scan starts at that cursor plus one, minus an overlap of 2. Built-in block times are ethereum 12s, bsc 0.75s, arbitrum 0.25s, base 2s, optimism 2s, polygon 2.1s, avalanche 2s, and 12s otherwise. When `round_deadline_seconds` is omitted, the EVM log and history scan and the TRON reader each stop after 180 seconds and can report `partial`. Native balance pre-read treats a missing deadline as no limit. Solana and Bitcoin readers do not take that deadline. The sanctions feed read is not passed it. News fetches use a separate 180-second budget measured from the start of the fetch. A whole `run-once` can take longer.
 
 Hitting the cap or the deadline records `partial` with `bootstrap_request_cap` or `deadline`, plus `historical_backfill_pending` while older blocks are still unread. The next round resumes at that checkpoint plus one, minus an overlap of 2. At the default cap, an Arbitrum 30-day log backfill is many rounds if the deadline does not stop a round first. `pagination_incomplete` means a page walk stopped at its cap. That history is not complete. Bitcoin history stops at a page cap the same way: partial, never a finished chain.
 
@@ -88,7 +88,25 @@ You enabled a chain but did not set its endpoint variable (for Ethereum, `RPC_ET
 
 Your system resolver answered a public host with a reserved address. Set `GUARDIAN_RESOLVER_MODE=doh` and see `docs/host-network.md`. The monitor refuses rather than connect to an address it cannot trust.
 
-## A first no-key run takes about three minutes
+## A first no-key EVM scan can stop around three minutes
 
-The round is bounded by a deadline. On a free public RPC with no indexer key, history and permission reads end as `partial` (`pagination_incomplete`, `gaps_present`) and `history.native_external` is an error with `unsupported_source`. That is the real no-key coverage for that chain, not a zero balance and not a clean wallet.
+When `round_deadline_seconds` is omitted, the EVM log and history scan uses a 180-second deadline. On a free public RPC with no indexer key, history and permission reads can end as `partial` (`pagination_incomplete`, `gaps_present`) and `history.native_external` can be an error with `unsupported_source`. That is the real no-key coverage for that chain. It is not a zero balance and it is not a clean wallet. Other steps are outside that default. `docs/coverage-matrix.md` records a no-key EVM `run-once` that did not finish inside 15 minutes.
+
+## Hard caps in this tree
+
+These are local limits in the readers. A cap leaves a gap. It does not mean the unread range was empty.
+
+| Limit | Where it applies |
+| --- | --- |
+| Esplora history: 25 transactions per page, at most 4 pages | Bitcoin `txs/chain` walk. A capped walk is partial |
+| TronGrid: 200 rows per page, 2 pages, at most 48 requests, 1 request per second in this process | TRON reader. Successful keyless responses are not a quota |
+| Solana signatures: at most 1000 per page, default page cap 20 | `run-once` still walks signatures. `fetch_transactions` is false, so those signatures are not parsed into transfers |
+| NodeReal asset transfers: ranges wider than 100000 blocks are split | `nr_getAssetTransfers` |
+| Init source budget: 1 request per second, 2000 requests per day, 2 retries | Each budget group `guardian init` writes |
+| Quote age: 900 seconds | A CoinGecko token quote older than that is not a fresh USD value |
+| Alchemy `LOG_BLOCK_CAP` is 10 | That adapter does not call `eth_getLogs`. The constant is not an approval-scan width |
+
+## A `read_error` can be a program exception
+
+Around each account and network, `run-once` turns an unexpected exception into `read_error` on the rows it fills, and does not keep a traceback in the report. Those filled rows are `balances.native`, `history.fungible`, `history.native_external`, `history.token`, `permissions.erc20`, and `permissions.standard`, and only when that row was not already stored. Coverage still emits a row for every capability. An observation stored before the exception is kept, including on rows outside that list. A cell with no stored observation is `unknown` with `not_queried`, except when the catalog marks that capability `not_applicable` or `not_observable`: those cells show that reason. Examples this handler does not mark `read_error` are Solana `balances.fungible`, `permissions.spl_authority`, and `permissions.spl_delegate`, TRON `permissions.tron_account`, and EVM `balances.fungible`, `permissions.erc721_operator`, `permissions.erc721_token`, and `permissions.erc1155_operator`. That is not a zero. A Permit2 note read that throws is skipped. A checkpoint supersede that throws is ignored.
 

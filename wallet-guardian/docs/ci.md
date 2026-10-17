@@ -26,7 +26,7 @@ Jobs and the example config must not:
 - mount monitor state, the bot home directory, the whole workspace, a runner token, `private/`, `data/`, or `evidence/`
 - mount any volume other than the executor cache (`/cache`)
 
-The YAML holds no secrets, real monitored addresses, keyed RPC URLs, or notification recipients. Box jobs use the same gate commands as the shared jobs: Python tests with JUnit, client tests, and build checks (`uv build --wheel --sdist`).
+The YAML holds no secrets, real monitored addresses, keyed RPC URLs, or notification recipients. Box jobs run the Python, client, and wheel build suites. They are not the same commands as the shared jobs. The box Python job command is `pytest -q` with JUnit. It does not pass `--timeout=60`, `-rf`, or `--durations=25`. `pyproject.toml` sets `timeout = 60`, so that job still stops each test after 60 seconds. Its job timeout is 10 minutes. The shared `python-tests` job passes `pytest -q -rf --durations=25 --timeout=60` and has a 20-minute job timeout. The command difference is `-rf`, `--durations=25`, and the explicit `--timeout` flag; the per-test cap is the same. Box client commands match `client-tests` (`test:canonical`, `test:validation`, `test:gate`, `test:api`, `build`) on `node:22.16.0-bookworm-slim`. `uv build --wheel --sdist` exists only as `box-build-checks`. There is no shared job with that command. None of these jobs is `post-install-functional`, `read-only-negative`, or `public-sample-probe`.
 
 ## How to trigger
 
@@ -92,6 +92,8 @@ Required step ids:
 - `post-install-functional`
 - `read-only-negative`
 - `public-sample-probe` (also requires `probe/provenance.json`)
+
+`.gitlab-ci.yml` defines `python-tests`, `client-tests`, and, when `WG_BOX_CI` is `1`, the box Python, client, and build jobs. It does not define `post-install-functional`, `read-only-negative`, or `public-sample-probe`. A pipeline that only runs the jobs in that file cannot collect those three steps. They have to be run separately and placed in the gate directory before `tools/release_evidence.py` can record them. Box jobs run only for a web, api, or trigger pipeline, or a protected branch, and only when `WG_BOX_CI` is `1`. Fork merge requests and other merge-request pipelines do not run them. A pipeline result from `.gitlab-ci.yml` is not a PASS release-evidence document.
 
 The public-sample probe uses a committed public fixture and a synthetic sample id. It is not a live monitored address. A failed read is `FAIL`, `BLOCKED`, or `NOT_RUN`, never a zero balance and never safe or complete.
 

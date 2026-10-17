@@ -61,8 +61,8 @@ Each row below was run on 2026-10-09 (Taipei) from the Linux box with public tes
 | solana-mainnet | balances.native, balances.fungible, history | CLI, public RPC | partial | CLI run on a public staker address: `getBalance`, `getTokenAccountsByOwner`, `getSignaturesForAddress` all answered; native balance complete in declared scope; fungible/history rows `partial` (`gap_detection_incomplete`, `token2022_unknown_extension`). On a very active exchange address the token read returned `response_too_large` (error, not zero). |
 | solana-mainnet | positions.stake | CLI, public RPC | partial | Before this change the CLI always returned `stake_accounts_not_provided`. Now the wallet address is queried as staker and withdrawer (`getProgramAccounts`, offsets 12 and 44): the public staker address showed 4 stake accounts, observed. Offline CLI tests cover both offsets, a no-stake wallet, and a failed read (unknown, never an empty stake). `partial` because only one public address was probed and `getProgramAccounts` may be refused by other RPC providers. |
 | solana-mainnet | parsed events | Helius | credential_missing | No key; not probed. |
-| address risk | address_risk | GoPlus | credential_missing | The CLI reports `credential_missing` and `third_party_denied`. A direct keyless GET of the GoPlus address-security endpoint returned HTTP 200 for a public address, but the adapter requires a key and consent, so nothing is claimed. |
-| sanctions | sanctions | OFAC SDN | not_verified | `OFAC_SLS_FEED` may be a local `file://` SDN XML or an HTTPS URL. run-once exact-matches monitored addresses and counterparties locally. Unset stays `feed_not_supplied`. A list older than 7 days is `partial` with `feed_stale`. A malformed list is an error, not zero. The row records source id, fetch time, publish date, validity, and the count checked, never the list body. Setting the variable does not mark a wallet screened. A live publisher download is not claimed here. |
+| address risk | address_risk | GoPlus | credential_missing | The CLI reports `credential_missing` and `third_party_denied`. A direct keyless GET of the GoPlus address-security endpoint returned HTTP 200 for a public address. `run-once` does not call that adapter, with or without a key and consent, so that HTTP 200 is not a monitor result. |
+| sanctions | sanctions | OFAC SDN | not_verified | The example source uses `OFAC_SLS_FEED`, which may be a local `file://` SDN XML or an HTTPS URL. Any `endpoint_env` name on an `ofac_sls` source is the one that is read. `enabled: false` does not stop the fetch while that endpoint is set. run-once exact-matches monitored addresses and counterparties locally. An empty endpoint stays `feed_not_supplied`. A list older than 7 days is `partial` with `feed_stale`. A malformed list is an error, not zero. The row records source id, fetch time, publish date, validity, and the count checked, never the list body. Setting the variable does not mark a wallet screened. A live publisher download is not claimed here. |
 | prices | prices.usd | CoinGecko public | partial | Direct keyless GET HTTP 200. Not verified through the CLI valuation path. |
 
 ### News feeds fetched and parsed (keyless GET, then `parse_feed`)
@@ -150,7 +150,7 @@ Not added: Bitcoin Core `rss.xml` (593 KB) is refused by the parser's item cap. 
 | * | sanctions | public OFAC feed named by OFAC_SLS_FEED; no API key | not_verified | no keyed OFAC source | not_verified | not_verified |
 | * | address_risk | not enabled in examples/monitor.json | not_verified | Chainabuse would need an operator key this package does not configure | not_verified | not_verified |
 | * | positions | not enabled in examples/monitor.json | not_verified | DeBank is not a configured keyed source | not_verified | not_verified |
-| cosmos-hub | comet.rpc | comet_rpc adapter file only | not_verified | no keyed Comet source in the example monitor | not_verified | not_verified |
+| cosmos-hub | comet.rpc | capability JSON only; no Python reader; `run-once` reports `unsupported_family` | not_verified | no keyed Comet source in the example monitor | not_verified | not_verified |
 | linea-mainnet | enabled_route | not in examples/monitor.json enabled_networks | not_verified | no keyed route in the example monitor | not_verified | not_verified |
 | zksync-era | enabled_route | not in examples/monitor.json enabled_networks | not_verified | no keyed route in the example monitor | not_verified | not_verified |
 | scroll-mainnet | enabled_route | not in examples/monitor.json enabled_networks | not_verified | no keyed route in the example monitor | not_verified | not_verified |
@@ -239,7 +239,8 @@ Keyless sources that the routes still name:
 - The Base keyless Blockscout result depends on the host.
 - BSC external history has no keyless source.
 - Avalanche deep native history is expansion_pending.
-- `guardian install-service` is a dry-run installer. No unit has been installed on a host, and the host smoke is NOT_RUN. See `docs/box-unattended.md`.
+- `guardian install-service --dry-run` prints a plan and does not install a unit. On a systemd or cron plan, `install-service --apply` without `--dry-run` installs whether or not `--output` is set, and a successful install reports `installed: true`. `--output` only changes where the rendered files are written. It does not turn `--apply` into a preview. systemd still runs `daemon-reload` and `systemctl enable` (or `systemctl --user enable`) on `guardian-mcm-shadow.timer`, `guardian-legacy-collector.timer`, and `guardian-watchdog.timer`, and does not pass `--now`, so this command does not start a timer. Those `enable` commands name the timers; they do not point at the `--output` directory. cron still runs `crontab -u <user>` on the merged file. Without `--output`, systemd system mode writes the six unit files under `/etc/systemd/system`. systemd user mode writes them under `/home/<user>/.config/systemd/user` (`--user` defaults to `guardian-monitor`). cron mode writes `guardian-unattended.cron` to `/etc/cron.d` and the current user crontab plus the managed block to `/etc/cron.d/guardian-unattended.cron.merged`, then runs `crontab -u`. With `--output`, those files are written under that directory instead, and `crontab -u` installs the merged file from there. The program does not force mode `0600` on those writes. The cron lines have no user field, so a cron that reads `/etc/cron.d` can parse them as a system crontab. The managed block in the user crontab is replaced; other lines of that crontab are kept. The generated `run-once` and `watchdog` lines include `--no-send`. `guardian-legacy-collector.service` and the second cron line run `--legacy-executable` (default `/usr/local/sbin/guardian-legacy-collector`) with no `--no-send`. That program is the operator's. `--schedule-mode launchd_agent` does not call `launchctl`. Launchd checks that each plist command includes `--no-send`. No unit has been installed on a host by this preview, and the host smoke is NOT_RUN. See `docs/box-unattended.md`.
+- Permit2 internal allowances are not tracked. A Permit2 `Permit` log is a `relay_permit` note with `not_current_allowance`. It is not an approval row and it is not an alert. The approval scan topics are `Approval(address,address,uint256)` and `ApprovalForAll(address,address,bool)`, from the bootstrap origin.
 - Tagged previews are published only as GitLab releases. Nothing is uploaded to PyPI or any package index.
 - Deferred and not claimed: sUSDe, Morpho Blue markets, TRC-20 and approval alerting on TRON, TRON genesis identity verification, yield live fetch, scheduler and delivery.
 - Text-handling residuals (see `docs/injection-privacy-tests.md`): a double HTML escape is cosmetic; the incident matcher can miss digit-plus-letter tokens such as "Aave v3 incident"; `privacy_boundary` is a policy table, not proof of isolation; there is no claim of general prompt-injection immunity.
@@ -1025,7 +1026,7 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "id": "cosmos/comet",
       "network": "cosmos-hub",
       "capability": "comet.rpc",
-      "no_key_path": "comet_rpc adapter file only",
+      "no_key_path": "capability JSON only; no Python reader; `run-once` reports `unsupported_family`",
       "no_key_status": "not_verified",
       "keyed_path": "no keyed Comet source in the example monitor",
       "keyed_status": "not_verified",
@@ -1033,7 +1034,7 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "capability_files": [
         "config/source-capabilities/comet_rpc.json"
       ],
-      "note": "The adapter file is a contract. The example monitor does not enable Cosmos. network-tiers.plan.json marks the network planned_not_live_verified."
+      "note": "config/source-capabilities/comet_rpc.json is a capability declaration. No Python reader exists. run-once reports unsupported_family. The example monitor does not enable Cosmos. network-tiers.plan.json marks the network planned_not_live_verified."
     },
     {
       "id": "linea-mainnet/enabled-route",

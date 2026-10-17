@@ -6,7 +6,7 @@ Shipped example monitors do not enable `tron-mainnet`. The chain file stays `ena
 
 Environment names are `TRONGRID_API_URL` and optional `TRON_PRO_API_KEY`. The key is sent only as the `TRON-PRO-API-KEY` header. If the key is absent the read is keyless and still sends the watch address. No private key, seed, or keystore is read or stored.
 
-Local request policy for this adapter: one in-flight request and at most one request per second, with bounded retries that honor the full `Retry-After`. A wait that would pass the round deadline is deferred instead of shortened, and an expired deadline does not send the attempt. Six successful keyless responses do not establish quota or sustained availability.
+Local request policy for this adapter: one in-flight request and at most one request per second, with bounded retries that honor the full `Retry-After`. A wait that would pass the round deadline is deferred instead of shortened, and an expired deadline does not send the attempt. Successful keyless responses do not establish quota or sustained availability.
 
 `/wallet/getnowblock` is latest-head evidence, not solidified-state evidence. Latest-only balance and constant-call reads keep that label. Economically significant history is accepted only after solidified inclusion and successful execution from `/walletsolidity/gettransactionbyid` and `/walletsolidity/gettransactioninfobyid`. History uses `only_confirmed=true`. Each walk freezes `min_timestamp` and `max_timestamp` with the other filters and sends that same set on every page. An omitted upper timestamp would default to the current time and is not used. A fingerprint is kept only for a page whose rows were verified or explicitly classified. A missing solidified receipt or a request cap leaves the cursor on that unfinished page and keeps the same window. The page is fetched again on the next scan; persisted verified identities prevent repeating verification, and rows already classified are not verified twice. A finished window stores the solidified height with those bounds; the next scan starts after the stored upper timestamp instead of dropping it. Pages are capped (documented maximum 200 rows). A capped or repeated-fingerprint window is not complete.
 
@@ -22,7 +22,7 @@ Local request policy for this adapter: one in-flight request and at most one req
 | Account permissions | partial | Owner threshold and owner-key count, plus the number of active permissions; active thresholds/keys are not analysed. |
 | Staking, resource accounting, internal transfers, TRC-10, general approval discovery, activation, account-key updates | not_verified | Out of scope. Reported as unknown, unsupported, or refused. Not safe, not complete, and not zero. |
 
-Evidence note: keyless TronGrid probes on 2026-10-09 returned HTTP 200 for accounts, transactions, transactions/trc20, triggerconstantcontract, and getnowblock. Those six responses are not a live pass, not a quota measurement, and not proof the indexer stays available.
+Evidence note: keyless TronGrid probes on 2026-10-09 returned HTTP 200 for accounts, transactions, transactions/trc20, triggerconstantcontract, and getnowblock. Those responses are not a live pass, not a quota measurement, and not proof the indexer stays available.
 
 Nothing here signs, builds, or broadcasts a transaction.
 
