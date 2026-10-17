@@ -1361,3 +1361,12 @@ def test_dedup_r3_nodereal_internal_without_trace_across_pages_is_partial(
     assert body["counterparties"][0]["count"] == 1
     assert body["counterparties"][0]["assets"][0]["raw_amount"] == "10"
     assert body["counterparties"][0]["tx_hashes"] == [r1.tx(1)]
+
+
+@pytest.mark.parametrize("text", ["³", "²5", "٣", "１２"])
+def test_non_ascii_digits_are_unreadable_not_a_crash(text):
+    from guardian.relations import fetch
+
+    assert fetch._hex_int(text) is None
+    assert fetch._amount(text) is None
+    assert fetch._block({"block_number": text}) is None

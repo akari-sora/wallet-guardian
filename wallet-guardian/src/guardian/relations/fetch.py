@@ -1206,7 +1206,7 @@ def _hex_int(value: Any) -> int | None:
             return int(text, 16)
         except ValueError:
             return None
-    if text.isdigit():
+    if text.isascii() and text.isdigit():
         return int(text)
     return None
 
@@ -1473,7 +1473,7 @@ def _block(item: Mapping[str, Any]) -> int | None:
             continue
         if isinstance(value, int) and value >= 0:
             return value
-        if isinstance(value, str) and value.strip().isdigit():
+        if isinstance(value, str) and value.strip().isascii() and value.strip().isdigit():
             return int(value.strip())
     return None
 
@@ -1489,7 +1489,7 @@ def _amount(value: Any) -> int | None:
         return None
     if isinstance(value, int) and value >= 0:
         return value
-    if isinstance(value, str) and value.strip().isdigit():
+    if isinstance(value, str) and value.strip().isascii() and value.strip().isdigit():
         return int(value.strip())
     return None
 
