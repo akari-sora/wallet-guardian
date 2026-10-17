@@ -8,7 +8,7 @@ Wallet Guardian is a preview of a read-only wallet monitor you run on a machine 
 
 The named chains are Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS, and Solana (partial: transactions are not parsed, so no Solana transfer alerts in this preview), with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path. Coverage differs by chain and source. A missing key, a refused plan, or a failed read is a gap, not an empty wallet. The coverage matrix in the repository lists each claim.
 
-The 72h shadow validation is not complete. These preview commits were checked with a local gate, not a CI pass. Out of the box nothing notifies you: alerts stay in a local database, the scheduler is not installed, and the provided schedule runs `run-once --no-send` every 3 hours and `watchdog --no-send` every 15 minutes. Telegram delivery exists but has not been tested live. Nothing is on PyPI. Install the release wheel and its constraints file from the project's GitLab Releases page at the top of this file.
+The 72h shadow validation is not complete. Release evidence for rc.5 is `NOT_RUN`. No gate result is recorded for the rc.5 release commit. The only recorded CI run is pipeline #2957467957 on `5a2c33f`, not on the release commit. Out of the box nothing notifies you: alerts stay in a local database, the scheduler is not installed, and the provided schedule runs `run-once --no-send` every 3 hours and `watchdog --no-send` every 15 minutes. Telegram delivery exists but has not been tested live. Nothing is on PyPI. Install the release wheel and its constraints file from the project's GitLab Releases page at the top of this file.
 
 ## 繁體中文
 

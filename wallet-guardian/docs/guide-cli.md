@@ -1,6 +1,6 @@
 # CLI guide
 
-Wallet Guardian's monitor is a preview you run on a machine you control. The package version in this tree is `0.4.0rc5`. It is read-only: it does not sign, build a transaction, or broadcast, and it does not ask for a seed phrase or a private key. The named chains are Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS, and Solana, with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path. What each chain can actually read is [coverage-matrix.md](coverage-matrix.md). The 72h shadow validation is not complete. Checks on these preview commits are a local gate, not a CI pass. There is no PyPI release.
+Wallet Guardian's monitor is a preview you run on a machine you control. The package version in this tree is `0.4.0rc5`. It is read-only: it does not sign, build a transaction, or broadcast, and it does not ask for a seed phrase or a private key. The named chains are Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS, and Solana, with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path. What each chain can actually read is [coverage-matrix.md](coverage-matrix.md). The 72h shadow validation is not complete. Release evidence for rc.5 is `NOT_RUN`. No gate result is recorded for the rc.5 release commit. The only recorded CI run is pipeline #2957467957 on `5a2c33f`, not on the release commit. There is no PyPI release.
 
 You do not need Grok Bot, Cloudflare, D1, a wallet login, or Node to follow this page. Flags for every command are in [cli-reference.md](cli-reference.md).
 

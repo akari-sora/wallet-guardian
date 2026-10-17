@@ -1070,7 +1070,7 @@ def test_skill_stops_when_installed_capabilities_are_missing() -> None:
         text = path.read_text(encoding="utf-8")
         install = text[text.index("## Install"):text.index("## First command")]
         assert "The rc.5 wheel on that release page includes `capabilities`. `v0.4.0-rc.4` and earlier wheels do not." in install
-        assert "Wait for the next release." not in install
+        assert "Wait for the next release." not in text
         first = text.index("## First command")
         classes = text.index("## Classes", first)
         section = text[first:classes]

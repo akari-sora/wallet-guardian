@@ -96,6 +96,8 @@ cp -a "$XDG_STATE_HOME/guardian" "$XDG_STATE_HOME/guardian.backup-$(date -u +%Y%
 
 從 rc.3 升到 rc.4：rc.4 會新增遷移（原生餘額觀測與解釋工作的資料表）。升級保留既有的錢包身分、歷史游標、警報與送達狀態，不會補造過去的原生餘額基準，也不會因為新功能初始化而產生追溯警報；第一次成功的觀測才是基準。要退回 rc.3，請還原升級前的備份，不要在原地降版。
 
+從 rc.4 升到 rc.5：rc.5 會新增遷移 `0010_pending_alert_candidates` 與 `0011_balance_probe`。升級前先備份狀態目錄。要退回 rc.4，請還原備份，不要在原地降版。
+
 同一個 schema 世代再裝回上一版 wheel 時，私人狀態仍可讀。若新版已經套用了舊版沒有的遷移，舊版會拒絕開啟，訊息含 `database schema is newer than this build`，並且不刪資料。這時要回到舊版，請把備份複製回來，不要指望舊程式把 schema 降回去。
 
 解除安裝：
