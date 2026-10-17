@@ -647,35 +647,50 @@ def read_nodereal(
     return finish(_rolled(recorded, edges, zeros, None))
 
 
+def _row_mark(edge: Edge) -> tuple:
+    """Fuzzy fingerprint: transaction hash, sender, recipient, contract, and raw amount."""
+    return (edge.tx_hash, edge.sender, edge.recipient, edge.contract, edge.raw_amount)
+
+
 class _PageFold:
-    """One part's pages. A row key drops a repeat. A later equal row without a key does not stay complete."""
+    """One part's pages. A repeated key stays complete. A later equal row is partial when any copy has no key."""
 
     def __init__(self, key_of) -> None:
         self._key_of = key_of
         self.edges: list[Edge] = []
         self._keys: set[tuple] = set()
         self._marks: set[tuple] = set()
+        self._keyless: set[tuple] = set()
         self.ambiguous = False
 
     def add_page(self, pairs: list[tuple[Any, Edge]]) -> None:
         page_keys: set[tuple] = set()
-        page_marks: list[tuple] = []
+        page_marks: set[tuple] = set()
+        page_keyless: set[tuple] = set()
         for raw, edge in pairs:
             key = self._key_of(raw, edge)
+            mark = _row_mark(edge)
             if key is not None:
                 if key in self._keys or key in page_keys:
                     continue
+                # An earlier page already had this fingerprint with no key.
+                if mark in self._keyless:
+                    self.ambiguous = True
+                    continue
                 page_keys.add(key)
+                page_marks.add(mark)
                 self.edges.append(edge)
                 continue
-            mark = (edge.tx_hash, edge.sender, edge.recipient, edge.contract, edge.raw_amount)
             if mark in self._marks:
                 self.ambiguous = True
+                page_keyless.add(mark)
                 continue
-            page_marks.append(mark)
+            page_marks.add(mark)
+            page_keyless.add(mark)
             self.edges.append(edge)
         self._keys.update(page_keys)
         self._marks.update(page_marks)
+        self._keyless.update(page_keyless)
 
     def apply(self, state: str, reason: str) -> tuple[list[Edge], str, str]:
         if self.ambiguous and state == "complete":
@@ -802,22 +817,11 @@ def _trace_position(raw: Mapping[str, Any]) -> str | None:
 
 
 def _log_position(raw: Mapping[str, Any]) -> str | None:
+    """First valid log index. Invalid ``logIndex`` still leaves ``log_index`` usable."""
     for name in ("logIndex", "log_index"):
-        found = raw.get(name)
-        if isinstance(found, bool):
-            continue
-        if isinstance(found, int):
+        found = _hex_int(raw.get(name))
+        if found is not None:
             return str(found)
-        if isinstance(found, str) and found.strip():
-            text = found.strip()
-            if text.lower().startswith("0x"):
-                try:
-                    return str(int(text, 16))
-                except ValueError:
-                    return text.lower()
-            if text.isdigit():
-                return str(int(text))
-            return text.lower()
     return None
 
 

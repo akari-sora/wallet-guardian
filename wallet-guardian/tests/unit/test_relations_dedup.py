@@ -1081,3 +1081,283 @@ def test_dedup_r2_blockscout_internal_same_index_across_pages_counts_once(
     assert body["counterparties"][0]["count"] == 1
     assert body["counterparties"][0]["assets"][0]["raw_amount"] == "10"
     assert body["counterparties"][0]["tx_hashes"] == [r1.tx(1)]
+
+
+def _token_row(value: int, digest: str, **fields: object) -> dict:
+    row = r1.token_item(r1.LEFT, r1.SEED, value, INSIDE, digest)
+    row.update(fields)
+    return row
+
+
+def _blockscout_token_pages(backend: r1.PathBackend, first: list, second: list) -> None:
+    seen = {"token-transfers": 0}
+
+    def answer(call):
+        if _tail(call, "transactions") or _tail(call, "internal-transactions"):
+            return r1.scout([])
+        if _tail(call, "token-transfers"):
+            seen["token-transfers"] += 1
+            if seen["token-transfers"] == 1:
+                return r1.scout(first, {"block_number": 4, "index": 0})
+            return r1.scout(second, None)
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+
+
+def test_dedup_r3_blockscout_log_index_then_missing_across_pages_is_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A later page of the same transfer with no log index is not a second complete event."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    _blockscout_token_pages(
+        backend,
+        [_token_row(4, r1.tx(1), logIndex=7)],
+        [_token_row(4, r1.tx(1))],
+    )
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "partial"
+    assert read["reason"] == "ambiguous_duplicate"
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "partial", "reason": "ambiguous_duplicate",
+    }
+    row = body["counterparties"][0]
+    assert row["count"] == 1
+    assert row["assets"][0]["raw_amount"] == "4"
+    assert row["tx_hashes"] == [r1.tx(1)]
+
+
+def test_dedup_r3_blockscout_missing_then_log_index_across_pages_is_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A later log index does not count again when the first page of that transfer had none."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    _blockscout_token_pages(
+        backend,
+        [_token_row(4, r1.tx(1))],
+        [_token_row(4, r1.tx(1), logIndex=7)],
+    )
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "partial"
+    assert read["reason"] == "ambiguous_duplicate"
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "partial", "reason": "ambiguous_duplicate",
+    }
+    row = body["counterparties"][0]
+    assert row["count"] == 1
+    assert row["assets"][0]["raw_amount"] == "4"
+    assert row["tx_hashes"] == [r1.tx(1)]
+
+
+def test_dedup_r3_unknown_log_index_uses_the_other_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """logIndex "unknown" is not an identity. Different decimal log_index values stay two complete rows."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    _blockscout_token_pages(
+        backend,
+        [_token_row(4, r1.tx(1), logIndex="unknown", log_index="1")],
+        [_token_row(4, r1.tx(1), logIndex="unknown", log_index="2")],
+    )
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert read["reason"] == ""
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "complete", "reason": "",
+    }
+    row = body["counterparties"][0]
+    assert row["count"] == 2
+    assert row["assets"][0]["raw_amount"] == "8"
+    assert row["tx_hashes"] == [r1.tx(1)]
+
+
+def test_dedup_r3_negative_log_index_uses_the_other_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A negative logIndex is not an identity. A valid hex log_index on each page still counts."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    _blockscout_token_pages(
+        backend,
+        [_token_row(4, r1.tx(1), logIndex=-1, log_index="0x3")],
+        [_token_row(4, r1.tx(1), logIndex=-1, log_index="0x4")],
+    )
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert read["reason"] == ""
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "complete", "reason": "",
+    }
+    row = body["counterparties"][0]
+    assert row["count"] == 2
+    assert row["assets"][0]["raw_amount"] == "8"
+    assert row["tx_hashes"] == [r1.tx(1)]
+
+
+def test_dedup_r3_invalid_hex_log_index_uses_the_other_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An unparsable 0x logIndex does not hide a valid log_index, and it is not a shared key."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    _blockscout_token_pages(
+        backend,
+        [_token_row(4, r1.tx(1), logIndex="0xzz", log_index=8)],
+        [_token_row(4, r1.tx(1), logIndex="0xzz", log_index=9)],
+    )
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert read["reason"] == ""
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "complete", "reason": "",
+    }
+    row = body["counterparties"][0]
+    assert row["count"] == 2
+    assert row["assets"][0]["raw_amount"] == "8"
+    assert row["tx_hashes"] == [r1.tx(1)]
+
+
+def test_dedup_r3_invalid_log_indexes_on_one_page_both_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Two rows whose log indexes are both invalid follow the same-page fuzzy rule."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    row = _token_row(4, r1.tx(1), logIndex="unknown")
+    r1.fill_tails(backend, [row, dict(row)], [])
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert read["reason"] == ""
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "complete", "reason": "",
+    }
+    row_out = body["counterparties"][0]
+    assert row_out["count"] == 2
+    assert row_out["assets"][0]["raw_amount"] == "8"
+    assert row_out["tx_hashes"] == [r1.tx(1)]
+
+
+def test_dedup_r3_invalid_log_indexes_across_pages_follow_the_fuzzy_rule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A negative log index is not a key. The same row on a later page is partial, not a second event."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    _blockscout_token_pages(
+        backend,
+        [_token_row(4, r1.tx(1), logIndex=-1)],
+        [_token_row(4, r1.tx(1), logIndex=-1)],
+    )
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "partial"
+    assert read["reason"] == "ambiguous_duplicate"
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "partial", "reason": "ambiguous_duplicate",
+    }
+    row = body["counterparties"][0]
+    assert row["count"] == 1
+    assert row["assets"][0]["raw_amount"] == "4"
+    assert row["tx_hashes"] == [r1.tx(1)]
+
+
+def test_dedup_r3_nodereal_repeated_cursor_keeps_gap_when_timestamp_lookup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A failed stamp on rows kept before a repeated cursor does not rewrite gap/repeated_cursor."""
+    backend = _nodereal(tmp_path, monkeypatch)
+    row = _nr(r1.OTHER, r1.DISPERSE, 1, "4")
+    row.pop("metadata")
+
+    def answer(call):
+        body = r1.rpc_call(call)
+        method = body["method"]
+        if method == "eth_blockNumber":
+            return r1.rpc(hex(1000))
+        if method == "eth_getBlockByNumber":
+            return r1.rpc({"number": body["params"][0]})
+        if method != "nr_getAssetTransfers":
+            raise FixtureMiss()
+        params = body["params"][0]
+        if params["category"] != ["20"]:
+            return r1.rpc({"transfers": []})
+        if params.get("pageKey"):
+            return r1.rpc({"pageKey": "p2", "transfers": [_nr(r1.OTHER, r1.DISPERSE, 2, "9")]})
+        return r1.rpc({"pageKey": "p2", "transfers": [row]})
+
+    backend.add(lambda _call: True, answer)
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.DISPERSE, "--network", "bsc-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "gap"
+    assert read["reason"] == "repeated_cursor"
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers",
+        "read_status": "gap",
+        "reason": "repeated_cursor",
+        "timestamp_reason": "window_unchecked",
+    }
+    assert body["counterparties"] is None
+
+
+def test_dedup_r3_nodereal_internal_without_trace_on_one_page_counts_two(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Two internal rows with no trace position on one page both count, and that part stays complete."""
+    backend = _nodereal(tmp_path, monkeypatch)
+    row = _nr_native(r1.OTHER, r1.DISPERSE, 1, "10")
+
+    def transfer(params):
+        if params["category"] != ["internal"]:
+            return r1.rpc({"transfers": []})
+        return r1.rpc({"transfers": [row, dict(row)]})
+
+    backend.add(lambda _call: True, _nr_routes(transfer))
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.DISPERSE, "--network", "bsc-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert read["reason"] == ""
+    assert _parts(read)["internal-transactions"] == {
+        "part": "internal-transactions", "read_status": "complete", "reason": "",
+    }
+    assert body["counterparties"][0]["count"] == 2
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "20"
+    assert body["counterparties"][0]["tx_hashes"] == [r1.tx(1)]
+
+
+def test_dedup_r3_nodereal_internal_without_trace_across_pages_is_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The same internal row with no trace position on a later page is one partial event."""
+    backend = _nodereal(tmp_path, monkeypatch)
+    row = _nr_native(r1.OTHER, r1.DISPERSE, 1, "10")
+
+    def transfer(params):
+        if params["category"] != ["internal"]:
+            return r1.rpc({"transfers": []})
+        if params.get("pageKey"):
+            return r1.rpc({"transfers": [dict(row)]})
+        return r1.rpc({"pageKey": "p2", "transfers": [row]})
+
+    backend.add(lambda _call: True, _nr_routes(transfer))
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.DISPERSE, "--network", "bsc-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "partial"
+    assert read["reason"] == "ambiguous_duplicate"
+    assert _parts(read)["internal-transactions"] == {
+        "part": "internal-transactions", "read_status": "partial", "reason": "ambiguous_duplicate",
+    }
+    assert body["counterparties"][0]["count"] == 1
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "10"
+    assert body["counterparties"][0]["tx_hashes"] == [r1.tx(1)]
