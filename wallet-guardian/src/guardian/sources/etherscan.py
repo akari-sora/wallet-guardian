@@ -63,6 +63,7 @@ class HistoryRead:
     reason: str = ""
     reason_codes: tuple[str, ...] = ()
     detail: str = ""
+    page_lengths: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if self.category not in {"ok", "empty", "partial", "error"}:
@@ -70,6 +71,7 @@ class HistoryRead:
         object.__setattr__(self, "items", tuple(self.items))
         object.__setattr__(self, "gaps", tuple(self.gaps))
         object.__setattr__(self, "reason_codes", tuple(self.reason_codes))
+        object.__setattr__(self, "page_lengths", tuple(self.page_lengths))
 
 
 def resolve_credential(

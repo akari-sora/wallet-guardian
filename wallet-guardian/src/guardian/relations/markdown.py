@@ -178,7 +178,15 @@ def _merged_lines(rows: Sequence) -> list[str]:
 def _gap_lines(payload: Mapping) -> list[str]:
     lines = []
     for row in payload.get("reads") or []:
-        if not isinstance(row, Mapping) or row.get("read_status") == "complete":
+        if not isinstance(row, Mapping):
+            continue
+        parts = row.get("parts")
+        if isinstance(parts, list) and parts:
+            for part in parts:
+                if isinstance(part, Mapping):
+                    lines.append(_part_gap_line(row, part))
+            continue
+        if row.get("read_status") == "complete":
             continue
         lines.append(
             f"- {row.get('network')} {row.get('source_id')} {row.get('read_status')} {row.get('reason')}"
@@ -190,7 +198,18 @@ def _gap_lines(payload: Mapping) -> list[str]:
         lines.append(
             f"- {row.get('network')} {row.get('address')} {row.get('read_status')} {row.get('reason')}"
         )
+    truncated = payload.get("truncated")
+    if isinstance(truncated, Mapping):
+        lines.append(f"- truncated {truncated.get('reason')} total {truncated.get('total')}")
     return lines or ["None"]
+
+
+def _part_gap_line(row: Mapping, part: Mapping) -> str:
+    text = f"- {row.get('network')} {row.get('source_id')} {part.get('part')} {part.get('read_status')}"
+    reason = part.get("reason")
+    if reason:
+        text += f" {reason}"
+    return text
 
 
 def _contract_check_lines(payload: Mapping) -> list[str]:

@@ -317,11 +317,18 @@ class BlockscoutClient:
         allowed key is ``filter``, and the only values are ``from`` and ``to``.
         ``keep_partial`` defaults to false. When it is true, a page or item cap
         returns the rows already read, with ``complete`` false and category
-        ``partial``. ``stop_timestamp`` stops on an earlier row and treats the
-        time window as read. ``skip_pending`` defaults to false. When it is
-        true, a row with no block number and ``result`` ``pending`` is skipped
-        instead of ``missing_block``. Callers that omit these arguments keep
-        the previous result.
+        ``partial``. When it is false, those caps are an error and return no
+        rows. A next cursor that repeats a query already sent is an error with
+        reason ``repeated_cursor``. ``keep_partial`` true keeps the earlier
+        pages on that error. ``keep_partial`` false returns no rows, so a
+        caller cannot submit them. The walk does not parse the next cursor
+        once ``page_cap`` is already reached, so an unusable next cursor does
+        not replace that cap result. ``stop_timestamp`` stops on an earlier
+        row and treats the time window as read. ``skip_pending`` defaults to
+        false. When it is true, a row with no block number and ``result``
+        ``pending`` is skipped instead of ``missing_block``. Callers that omit
+        these arguments keep the previous page-cap, item-cap, and time-stop
+        result.
         """
         name = _V2_TAILS.get(tail)
         if capability is None:
@@ -346,6 +353,8 @@ class BlockscoutClient:
         kept: list[Any] = []
         token: dict[str, Any] | None = None
         pages = 0
+        sent: set[tuple[tuple[str, str], ...]] = set()
+        page_lengths: list[int] = []
         while pages < page_cap:
             headers = ("authorization",) if self._credential else None
             if token is not None:
@@ -357,6 +366,7 @@ class BlockscoutClient:
                     return _kept(capability, previous_cursor, "bad_page")
             else:
                 request_query = first_query
+            sent.add(_cursor_key(request_query))
             operation = self.operation(path, request_query, headers)
             try:
                 result = read_with_retry(
@@ -390,6 +400,7 @@ class BlockscoutClient:
             if nxt is not None and (not isinstance(nxt, dict) or not nxt):
                 return _kept(capability, previous_cursor, "bad_page")
             stop = False
+            before = len(kept)
             for item in body["items"]:
                 block = _item_block(item)
                 if block is None:
@@ -408,18 +419,34 @@ class BlockscoutClient:
                         break
                 kept.append(item)
                 if len(kept) >= item_cap:
+                    page_lengths.append(len(kept) - before)
                     if keep_partial:
-                        return _partial(capability, kept, previous_cursor, "item_cap")
+                        return _partial(capability, kept, previous_cursor, "item_cap", page_lengths)
                     return _kept(capability, previous_cursor, "item_cap")
+            page_lengths.append(len(kept) - before)
             pages += 1
             if stop or nxt is None:
                 category = "empty" if not kept else "ok"
                 return HistoryRead(
                     capability, tuple(kept), True, True, (), previous_cursor, category, False, "", (), "",
+                    tuple(page_lengths),
                 )
+            if pages >= page_cap:
+                break
+            try:
+                next_query = self.page_query(nxt)
+            except ValueError:
+                return _kept(capability, previous_cursor, "bad_page")
+            if _cursor_key(next_query) in sent:
+                # This page's next cursor was already sent. Drop the page and keep earlier ones.
+                del kept[before:]
+                page_lengths.pop()
+                if keep_partial:
+                    return _gap_items(capability, kept, previous_cursor, "repeated_cursor", page_lengths)
+                return _kept(capability, previous_cursor, "repeated_cursor")
             token = nxt
         if keep_partial:
-            return _partial(capability, kept, previous_cursor, "page_cap")
+            return _partial(capability, kept, previous_cursor, "page_cap", page_lengths)
         return _kept(capability, previous_cursor, "page_cap")
 
 
@@ -445,7 +472,42 @@ def _first_filter(query: Mapping[str, str] | None) -> dict[str, str] | None:
     return {"filter": value}
 
 
-def _partial(capability: str, items: list[Any], previous: str | None, reason: str) -> HistoryRead:
+def _cursor_key(query: Mapping[str, str] | None) -> tuple[tuple[str, str], ...]:
+    if not query:
+        return ()
+    return tuple(sorted((str(key), str(value)) for key, value in query.items()))
+
+
+def _gap_items(
+    capability: str,
+    items: list[Any],
+    previous: str | None,
+    reason: str,
+    page_lengths: list[int],
+) -> HistoryRead:
+    return HistoryRead(
+        capability,
+        tuple(items),
+        False,
+        False,
+        (),
+        previous,
+        "error",
+        False,
+        reason,
+        (reason,) if reason else (),
+        "",
+        tuple(page_lengths),
+    )
+
+
+def _partial(
+    capability: str,
+    items: list[Any],
+    previous: str | None,
+    reason: str,
+    page_lengths: list[int] | tuple[int, ...] = (),
+) -> HistoryRead:
     return HistoryRead(
         capability,
         tuple(items),
@@ -458,6 +520,7 @@ def _partial(capability: str, items: list[Any], previous: str | None, reason: st
         reason,
         (reason,) if reason else (),
         "",
+        tuple(page_lengths),
     )
 
 

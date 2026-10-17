@@ -100,3 +100,69 @@ def test_op_internal_credit_alerts_with_evm_internal_origin(
     assert "limit=" not in query
     assert "api.blockscout.com" not in urls[0]
     assert all("apikey=" not in url.lower() for url in urls)
+
+
+def test_dedup_r2_run_once_repeated_cursor_is_not_an_empty_submit(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """run-once stops on a repeated Blockscout cursor. It does not store an empty history."""
+    def _only_optimism(document: dict) -> None:
+        document["plugins"] = []
+        document["enabled_networks"] = ["optimism-mainnet"]
+        document["routing"] = [row for row in document["routing"] if row.get("network") == "optimism-mainnet"]
+        document["polling"]["bootstrap_origin"] = 1
+
+    desk = _desk(
+        tmp_path,
+        monkeypatch,
+        [_account(WALLET_A, ADDRESS_A, ("optimism-mainnet",))],
+        mutate=_only_optimism,
+    )
+    urls: list[str] = []
+    seen = {"internal": 0}
+    inner = desk.backend.send
+
+    def send(call: object) -> RawResponse:
+        url = str(getattr(call, "url", ""))
+        if "/internal-transactions" in url:
+            urls.append(url)
+            seen["internal"] += 1
+            if seen["internal"] == 1:
+                nxt = {"block_number": 12, "index": 1}
+                block = 12
+            else:
+                nxt = {"block_number": 12, "index": 1}
+                block = 11
+            body = {
+                "items": [{
+                    "block_number": block,
+                    "error": None,
+                    "from": {"hash": OTHER},
+                    "index": 1,
+                    "success": True,
+                    "to": {"hash": ADDRESS_A},
+                    "transaction_hash": TX,
+                    "type": "call",
+                    "value": str(WEI_06),
+                }],
+                "next_page_params": nxt,
+            }
+            return RawResponse(200, {}, json.dumps(body).encode())
+        return inner(call)
+
+    desk.backend.send = send
+    report = _cli(capsys, desk)
+    assert len(urls) == 2
+    assert "block_number=12" in urls[1]
+    assert "index=1" in urls[1]
+    coverage = _FREE._coverage(report, WALLET_A, "optimism-mainnet", "history.native_internal")
+    assert coverage["quality"] == "error"
+    assert "repeated_cursor" in coverage["reason_codes"]
+    assert "blocked" in coverage["reason_codes"]
+    assert coverage["quality"] != "empty"
+    assert coverage["quality"] != "complete_in_declared_scope"
+    stored = [
+        item for item in _FREE._events(desk, WALLET_A, "optimism-mainnet") if item.get("tx_id") == TX
+    ]
+    assert stored == []
+    assert _FREE._cursor(desk, WALLET_A, "optimism-mainnet", "history.native_internal") is None

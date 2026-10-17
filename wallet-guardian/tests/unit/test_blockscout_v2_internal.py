@@ -210,6 +210,49 @@ def test_blockscout_row_normalizes_to_evm_internal() -> None:
     assert dropped.gap is None
 
 
+def test_dedup_r2_page_cap_ignores_illegal_next_params() -> None:
+    """A full page at the cap keeps the previous cap result when the unused next cursor is illegal."""
+    page = {"items": [_internal(12)], "next_page_params": {"block_number": None}}
+    client, transport = _client([page])
+    read = client.read_v2(WALLET, "internal-transactions", page_cap=1, stop_block=0, previous_cursor="4")
+    assert len(transport.calls) == 1
+    assert read.category == "error"
+    assert read.reason == "page_cap"
+    assert read.items == ()
+    assert read.pagination_complete is False
+    assert read.category != "empty"
+    kept_client, kept_transport = _client([dict(page)])
+    kept = kept_client.read_v2(
+        WALLET,
+        "internal-transactions",
+        page_cap=1,
+        keep_partial=True,
+        stop_block=0,
+        previous_cursor="4",
+    )
+    assert len(kept_transport.calls) == 1
+    assert kept.category == "partial"
+    assert kept.reason == "page_cap"
+    assert kept.pagination_complete is False
+    assert [item["block_number"] for item in kept.items] == [12]
+
+
+def test_dedup_r2_default_repeated_cursor_is_an_error_without_rows() -> None:
+    """The default read_v2 path reports repeated_cursor and does not return rows to submit."""
+    client, transport = _client([
+        {"items": [_internal(18)], "next_page_params": {"block_number": 12, "index": 1}},
+        {"items": [_internal(11)], "next_page_params": {"block_number": 12, "index": 1}},
+    ])
+    read = client.read_v2(WALLET, "internal-transactions", stop_block=0, previous_cursor="0")
+    assert len(transport.calls) == 2
+    assert transport.calls[1].query == {"block_number": "12", "index": "1"}
+    assert read.category == "error"
+    assert read.reason == "repeated_cursor"
+    assert read.items == ()
+    assert read.pagination_complete is False
+    assert read.category != "empty"
+
+
 def test_txlist_status_1_is_unchanged() -> None:
     client, _transport = _client([
         {"message": "OK", "result": [{"hash": TX, "value": "1"}], "status": "1"},
