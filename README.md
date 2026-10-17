@@ -6,17 +6,13 @@
 
 > 正本和 issue 在 https://gitlab.com/aa22396584/wallet-guardian。Releases 和下載：https://gitlab.com/aa22396584/wallet-guardian/-/releases
 
-![Wallet Guardian 介紹（中文）](docs/img/promo-zh.png)
-
-![Wallet Guardian overview (English)](docs/img/promo-en.png)
-
 唯讀的錢包監控與錢包瀏覽器任務工作台，程式在 `wallet-guardian/`。完整說明（英文在前、中文在後）見 [wallet-guardian/README.md](wallet-guardian/README.md)。
 
 ## 快速開始
 
 這是預覽版 `0.4.0rc5`（標籤 `v0.4.0-rc.5`），不是正式版。沒有上 PyPI。不要用 `pip install guardian` 或 `pip install wallet-guardian-monitor`：套件索引上同名或相近的套件不是這個專案。
 
-**1. 下載。** 打開這一版的 GitLab Releases 頁面：https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.5 （全部版本：https://gitlab.com/aa22396584/wallet-guardian/-/releases）。把 `SHA256SUMS` 和它列出的每一個檔案放進同一個目錄。rc.5 的 `SHA256SUMS` 列出 `wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl`、`wallet_guardian_monitor-0.4.0rc5.tar.gz`（sdist）與 `constraints.txt`。
+**1. 下載。** 打開這一版的 GitLab Releases 頁面：https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.5 （全部版本：https://gitlab.com/aa22396584/wallet-guardian/-/releases）。把 `SHA256SUMS` 和它列出的每一個檔案放進同一個目錄。rc.5 的 `SHA256SUMS` 列出 `wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl`、`wallet_guardian_monitor-0.4.0rc5.tar.gz`（sdist）與 `constraints.txt`。如果 Releases 頁面有比這更新的版本，改用最新那一版，並把下面的檔名換成那一版的檔名。
 
 **2. 核對雜湊。** 在那個目錄執行下面其中一行。第一行用在 Linux，第二行用在 macOS。缺檔或雜湊不符都會失敗；失敗就不要安裝。Windows 沒有 `sha256sum` 時，用 [wallet-guardian/docs/install.md](wallet-guardian/docs/install.md) 裡的 Python 指令。
 

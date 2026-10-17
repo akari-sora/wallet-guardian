@@ -8,10 +8,6 @@
 >
 > 正本和 issue 在 https://gitlab.com/aa22396584/wallet-guardian。Releases 和下載：https://gitlab.com/aa22396584/wallet-guardian/-/releases
 
-![Wallet Guardian overview (English)](../docs/img/promo-en.png)
-
-![Wallet Guardian 介紹（中文）](../docs/img/promo-zh.png)
-
 Wallet Guardian is a read-only monitor for addresses you type, on a machine you control. It stores coverage and alerts locally. It is not a hosted service: a tenant id is a label for one operator. You can run the `guardian` command yourself, or let Grok Bot operate that same command. It does not sign, build a transaction, or broadcast, and it does not ask for a seed phrase or a private key. Public config stores environment-variable names only (`endpoint_env`, `credential_env`). Secret values can sit in the private secret profile or in the environment. A nonempty profile value is used first. This is a preview, and it is not investment advice.
 
 It does not sign, does not build transactions, and does not broadcast. See [docs/threat-model.md](docs/threat-model.md#monitor-does-not-sign). It never asks for a seed phrase or a wallet private key. API credentials are read from your local environment or private secret profile and transmitted only to the configured provider when authentication requires them. Public configuration contains references (`endpoint_env`, `credential_env`), not credential values. What leaves the machine is described before anything is written: wallet addresses go to the RPC or indexer hosts you enable; your hostname is not added to those requests. GoPlus and Chainabuse are not called in this preview, even with a key, an endpoint, and local consent (see Status and limits). The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`). `--no-send` forbids sends. See [docs/security-model.md](docs/security-model.md) and [docs/threat-model.md](docs/threat-model.md).
@@ -20,7 +16,7 @@ It does not sign, does not build transactions, and does not broadcast. See [docs
 
 Preview `0.4.0rc5` (tag `v0.4.0-rc.5`), not a production release. Read [Status and limits](#status-and-limits-read-this-first) before you rely on it. There is no PyPI release. Do not install `guardian` or `wallet-guardian-monitor` by name from any package index; a package there with one of those names is not this project.
 
-**1. Download.** Open this tag's GitLab Releases page, https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.5 (all releases: https://gitlab.com/aa22396584/wallet-guardian/-/releases). Put `SHA256SUMS` and every file it lists in one directory. For rc.5, `SHA256SUMS` lists `wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl`, `wallet_guardian_monitor-0.4.0rc5.tar.gz` (sdist), and `constraints.txt`. The release also carries `release-manifest.json` and `release-evidence.json`.
+**1. Download.** Open this tag's GitLab Releases page, https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.5 (all releases: https://gitlab.com/aa22396584/wallet-guardian/-/releases). Put `SHA256SUMS` and every file it lists in one directory. For rc.5, `SHA256SUMS` lists `wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl`, `wallet_guardian_monitor-0.4.0rc5.tar.gz` (sdist), and `constraints.txt`. The release also carries `release-manifest.json` and `release-evidence.json`. If the Releases page lists a newer version, use the newest one and substitute its file names below.
 
 **2. Verify.** Run one of these lines in that directory: the first on Linux, the second on macOS. A missing file or a mismatch fails. Do not install a file that fails. On Windows without `sha256sum`, use the Python check in [docs/install.md](docs/install.md).
 
@@ -135,7 +131,7 @@ Back up the state directory before an upgrade, install the new wheel with that r
 
 預覽版 `0.4.0rc5`（標籤 `v0.4.0-rc.5`），不是正式版。沒有上 PyPI；不要從任何套件索引用名稱安裝 `guardian` 或 `wallet-guardian-monitor`。
 
-**1. 下載。** 打開 https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.5 （全部版本：https://gitlab.com/aa22396584/wallet-guardian/-/releases），把 `SHA256SUMS` 和它列出的每一個檔案放進同一個目錄。rc.5 的 `SHA256SUMS` 列出 `wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl`、`wallet_guardian_monitor-0.4.0rc5.tar.gz`（sdist）與 `constraints.txt`。
+**1. 下載。** 打開 https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.5 （全部版本：https://gitlab.com/aa22396584/wallet-guardian/-/releases），把 `SHA256SUMS` 和它列出的每一個檔案放進同一個目錄。rc.5 的 `SHA256SUMS` 列出 `wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl`、`wallet_guardian_monitor-0.4.0rc5.tar.gz`（sdist）與 `constraints.txt`。如果 Releases 頁面有比這更新的版本，改用最新那一版，並把下面的檔名換成那一版的檔名。
 
 **2. 核對雜湊。** 第一行用在 Linux，第二行用在 macOS。缺檔或不符都會失敗；失敗就不要安裝。Windows 用 [docs/install.md](docs/install.md) 裡的 Python 指令。
 
@@ -148,8 +144,10 @@ shasum -a 256 -c SHA256SUMS
 
 ```bash
 uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl
+export RPC_ETHEREUM_MAINNET_URL=https://ethereum-rpc.publicnode.com
 guardian init --from answers.json --yes
 guardian run-once --mcm-config "${XDG_CONFIG_HOME:-$HOME/.config}/guardian/monitor.json" --no-send
+guardian coverage --mcm-config "${XDG_CONFIG_HOME:-$HOME/.config}/guardian/monitor.json"
 ```
 
 ## 狀態與限制（先讀這段）
