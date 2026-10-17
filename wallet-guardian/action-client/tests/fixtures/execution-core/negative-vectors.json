@@ -1,0 +1,816 @@
+{
+  "schema": "guardian.core_negative_vectors.v1",
+  "note": "Synthetic addresses only. Each vector must be refused by the client core with the listed reason. S-1b decisions 6 and 7.",
+  "chain_id": 56,
+  "addresses": {
+    "self": "0x00000000000000000000000000000000000a11ce",
+    "attacker": "0x000000000000000000000000000000000000bad0",
+    "unregistered": "0x000000000000000000000000000000000000dead",
+    "zero": "0x0000000000000000000000000000000000000000",
+    "token": "0x0000000000000000000000000000000000007001",
+    "nft": "0x0000000000000000000000000000000000007002",
+    "vault": "0x0000000000000000000000000000000000007003",
+    "debt": "0x0000000000000000000000000000000000007004",
+    "moolah": "0x0000000000000000000000000000000000007005",
+    "queue": "0x0000000000000000000000000000000000007006",
+    "permit2": "0x0000000000000000000000000000000000007007"
+  },
+  "deployments": [
+    {
+      "alias": "token",
+      "permission_type": "erc20_allowance"
+    },
+    {
+      "alias": "nft",
+      "permission_type": "erc721_token"
+    },
+    {
+      "alias": "vault",
+      "permission_type": "erc4626_vault"
+    },
+    {
+      "alias": "debt",
+      "permission_type": "aave_debt_token"
+    },
+    {
+      "alias": "moolah",
+      "permission_type": "morpho_like"
+    },
+    {
+      "alias": "queue",
+      "permission_type": "queue_vault"
+    },
+    {
+      "alias": "permit2",
+      "permission_type": "erc20_allowance"
+    }
+  ],
+  "allowlist": [
+    {
+      "permission_type": "erc20_allowance",
+      "signature": "approve(address spender,uint256 amount)",
+      "selector": "0x095ea7b3",
+      "roles": {
+        "spender": "revoked"
+      }
+    },
+    {
+      "permission_type": "erc721_token",
+      "signature": "approve(address to,uint256 tokenId)",
+      "selector": "0x095ea7b3",
+      "roles": {
+        "to": "revoked"
+      }
+    },
+    {
+      "permission_type": "erc721_token",
+      "signature": "setApprovalForAll(address operator,bool approved)",
+      "selector": "0xa22cb465",
+      "roles": {
+        "operator": "revoked"
+      }
+    },
+    {
+      "permission_type": "aave_debt_token",
+      "signature": "approveDelegation(address delegatee,uint256 amount)",
+      "selector": "0xc04a8a10",
+      "roles": {
+        "delegatee": "revoked"
+      }
+    },
+    {
+      "permission_type": "morpho_like",
+      "signature": "setAuthorization(address authorized,bool newIsAuthorized)",
+      "selector": "0xeecea000",
+      "roles": {
+        "authorized": "revoked"
+      }
+    },
+    {
+      "permission_type": "erc4626_vault",
+      "signature": "redeem(uint256 shares,address receiver,address owner)",
+      "selector": "0xba087652",
+      "roles": {
+        "receiver": "receiver",
+        "owner": "owner"
+      }
+    },
+    {
+      "permission_type": "queue_vault",
+      "signature": "withdrawWithData(uint256 assets,address receiver,bytes data)",
+      "selector": "0xb3b0c78e",
+      "roles": {
+        "receiver": "receiver"
+      }
+    },
+    {
+      "permission_type": "queue_vault",
+      "signature": "claimWithProofs(uint256 idx,bytes[] proofs)",
+      "selector": "0xc599a99c",
+      "roles": {}
+    }
+  ],
+  "accept": [
+    {
+      "id": "revoke_erc20",
+      "to": "token",
+      "signature": "approve(address spender,uint256 amount)",
+      "args": [
+        "$attacker",
+        "0"
+      ]
+    },
+    {
+      "id": "revoke_erc721_token_zero",
+      "to": "nft",
+      "signature": "approve(address to,uint256 tokenId)",
+      "args": [
+        "$zero",
+        "0"
+      ]
+    },
+    {
+      "id": "revoke_erc721_operator",
+      "to": "nft",
+      "signature": "setApprovalForAll(address operator,bool approved)",
+      "args": [
+        "$attacker",
+        false
+      ]
+    },
+    {
+      "id": "revoke_delegation",
+      "to": "debt",
+      "signature": "approveDelegation(address delegatee,uint256 amount)",
+      "args": [
+        "$attacker",
+        "0"
+      ]
+    },
+    {
+      "id": "revoke_morpho",
+      "to": "moolah",
+      "signature": "setAuthorization(address authorized,bool newIsAuthorized)",
+      "args": [
+        "$attacker",
+        false
+      ]
+    },
+    {
+      "id": "redeem_self",
+      "to": "vault",
+      "signature": "redeem(uint256 shares,address receiver,address owner)",
+      "args": [
+        "1000",
+        "$self",
+        "$self"
+      ]
+    },
+    {
+      "id": "empty_bytes",
+      "to": "queue",
+      "signature": "withdrawWithData(uint256 assets,address receiver,bytes data)",
+      "args": [
+        "1",
+        "$self",
+        "0x"
+      ]
+    },
+    {
+      "id": "empty_bytes_array",
+      "to": "queue",
+      "signature": "claimWithProofs(uint256 idx,bytes[] proofs)",
+      "args": [
+        "1",
+        []
+      ]
+    }
+  ],
+  "vectors": [
+    {
+      "category": "multicall",
+      "id": "multicall_bytes_array",
+      "to": "queue",
+      "signature": "multicall(bytes[] data)",
+      "args": [
+        [
+          "0x"
+        ]
+      ],
+      "expect": "denied_multicall"
+    },
+    {
+      "category": "multicall",
+      "id": "multicall_deadline",
+      "to": "queue",
+      "signature": "multicall(uint256 deadline,bytes[] data)",
+      "args": [
+        "1",
+        [
+          "0x"
+        ]
+      ],
+      "expect": "denied_multicall"
+    },
+    {
+      "category": "multicall",
+      "id": "multicall_previous_blockhash",
+      "to": "queue",
+      "signature": "multicall(bytes32 previousBlockhash,bytes[] data)",
+      "args": [
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        []
+      ],
+      "expect": "denied_multicall"
+    },
+    {
+      "category": "execute",
+      "id": "universal_router_execute",
+      "to": "queue",
+      "signature": "execute(bytes commands,bytes[] inputs,uint256 deadline)",
+      "args": [
+        "0x00",
+        [
+          "0x"
+        ],
+        "1"
+      ],
+      "expect": "denied_execute"
+    },
+    {
+      "category": "execute",
+      "id": "account_execute",
+      "to": "queue",
+      "signature": "execute(address target,uint256 value,bytes data)",
+      "args": [
+        "$token",
+        "0",
+        "0x"
+      ],
+      "expect": "denied_execute"
+    },
+    {
+      "category": "execute",
+      "id": "execute_batch",
+      "to": "queue",
+      "signature": "executeBatch(address[] targets,uint256[] values,bytes[] datas)",
+      "args": [
+        [
+          "$token"
+        ],
+        [
+          "0"
+        ],
+        [
+          "0x"
+        ]
+      ],
+      "expect": "denied_execute"
+    },
+    {
+      "category": "aggregate",
+      "id": "multicall3_aggregate",
+      "to": "queue",
+      "signature": "aggregate((address target,bytes callData)[] calls)",
+      "args": [
+        [
+          [
+            "$token",
+            "0x"
+          ]
+        ]
+      ],
+      "expect": "denied_aggregate"
+    },
+    {
+      "category": "aggregate",
+      "id": "multicall3_aggregate3",
+      "to": "queue",
+      "signature": "aggregate3((address target,bool allowFailure,bytes callData)[] calls)",
+      "args": [
+        [
+          [
+            "$token",
+            false,
+            "0x"
+          ]
+        ]
+      ],
+      "expect": "denied_aggregate"
+    },
+    {
+      "category": "aggregate",
+      "id": "multicall3_try_aggregate",
+      "to": "queue",
+      "signature": "tryAggregate(bool requireSuccess,(address target,bytes callData)[] calls)",
+      "args": [
+        true,
+        []
+      ],
+      "expect": "denied_aggregate"
+    },
+    {
+      "category": "permit",
+      "id": "eip2612_permit",
+      "to": "token",
+      "signature": "permit(address owner,address spender,uint256 value,uint256 deadline,uint8 v,bytes32 r,bytes32 s)",
+      "args": [
+        "$self",
+        "$attacker",
+        "1",
+        "1",
+        "27",
+        "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "0x2222222222222222222222222222222222222222222222222222222222222222"
+      ],
+      "expect": "denied_permit"
+    },
+    {
+      "category": "permit",
+      "id": "dai_permit",
+      "to": "token",
+      "signature": "permit(address holder,address spender,uint256 nonce,uint256 expiry,bool allowed,uint8 v,bytes32 r,bytes32 s)",
+      "args": [
+        "$self",
+        "$attacker",
+        "0",
+        "1",
+        true,
+        "27",
+        "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "0x2222222222222222222222222222222222222222222222222222222222222222"
+      ],
+      "expect": "denied_permit"
+    },
+    {
+      "category": "nonempty_bytes",
+      "id": "dynamic_bytes",
+      "to": "queue",
+      "signature": "withdrawWithData(uint256 assets,address receiver,bytes data)",
+      "args": [
+        "1",
+        "$self",
+        "0x01"
+      ],
+      "expect": "nonempty_bytes"
+    },
+    {
+      "category": "nonempty_bytes",
+      "id": "dynamic_bytes_callback",
+      "to": "queue",
+      "signature": "withdrawWithData(uint256 assets,address receiver,bytes data)",
+      "args": [
+        "1",
+        "$self",
+        "0xabababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
+      ],
+      "expect": "nonempty_bytes"
+    },
+    {
+      "category": "nonempty_bytes",
+      "id": "bytes_array_one_empty",
+      "to": "queue",
+      "signature": "claimWithProofs(uint256 idx,bytes[] proofs)",
+      "args": [
+        "1",
+        [
+          "0x"
+        ]
+      ],
+      "expect": "nonempty_bytes"
+    },
+    {
+      "category": "nonempty_bytes",
+      "id": "bytes_array_data",
+      "to": "queue",
+      "signature": "claimWithProofs(uint256 idx,bytes[] proofs)",
+      "args": [
+        "1",
+        [
+          "0xdeadbeef"
+        ]
+      ],
+      "expect": "nonempty_bytes"
+    },
+    {
+      "category": "nonzero_approve",
+      "id": "erc20_approve_one",
+      "to": "token",
+      "signature": "approve(address spender,uint256 amount)",
+      "args": [
+        "$attacker",
+        "1"
+      ],
+      "expect": "nonzero_approve"
+    },
+    {
+      "category": "unlimited_approve",
+      "id": "erc20_approve_max",
+      "to": "token",
+      "signature": "approve(address spender,uint256 amount)",
+      "args": [
+        "$attacker",
+        "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+      ],
+      "expect": "unlimited_approve"
+    },
+    {
+      "category": "allowance_increase",
+      "id": "increase_allowance",
+      "to": "token",
+      "signature": "increaseAllowance(address spender,uint256 addedValue)",
+      "args": [
+        "$attacker",
+        "1"
+      ],
+      "expect": "denied_allowance_increase"
+    },
+    {
+      "category": "approval_for_all",
+      "id": "set_approval_for_all_true",
+      "to": "nft",
+      "signature": "setApprovalForAll(address operator,bool approved)",
+      "args": [
+        "$attacker",
+        true
+      ],
+      "expect": "approval_for_all_true"
+    },
+    {
+      "category": "delegation",
+      "id": "approve_delegation_positive",
+      "to": "debt",
+      "signature": "approveDelegation(address delegatee,uint256 amount)",
+      "args": [
+        "$attacker",
+        "1"
+      ],
+      "expect": "nonzero_delegation"
+    },
+    {
+      "category": "authorization",
+      "id": "set_authorization_true",
+      "to": "moolah",
+      "signature": "setAuthorization(address authorized,bool newIsAuthorized)",
+      "args": [
+        "$attacker",
+        true
+      ],
+      "expect": "authorization_true"
+    },
+    {
+      "category": "permit2",
+      "id": "permit2_approve",
+      "to": "permit2",
+      "signature": "approve(address token,address spender,uint160 amount,uint48 expiration)",
+      "args": [
+        "$token",
+        "$attacker",
+        "1",
+        "1"
+      ],
+      "expect": "denied_permit2"
+    },
+    {
+      "category": "permit2",
+      "id": "permit2_transfer_from",
+      "to": "permit2",
+      "signature": "transferFrom(address from,address to,uint160 amount,address token)",
+      "args": [
+        "$self",
+        "$attacker",
+        "1",
+        "$token"
+      ],
+      "expect": "denied_permit2"
+    },
+    {
+      "category": "permit2",
+      "id": "permit2_permit_single",
+      "to": "permit2",
+      "signature": "permit(address owner,((address token,uint160 amount,uint48 expiration,uint48 nonce) details,address spender,uint256 sigDeadline) permitSingle,bytes signature)",
+      "args": [
+        "$self",
+        [
+          [
+            "$token",
+            "1",
+            "1",
+            "0"
+          ],
+          "$attacker",
+          "1"
+        ],
+        "0x"
+      ],
+      "expect": "denied_permit2"
+    },
+    {
+      "category": "permit2",
+      "id": "permit2_lockdown",
+      "to": "permit2",
+      "signature": "lockdown((address token,address spender)[] approvals)",
+      "args": [
+        [
+          [
+            "$token",
+            "$attacker"
+          ]
+        ]
+      ],
+      "expect": "denied_permit2"
+    },
+    {
+      "category": "transfer_from",
+      "id": "erc20_transfer_from",
+      "to": "token",
+      "signature": "transferFrom(address from,address to,uint256 amount)",
+      "args": [
+        "$self",
+        "$attacker",
+        "1"
+      ],
+      "expect": "denied_transfer"
+    },
+    {
+      "category": "transfer_to_other",
+      "id": "erc20_transfer_to_other",
+      "to": "token",
+      "signature": "transfer(address to,uint256 amount)",
+      "args": [
+        "$attacker",
+        "1"
+      ],
+      "expect": "denied_transfer"
+    },
+    {
+      "category": "transfer_to_other",
+      "id": "erc721_safe_transfer",
+      "to": "nft",
+      "signature": "safeTransferFrom(address from,address to,uint256 tokenId)",
+      "args": [
+        "$self",
+        "$attacker",
+        "1"
+      ],
+      "expect": "denied_transfer"
+    },
+    {
+      "category": "admin",
+      "id": "transfer_ownership",
+      "to": "vault",
+      "signature": "transferOwnership(address newOwner)",
+      "args": [
+        "$attacker"
+      ],
+      "expect": "denied_admin"
+    },
+    {
+      "category": "admin",
+      "id": "grant_role",
+      "to": "vault",
+      "signature": "grantRole(bytes32 role,address account)",
+      "args": [
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "$attacker"
+      ],
+      "expect": "denied_admin"
+    },
+    {
+      "category": "admin",
+      "id": "change_admin",
+      "to": "vault",
+      "signature": "changeAdmin(address newAdmin)",
+      "args": [
+        "$attacker"
+      ],
+      "expect": "denied_admin"
+    },
+    {
+      "category": "upgrade",
+      "id": "upgrade_to",
+      "to": "vault",
+      "signature": "upgradeTo(address newImplementation)",
+      "args": [
+        "$attacker"
+      ],
+      "expect": "denied_upgrade"
+    },
+    {
+      "category": "upgrade",
+      "id": "upgrade_to_and_call",
+      "to": "vault",
+      "signature": "upgradeToAndCall(address newImplementation,bytes data)",
+      "args": [
+        "$attacker",
+        "0x"
+      ],
+      "expect": "denied_upgrade"
+    },
+    {
+      "category": "erc721_as_erc20",
+      "id": "erc721_approve_nonzero_token_id",
+      "to": "nft",
+      "signature": "approve(address to,uint256 tokenId)",
+      "args": [
+        "$zero",
+        "5"
+      ],
+      "expect": "nonzero_approve"
+    },
+    {
+      "category": "signature_mismatch",
+      "id": "erc20_approve_shape_to_erc721",
+      "to": "nft",
+      "signature": "approve(address spender,uint256 amount)",
+      "args": [
+        "$attacker",
+        "0"
+      ],
+      "expect": "signature_mismatch"
+    },
+    {
+      "category": "signature_mismatch",
+      "id": "erc721_approve_shape_to_erc20",
+      "to": "token",
+      "signature": "approve(address to,uint256 tokenId)",
+      "args": [
+        "$zero",
+        "0"
+      ],
+      "expect": "signature_mismatch"
+    },
+    {
+      "category": "nonzero_value",
+      "id": "value_one_wei",
+      "to": "token",
+      "signature": "approve(address spender,uint256 amount)",
+      "args": [
+        "$attacker",
+        "0"
+      ],
+      "expect": "nonzero_value",
+      "value": "0x1"
+    },
+    {
+      "category": "nonzero_value",
+      "id": "value_on_redeem",
+      "to": "vault",
+      "signature": "redeem(uint256 shares,address receiver,address owner)",
+      "args": [
+        "1",
+        "$self",
+        "$self"
+      ],
+      "expect": "nonzero_value",
+      "value": "0xde0b6b3a7640000"
+    },
+    {
+      "category": "to_not_registered",
+      "id": "revoke_on_unregistered",
+      "to": "unregistered",
+      "signature": "approve(address spender,uint256 amount)",
+      "args": [
+        "$attacker",
+        "0"
+      ],
+      "expect": "to_not_registered"
+    },
+    {
+      "category": "to_not_registered",
+      "id": "redeem_on_unregistered",
+      "to": "unregistered",
+      "signature": "redeem(uint256 shares,address receiver,address owner)",
+      "args": [
+        "1",
+        "$self",
+        "$self"
+      ],
+      "expect": "to_not_registered"
+    },
+    {
+      "category": "method_not_send",
+      "id": "sign_transaction",
+      "to": "token",
+      "signature": "approve(address spender,uint256 amount)",
+      "args": [
+        "$attacker",
+        "0"
+      ],
+      "expect": "method_not_allowed",
+      "method": "eth_signTransaction"
+    },
+    {
+      "category": "method_not_send",
+      "id": "send_calls",
+      "to": "token",
+      "signature": "approve(address spender,uint256 amount)",
+      "args": [
+        "$attacker",
+        "0"
+      ],
+      "expect": "method_not_allowed",
+      "method": "wallet_sendCalls"
+    },
+    {
+      "category": "method_not_send",
+      "id": "raw_transaction",
+      "to": "token",
+      "signature": "approve(address spender,uint256 amount)",
+      "args": [
+        "$attacker",
+        "0"
+      ],
+      "expect": "method_not_allowed",
+      "method": "eth_sendRawTransaction"
+    },
+    {
+      "category": "method_not_send",
+      "id": "personal_sign",
+      "to": "token",
+      "signature": "approve(address spender,uint256 amount)",
+      "args": [
+        "$attacker",
+        "0"
+      ],
+      "expect": "method_not_allowed",
+      "method": "personal_sign"
+    },
+    {
+      "category": "receiver_not_self",
+      "id": "receiver_is_registered_vault",
+      "to": "vault",
+      "signature": "redeem(uint256 shares,address receiver,address owner)",
+      "args": [
+        "1",
+        "$vault",
+        "$self"
+      ],
+      "expect": "receiver_not_self"
+    },
+    {
+      "category": "receiver_not_self",
+      "id": "receiver_is_registered_token",
+      "to": "queue",
+      "signature": "withdrawWithData(uint256 assets,address receiver,bytes data)",
+      "args": [
+        "1",
+        "$token",
+        "0x"
+      ],
+      "expect": "receiver_not_self"
+    },
+    {
+      "category": "receiver_not_self",
+      "id": "receiver_is_attacker",
+      "to": "vault",
+      "signature": "redeem(uint256 shares,address receiver,address owner)",
+      "args": [
+        "1",
+        "$attacker",
+        "$self"
+      ],
+      "expect": "receiver_not_self"
+    },
+    {
+      "category": "owner_not_self",
+      "id": "owner_is_registered_vault",
+      "to": "vault",
+      "signature": "redeem(uint256 shares,address receiver,address owner)",
+      "args": [
+        "1",
+        "$self",
+        "$vault"
+      ],
+      "expect": "owner_not_self"
+    },
+    {
+      "category": "eip7702",
+      "id": "authorization_list",
+      "to": "token",
+      "signature": "approve(address spender,uint256 amount)",
+      "args": [
+        "$attacker",
+        "0"
+      ],
+      "expect": "eip7702_refused",
+      "tx_extra": {
+        "authorizationList": []
+      }
+    },
+    {
+      "category": "eip7702",
+      "id": "type_4",
+      "to": "token",
+      "signature": "approve(address spender,uint256 amount)",
+      "args": [
+        "$attacker",
+        "0"
+      ],
+      "expect": "eip7702_refused",
+      "tx_extra": {
+        "type": "0x4"
+      }
+    }
+  ]
+}
