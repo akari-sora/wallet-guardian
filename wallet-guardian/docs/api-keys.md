@@ -33,7 +33,7 @@ Environment:
 - `ETHERSCAN_API_KEY`
 - `ETHERSCAN_API_BASE` (the API origin; the client calls `/v2/api`)
 
-Without the key: in `examples/monitor.json`, native history falls back to a keyless Blockscout instance (Ethereum, Arbitrum, Polygon, Base, Optimism) when that instance's URL variable is set. A profile written by `guardian init` does not include keyless or PRO Blockscout. It adds Etherscan (except BSC) ahead of a per-chain Blockscout source that needs its own key. On Ethereum, Arbitrum, and Polygon, an Etherscan key can fill `history.native_external` without that Blockscout key. On Base and Optimism, without the per-chain Blockscout key, that history cell stays `credential_missing` or `plan_not_supported`. Token history uses public RPC `eth_getLogs` with the configured chunk size. BSC does not use Etherscan.
+Without the key: in `examples/monitor.json`, native history falls back to a keyless Blockscout instance (Ethereum, Arbitrum, Polygon, Base, Optimism) when that instance's URL variable is set. A profile written by `guardian init` does not include keyless or PRO Blockscout. It adds Etherscan (except BSC) ahead of a per-chain Blockscout source that needs its own key. Avalanche is included (`blockscout-avalanchec`). `plan_not_supported` comes from the Etherscan response for that chain, not from a fixed list of chain names. When Etherscan has no key, or that response says the plan refuses the chain, and the per-chain Blockscout key is also missing, `history.native_external` stays `credential_missing` or `plan_not_supported`. An Etherscan key whose plan accepts the chain can fill that cell without the Blockscout key. Token history uses public RPC `eth_getLogs` with the configured chunk size. BSC does not use Etherscan.
 
 <a id="nodereal"></a>
 
@@ -77,7 +77,7 @@ Environment:
 - `BLOCKSCOUT_API_KEY`
 - `BLOCKSCOUT_PRO_API_BASE` (default `https://api.blockscout.com`; the client calls `/v2/api?chain_id=<id>`)
 
-Without the key, in `examples/monitor.json`, the PRO route returns HTTP 402 (`Proceed with API key or make a X402 payment`). That is `credential_missing`, and that example profile continues to the keyless instance. A profile written by `guardian init` has no PRO source and no keyless Blockscout source. On Base and Optimism, without the per-chain Blockscout key, the history cell stays `credential_missing` or `plan_not_supported`. On Ethereum, Arbitrum, and Polygon, an Etherscan key can fill that cell without the Blockscout key.
+Without the key, in `examples/monitor.json`, the PRO route still calls the host in `BLOCKSCOUT_PRO_API_BASE` once and can return HTTP 402 (`Proceed with API key or make a X402 payment`). The watch address is on that request. That 402 is `credential_missing`, and that example profile continues to the keyless instance. A body that says the chain is outside the plan is `plan_not_supported` instead. A profile written by `guardian init` has no PRO source and no keyless Blockscout source. On an init profile, when Etherscan has no key, or the plan refuses that chain, and the per-chain Blockscout key is also missing, the history cell stays `credential_missing` or `plan_not_supported`. An Etherscan key whose plan accepts the chain can fill the cell without the Blockscout key. That outcome is not limited to a fixed list of chain names.
 
 Keyless instances (no key, shared rate limit about 5–10 requests/second, check current terms). Set the origin; the client calls `/api`:
 
@@ -97,7 +97,7 @@ In `examples/monitor.json`, the order for Base and Optimism is PRO when the key 
 
 ## Alchemy
 
-Alchemy Transfers is the preferred Base source for external and token transfers in `examples/monitor.json`, when you set both env names below. `guardian init` does not add Alchemy, Blockscout PRO, or a keyless Blockscout source. On Base and Optimism, without the per-chain Blockscout key, an init profile's history cell stays `credential_missing` or `plan_not_supported`. Ethereum, Arbitrum, and Polygon can still be filled by an Etherscan key. Alchemy does not replace Approval or `ApprovalForAll` logs. Those stay on the Base log route (`tenderly_base`, then `base-1rpc` only when that source is enabled and the remaining budget can catch up).
+Alchemy Transfers is the preferred Base source for external and token transfers in `examples/monitor.json`, when you set both env names below. `guardian init` does not add Alchemy, Blockscout PRO, or a keyless Blockscout source. On an init profile, when Etherscan has no key, or the plan refuses that chain, and the per-chain Blockscout key is also missing, the history cell stays `credential_missing` or `plan_not_supported`. An Etherscan key whose plan accepts the chain can fill the cell without the Blockscout key. Alchemy does not replace Approval or `ApprovalForAll` logs. Those stay on the Base log route (`tenderly_base`, then `base-1rpc` only when that source is enabled and the remaining budget can catch up).
 
 A missing key does not crash the run. In `examples/monitor.json` the monitor records `credential_missing` with a pointer to this section, then continues with Blockscout PRO and the keyless Base instance. Those Blockscout gaps stay `plan_not_supported` or `blocked` / `bot_challenge`. They are not an empty wallet. Base stays a required network. An init profile has neither of those fallback sources.
 

@@ -4,7 +4,7 @@
 
 This file is an installer draft. It does not install a unit, enable a timer, turn on linger, or disable a Windows task. Nothing in this package starts a round by itself. The operator does that later, on a machine they control, after reading the plan from `guardian install-service --dry-run`.
 
-The monitor stays read-only. Units call `run-once --no-send` or `watchdog`. They do not sign, approve, revoke, claim, or broadcast. Config names environment variables only. This document has no monitored addresses and no API keys.
+The monitor stays read-only. Generated Guardian units call `run-once --no-send` or `watchdog --no-send`. The legacy unit runs `--legacy-executable` and does not pass `--no-send`. They do not sign, approve, revoke, claim, or broadcast. Config names environment variables only. This document has no monitored addresses and no API keys.
 
 The installed program is one fixed version. The unit records that version on `GUARDIAN_INSTALLED_VERSION` and calls an absolute executable. A round must not download `main` and must not run `uv sync` or otherwise refresh dependencies. A moving branch is not an installed version.
 
@@ -110,7 +110,7 @@ It does not enable linger, write `/etc/systemd`, install a crontab, open a port,
 
 ## Cron fallback keeps your other jobs
 
-`install-service --apply` in cron mode reads the current table (`crontab -l`) and adds or replaces only the block between `# BEGIN wallet-guardian-monitor` and `# END wallet-guardian-monitor`. Every other line stays as it was. Remove the block by deleting those marked lines (`crontab -l`, edit, `crontab FILE`).
+`install-service --apply` in cron mode, without `--dry-run`, reads the current table (`crontab -l`) and adds or replaces only the block between `# BEGIN wallet-guardian-monitor` and `# END wallet-guardian-monitor` in the user crontab. Every other line of that crontab stays as it was. The same apply also writes `guardian-unattended.cron` and `guardian-unattended.cron.merged`. Without `--output` those two files are under `/etc/cron.d`. With `--output` they are written under that directory instead. `crontab -u <user>` still installs the merged file, so `--output` is not a preview. The program does not force mode `0600` on either file, and it does not delete them. `--dry-run` does not call `crontab`. On systemd, `--apply` still runs `daemon-reload` and `enable` on the three timers even when `--output` is set. Remove the user-crontab block by deleting those marked lines (`crontab -l`, edit, `crontab FILE`). That edit does not remove the two files.
 
 ## What a scheduled job can see
 
