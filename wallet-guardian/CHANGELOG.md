@@ -18,6 +18,10 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 
 - A degraded `guardian run-once` exits 3. `failed` stays 1. A misconfigured delivery still exits 2.
 
+### Fixed
+
+- CLI 不再接受縮寫的長旗標。
+
 ## [0.4.0rc4] - 2026-10-11
 
 Preview channel. The manifest is a pre-publication evidence snapshot; the GitLab release is recorded separately. No package-index upload is performed. The monitor is read-only: it does not sign, build a transaction, or broadcast. Wheel: `wallet_guardian_monitor-0.4.0rc4-py3-none-any.whl`.

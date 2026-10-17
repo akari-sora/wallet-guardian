@@ -19,10 +19,10 @@ _LINK = re.compile(
 )
 _REF_LINK = re.compile(r"\[([^\]]+)\]\((references/[^)]+)\)")
 _ATX = re.compile(r"^(#{1,6})([ \t]+.*)$")
-_FENCE_LINE = re.compile(r"^[ ]{0,3}(?:`{3,}|~{3,})")
+_FENCE_MARK = re.compile(r"^[ ]{0,3}(`{3,}|~{3,})(.*)$")
 _INDENTED_ATX = re.compile(r"^[ ]{1,3}#{1,6}(?:[ \t]|$)")
 _EMPTY_ATX = re.compile(r"^#{1,6}[ \t]*$")
-_SETEXT_LINE = re.compile(r"^[ ]{0,3}(?:=+|-{2,})[ \t]*$")
+_SETEXT_LINE = re.compile(r"^[ ]{0,3}(?:=+|-+)[ \t]*$")
 _FLEX_ATX = re.compile(r"^[ ]{0,3}(#{1,6})(?:[ \t]|$)")
 _ORPHAN_PUNCT = set(".。!！?？:：;；,")
 _GROK_NOTE = """## Grok Bot host
@@ -158,7 +158,33 @@ def _is_indented_code(line: str) -> bool:
 
 
 def _is_fence_line(line: str) -> bool:
-    return _FENCE_LINE.match(line) is not None
+    return _FENCE_MARK.match(line) is not None
+
+
+def _step_fence(line: str, open_fence: tuple[str, int] | None) -> tuple[str, int] | None:
+    """Move one line through a CommonMark fence.
+
+    The returned pair is the open mark and its length. Only a line of the same
+    mark, at least as long, indented at most three spaces, and otherwise blank,
+    closes it. A backtick opener whose info string contains a backtick is not a fence.
+    """
+    match = _FENCE_MARK.match(line)
+    if open_fence is not None:
+        marker, length = open_fence
+        if (
+            match is not None
+            and match.group(1)[0] == marker
+            and len(match.group(1)) >= length
+            and match.group(2).strip(" \t") == ""
+        ):
+            return None
+        return open_fence
+    if match is None:
+        return None
+    marks = match.group(1)
+    if marks[0] == "`" and "`" in match.group(2):
+        return None
+    return (marks[0], len(marks))
 
 
 def _frontmatter_body_start(text: str) -> int:
@@ -185,17 +211,16 @@ def _trim_blank_edges(text: str) -> str:
 
 def _heading_levels(text: str) -> list[int]:
     body = text[_frontmatter_body_start(text):]
-    fence = False
+    open_fence: tuple[str, int] | None = None
     found: list[int] = []
     for line in body.splitlines():
-        if fence:
-            if _is_fence_line(line):
-                fence = False
+        if open_fence is not None:
+            open_fence = _step_fence(line, open_fence)
             continue
         if _is_indented_code(line):
             continue
-        if _is_fence_line(line):
-            fence = True
+        open_fence = _step_fence(line, None)
+        if open_fence is not None:
             continue
         match = _FLEX_ATX.match(line)
         if match:
@@ -207,19 +232,19 @@ def _demote_headings(text: str, shift: int) -> str:
     """Lower ATX headings so an inlined page sits under the outer section."""
     if shift <= 0:
         return text
-    fence = False
+    open_fence: tuple[str, int] | None = None
     lines: list[str] = []
     for line in text.splitlines():
-        if fence:
-            if _is_fence_line(line):
-                fence = False
+        if open_fence is not None:
+            open_fence = _step_fence(line, open_fence)
             lines.append(line)
             continue
         if _is_indented_code(line):
             lines.append(line)
             continue
-        if _is_fence_line(line):
-            fence = True
+        opened = _step_fence(line, None)
+        if opened is not None:
+            open_fence = opened
             lines.append(line)
             continue
         match = _ATX.match(line)
@@ -232,9 +257,58 @@ def _demote_headings(text: str, shift: int) -> str:
     return "\n".join(lines)
 
 
+def _literal_spans(text: str) -> list[tuple[int, int]]:
+    """Spans of fenced blocks and indented code lines after any frontmatter."""
+    spans: list[tuple[int, int]] = []
+    open_fence: tuple[str, int] | None = None
+    fence_start: int | None = None
+    offset = _frontmatter_body_start(text)
+    for line in text[offset:].splitlines(keepends=True):
+        raw = line.removesuffix("\n").removesuffix("\r")
+        if open_fence is not None:
+            if _step_fence(raw, open_fence) is None:
+                spans.append((fence_start if fence_start is not None else offset, offset + len(line)))
+                open_fence = None
+                fence_start = None
+            offset += len(line)
+            continue
+        if _is_indented_code(raw):
+            spans.append((offset, offset + len(line)))
+            offset += len(line)
+            continue
+        opened = _step_fence(raw, None)
+        if opened is not None:
+            open_fence = opened
+            fence_start = offset
+        offset += len(line)
+    if open_fence is not None and fence_start is not None:
+        spans.append((fence_start, offset))
+    return spans
+
+
+def _span_covers(index: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start <= index < end for start, end in spans)
+
+
+def _outside_literals(text: str) -> str:
+    parts: list[str] = []
+    cursor = 0
+    for start, end in _literal_spans(text):
+        parts.append(text[cursor:start])
+        cursor = end
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
 def _validate_reference_links(skill: str) -> None:
-    """A reference link ends its line, with at most one punctuation mark."""
+    """A reference link ends its line, with at most one punctuation mark.
+
+    A link inside a fence or an indented code line is an example, not an include.
+    """
+    spans = _literal_spans(skill)
     for match in _REF_LINK.finditer(skill):
+        if _span_covers(match.start(), spans):
+            continue
         newline = skill.find("\n", match.end())
         tail = skill[match.end():] if newline < 0 else skill[match.end():newline]
         tail = tail.removesuffix("\r")
@@ -244,7 +318,11 @@ def _validate_reference_links(skill: str) -> None:
 
 
 def _reject_unhandled_reference(text: str, target: str) -> None:
-    """Fences, indented code, empty ATX headings, and setext underlines are rejected."""
+    """Fences, indented code, empty ATX headings, setext underlines, and HTML comments are rejected."""
+    if "<!--" in text:
+        raise ValueError(
+            f"{target} has an HTML comment, which can hide text such as a heading from the inlined skill"
+        )
     for line in text.splitlines():
         if (
             _is_fence_line(line)
@@ -259,16 +337,15 @@ def _reject_unhandled_reference(text: str, target: str) -> None:
 def _reject_outer_setext(skill: str) -> None:
     """Reject setext underlines in the outer skill. YAML frontmatter is not one."""
     body = skill[_frontmatter_body_start(skill):]
-    fence = False
+    open_fence: tuple[str, int] | None = None
     for line in body.splitlines():
-        if fence:
-            if _is_fence_line(line):
-                fence = False
+        if open_fence is not None:
+            open_fence = _step_fence(line, open_fence)
             continue
         if _is_indented_code(line):
             continue
-        if _is_fence_line(line):
-            fence = True
+        open_fence = _step_fence(line, None)
+        if open_fence is not None:
             continue
         if _SETEXT_LINE.match(line):
             raise ValueError("skill has a setext underline")
@@ -277,7 +354,7 @@ def _reject_outer_setext(skill: str) -> None:
 def _outer_content_follows(skill: str, match_end: int, parent_level: int) -> bool:
     """True when the link's section still has text before its next heading."""
     body_start = _frontmatter_body_start(skill)
-    fence = False
+    open_fence: tuple[str, int] | None = None
     after = False
     offset = 0
     for line in skill.splitlines(keepends=True):
@@ -286,18 +363,17 @@ def _outer_content_follows(skill: str, match_end: int, parent_level: int) -> boo
         if end <= body_start:
             offset = end
             continue
-        indented = (not fence) and _is_indented_code(raw)
-        fence_edge = (not indented) and _is_fence_line(raw)
+        indented = open_fence is None and _is_indented_code(raw)
+        stepped = open_fence if indented else _step_fence(raw, open_fence)
         if not after:
-            if fence_edge:
-                fence = not fence
+            open_fence = stepped
             if offset < match_end <= end:
                 after = True
             offset = end
             continue
-        if fence_edge:
+        if stepped != open_fence:
             return True
-        if not fence and not indented:
+        if open_fence is None and not indented:
             match = _FLEX_ATX.match(raw)
             if match and len(match.group(1)) <= parent_level:
                 return False
@@ -308,13 +384,16 @@ def _outer_content_follows(skill: str, match_end: int, parent_level: int) -> boo
 
 
 def render_grok(skill: str, references: dict[str, str], catalog_version: str) -> str:
-    """Inline reference pages. The result has no relative links."""
+    """Inline reference pages. Links in a fence or an indented code line stay literal."""
     if _frontmatter_version(skill) != catalog_version:
         raise ValueError("skill metadata.version does not match the catalog")
     _validate_reference_links(skill)
     _reject_outer_setext(skill)
+    literal_spans = _literal_spans(skill)
 
     def replace(match: re.Match[str]) -> str:
+        if _span_covers(match.start(), literal_spans):
+            return match.group(0)
         label = match.group(1)
         target = match.group(2)
         punct = match.group(3) or ""
@@ -337,9 +416,10 @@ def render_grok(skill: str, references: dict[str, str], catalog_version: str) ->
         return f"{label}{punct}\n\n{body}\n"
 
     flattened = _LINK.sub(replace, skill).rstrip() + "\n\n" + _GROK_NOTE.strip() + "\n"
-    if "](" in flattened:
+    visible = _outside_literals(flattened)
+    if "](" in visible:
         raise ValueError("grok skill still has a markdown link")
-    if "references/" in flattened:
+    if "references/" in visible:
         raise ValueError("grok skill still names a references path")
     for line in flattened.splitlines():
         if line.strip() and set(line.strip()) <= _ORPHAN_PUNCT:

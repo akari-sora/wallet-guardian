@@ -156,12 +156,24 @@ def build_parser() -> argparse.ArgumentParser:
         argparse._SubParsersAction.add_parser = original_add  # type: ignore[method-assign]
 
 
+class _ExactFlagParser(argparse.ArgumentParser):
+    """Long options must be spelled as ``--help`` lists them. A prefix is not a flag."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs["allow_abbrev"] = False
+        super().__init__(*args, **kwargs)
+
+    def add_subparsers(self, **kwargs: Any):  # type: ignore[no-untyped-def]
+        kwargs.setdefault("parser_class", type(self))
+        return super().add_subparsers(**kwargs)
+
+
 def _assemble_parser(help_for) -> argparse.ArgumentParser:
-    common = argparse.ArgumentParser(add_help=False)
+    common = _ExactFlagParser(add_help=False)
     common.add_argument("--db", default=argparse.SUPPRESS, help="sqlite path")
     common.add_argument("--tenant", default=argparse.SUPPRESS, help="local tenant scope (required when ambiguous)")
     common.add_argument("--json", action="store_true", help="print JSON (this is always on)")
-    parser = argparse.ArgumentParser(prog="guardian")
+    parser = _ExactFlagParser(prog="guardian")
     parser.add_argument(
         "--version",
         action=_PrintVersion,
