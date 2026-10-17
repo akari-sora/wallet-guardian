@@ -202,32 +202,38 @@ def read_tron(
         status, reason = "partial", walk.reason
     else:
         status, reason = "gap", walk.reason or "read_error"
-    edges: list[Edge] = []
     unreadable = False
     zeros = 0
     contract: bool | None = None
     # The page that repeated a fingerprint is already in walk.rows. That cursor
     # is unusable, so those rows are not counted. Earlier pages stay.
-    rows = walk.rows
-    if walk.reason == "repeated_fingerprint" and page_lengths:
-        drop = page_lengths[-1]
+    rows = list(walk.rows)
+    lengths = list(page_lengths)
+    if walk.reason == "repeated_fingerprint" and lengths:
+        drop = lengths[-1]
         if drop > 0:
             rows = rows[:-drop]
-    for row in rows:
-        parsed = _tron_edge(row, address, direction, network, source_id, stop_timestamp)
-        if parsed == "bad":
-            unreadable = True
-            continue
-        if parsed == "zero":
-            zeros += 1
-            continue
-        if parsed is None or not isinstance(parsed, Edge):
-            continue
-        edges.append(parsed)
-        if direction == "from" and parsed.sender_contract is True:
-            contract = True
+        lengths = lengths[:-1]
+    fold = _PageFold(_no_row_key)
+    for page in _pages_of(rows, lengths):
+        pairs: list[tuple[Any, Edge]] = []
+        for row in page:
+            parsed = _tron_edge(row, address, direction, network, source_id, stop_timestamp)
+            if parsed == "bad":
+                unreadable = True
+                continue
+            if parsed == "zero":
+                zeros += 1
+                continue
+            if parsed is None or not isinstance(parsed, Edge):
+                continue
+            pairs.append((row, parsed))
+            if direction == "from" and parsed.sender_contract is True:
+                contract = True
+        fold.add_page(pairs)
     if unreadable and status == "complete":
         status, reason = "partial", "unreadable_row"
+    edges, status, reason = fold.apply(status, reason)
     return _note_contract(_tron_outcome(status, reason, edges, contract, zeros), direction)
 
 
@@ -261,27 +267,33 @@ def _from_history(parts, address, direction, network, family, source_id, entry, 
     symbol, decimals = _native(entry)
     for kind, read in parts:
         state, why = _history_status(read)
-        if state != "gap":
+        if state != "gap" or why == "repeated_cursor":
             part_bad = False
-            for item in read.items:
-                parsed = _evm_edge(
-                    item, kind, address, direction, network, family, source_id, stop_timestamp,
-                    symbol, decimals,
-                )
-                if parsed == "bad":
-                    part_bad = True
-                    unreadable = True
-                    continue
-                if parsed == "zero":
-                    zeros += 1
-                    continue
-                if parsed is None or not isinstance(parsed, Edge):
-                    continue
-                edges.append(parsed)
-                if direction == "from" and parsed.sender_contract is True:
-                    contract = True
+            fold = _PageFold(_blockscout_key(kind))
+            for page in _pages_of(read.items, getattr(read, "page_lengths", ())):
+                pairs: list[tuple[Any, Edge]] = []
+                for item in page:
+                    parsed = _evm_edge(
+                        item, kind, address, direction, network, family, source_id, stop_timestamp,
+                        symbol, decimals,
+                    )
+                    if parsed == "bad":
+                        part_bad = True
+                        unreadable = True
+                        continue
+                    if parsed == "zero":
+                        zeros += 1
+                        continue
+                    if parsed is None or not isinstance(parsed, Edge):
+                        continue
+                    pairs.append((item, parsed))
+                    if direction == "from" and parsed.sender_contract is True:
+                        contract = True
+                fold.add_page(pairs)
             if state == "complete" and part_bad:
                 state, why = "partial", "unreadable_row"
+            kept, state, why = fold.apply(state, why)
+            edges.extend(kept)
         recorded.append({"part": kind, "read_status": state, "reason": why})
     return _note_contract(_rolled(recorded, edges, zeros, contract, unreadable), direction)
 
@@ -475,6 +487,7 @@ def read_club(
     saw = False
     covered = False
     chunks = 0
+    chunk_pages: list[list[tuple[Any, Edge]]] = []
     lookups = _Lookups(transport, source_id, "evm_rpc", clock, cache, _TIME_LOOKUP_CAP)
     while chunks < page_cap and cursor >= 0:
         start = max(0, cursor - width + 1)
@@ -509,7 +522,8 @@ def read_club(
         else:
             covered = True
         stopped = False
-        for edge, block in part_edges:
+        page_pairs: list[tuple[Any, Edge]] = []
+        for edge, block, raw in part_edges:
             stamp, why = lookups.one(block)
             if stamp is None:
                 status, reason = _time_failure(edges, why, accepted=prior)
@@ -519,6 +533,8 @@ def read_club(
                 continue
             edge.timestamp = stamp
             edges.append(edge)
+            page_pairs.append((raw, edge))
+        chunk_pages.append(page_pairs)
         if stopped or covered:
             break
         cursor = start - 1
@@ -529,6 +545,10 @@ def read_club(
         status, reason = "partial", "page_cap"
     if unreadable and status == "complete":
         status, reason = "partial", "unreadable_row"
+    fold = _PageFold(_club_key)
+    for page in chunk_pages:
+        fold.add_page(page)
+    edges, status, reason = fold.apply(status, reason)
     return finish(_club_outcome(status, reason, edges, zeros, None))
 
 
@@ -580,35 +600,42 @@ def read_nodereal(
     recorded: list[dict[str, str]] = []
     for category, part in _NODEREAL_PARTS:
         lookups = _Lookups(transport, source_id, "nodereal_transfers", clock, cache, _TIME_LOOKUP_CAP)
-        rows, state, why = _nodereal_part(
+        rows, lengths, state, why = _nodereal_part(
             client, address, direction, category, cursor_head, page_cap, stop_timestamp, lookups,
         )
         part_bad = False
         time_reason = ""
+        indexes = list(range(len(rows)))
         if state != "gap":
-            rows, time_reason = _stamp_nodereal_rows(rows, lookups, why if why in _CODE_SKIP else "")
+            rows, time_reason, indexes = _stamp_nodereal_rows(rows, lookups, why if why in _CODE_SKIP else "")
             if time_reason:
                 capped = time_reason in _CAP_REASONS
                 if not rows and state == "complete" and not capped and time_reason not in _CODE_SKIP:
                     state, why = "gap", time_reason
                 elif not rows or state == "complete":
                     state, why = "partial", time_reason
-        if state != "gap":
-            for item in rows:
-                parsed = _nodereal_edge(
-                    item, category, address, direction, network, family, source_id, stop_timestamp, symbol, decimals,
-                )
-                if parsed == "bad":
-                    part_bad = True
-                    continue
-                if parsed == "zero":
-                    zeros += 1
-                    continue
-                if parsed is None or not isinstance(parsed, Edge):
-                    continue
-                edges.append(parsed)
+        if state != "gap" or why == "repeated_cursor":
+            fold = _PageFold(_no_row_key)
+            for page in _indexed_pages(rows, indexes, lengths):
+                pairs: list[tuple[Any, Edge]] = []
+                for item in page:
+                    parsed = _nodereal_edge(
+                        item, category, address, direction, network, family, source_id, stop_timestamp, symbol, decimals,
+                    )
+                    if parsed == "bad":
+                        part_bad = True
+                        continue
+                    if parsed == "zero":
+                        zeros += 1
+                        continue
+                    if parsed is None or not isinstance(parsed, Edge):
+                        continue
+                    pairs.append((item, parsed))
+                fold.add_page(pairs)
             if state == "complete" and part_bad:
                 state, why = "partial", "unreadable_row"
+            kept, state, why = fold.apply(state, why)
+            edges.extend(kept)
         record = {"part": part, "read_status": state, "reason": why}
         if time_reason:
             record["timestamp_reason"] = time_reason
@@ -616,8 +643,158 @@ def read_nodereal(
     return finish(_rolled(recorded, edges, zeros, None))
 
 
+class _PageFold:
+    """One part's pages. A row key drops a repeat. A later equal row without a key does not stay complete."""
+
+    def __init__(self, key_of) -> None:
+        self._key_of = key_of
+        self.edges: list[Edge] = []
+        self._keys: set[tuple] = set()
+        self._marks: set[tuple] = set()
+        self.ambiguous = False
+
+    def add_page(self, pairs: list[tuple[Any, Edge]]) -> None:
+        page_keys: set[tuple] = set()
+        page_marks: list[tuple] = []
+        for raw, edge in pairs:
+            key = self._key_of(raw, edge)
+            if key is not None:
+                if key in self._keys or key in page_keys:
+                    continue
+                page_keys.add(key)
+                self.edges.append(edge)
+                continue
+            mark = (edge.tx_hash, edge.sender, edge.recipient, edge.contract, edge.raw_amount)
+            if mark in self._marks:
+                self.ambiguous = True
+                continue
+            page_marks.append(mark)
+            self.edges.append(edge)
+        self._keys.update(page_keys)
+        self._marks.update(page_marks)
+
+    def apply(self, state: str, reason: str) -> tuple[list[Edge], str, str]:
+        if self.ambiguous and state == "complete":
+            return self.edges, "partial", "ambiguous_duplicate"
+        return self.edges, state, reason
+
+
+def _pages_of(items, lengths) -> list[list[Any]]:
+    rows = list(items)
+    if not lengths:
+        return [rows]
+    pages: list[list[Any]] = []
+    cursor = 0
+    for length in lengths:
+        size = length if isinstance(length, int) and length > 0 else 0
+        pages.append(rows[cursor:cursor + size])
+        cursor += size
+    if cursor < len(rows):
+        pages.append(rows[cursor:])
+    return pages
+
+
+def _indexed_pages(rows: list[Any], indexes: list[int], lengths: list[int]) -> list[list[Any]]:
+    if not lengths:
+        return [list(rows)]
+    owners: list[int] = []
+    for number, length in enumerate(lengths):
+        size = length if isinstance(length, int) and length > 0 else 0
+        owners.extend([number] * size)
+    grouped: list[list[Any]] = [[] for _ in lengths]
+    for row, index in zip(rows, indexes):
+        if index < 0 or index >= len(owners):
+            if not grouped:
+                grouped.append([])
+            grouped[-1].append(row)
+            continue
+        grouped[owners[index]].append(row)
+    return grouped
+
+
+def _limit_rows(items: list[Any], lengths: list[int]) -> tuple[list[Any], list[int]]:
+    cap = _NODEREAL_ITEM_CAP if _NODEREAL_ITEM_CAP > 0 else 0
+    if len(items) <= cap:
+        return list(items), list(lengths)
+    fitted: list[int] = []
+    left = cap
+    for length in lengths:
+        if left <= 0:
+            break
+        size = length if isinstance(length, int) and length > 0 else 0
+        if size == 0:
+            fitted.append(0)
+            continue
+        take = size if size <= left else left
+        fitted.append(take)
+        left -= take
+    return list(items[:cap]), fitted
+
+
+def _no_row_key(_raw: Any, _edge: Edge):
+    return None
+
+
+def _blockscout_key(kind: str):
+    def key(raw: Any, edge: Edge):
+        if kind != "internal-transactions" or not isinstance(raw, Mapping) or not edge.tx_hash:
+            return None
+        position = _trace_position(raw)
+        if position is None:
+            return None
+        return ("trace", edge.tx_hash, position)
+
+    return key
+
+
+def _club_key(raw: Any, edge: Edge):
+    if not isinstance(raw, Mapping) or not edge.tx_hash:
+        return None
+    position = _log_position(raw)
+    if position is None:
+        return None
+    return ("log", edge.tx_hash, position)
+
+
+def _trace_position(raw: Mapping[str, Any]) -> str | None:
+    for name in ("uniqueId", "traceId", "traceAddress", "index"):
+        found = raw.get(name)
+        if isinstance(found, str) and found.strip():
+            return f"{name}:{found.strip()}"
+        if isinstance(found, int) and not isinstance(found, bool):
+            return f"{name}:{found}"
+        if (
+            isinstance(found, list)
+            and found
+            and all(isinstance(part, int) and not isinstance(part, bool) for part in found)
+        ):
+            return name + ":" + ".".join(str(part) for part in found)
+    return None
+
+
+def _log_position(raw: Mapping[str, Any]) -> str | None:
+    for name in ("logIndex", "log_index"):
+        found = raw.get(name)
+        if isinstance(found, bool):
+            continue
+        if isinstance(found, int):
+            return str(found)
+        if isinstance(found, str) and found.strip():
+            text = found.strip()
+            if text.lower().startswith("0x"):
+                try:
+                    return str(int(text, 16))
+                except ValueError:
+                    return text.lower()
+            if text.isdigit():
+                return str(int(text))
+            return text.lower()
+    return None
+
+
 def _nodereal_part(client, address, direction, category, head, page_cap, stop_timestamp, lookups: _Lookups):
     items: list[Any] = []
+    lengths: list[int] = []
     cursor = head
     pages_left = page_cap
     accepted = False
@@ -625,44 +802,65 @@ def _nodereal_part(client, address, direction, category, head, page_cap, stop_ti
         start = max(0, cursor - MAX_BLOCK_SPAN)
         room = _NODEREAL_ITEM_CAP - len(items)
         page, reason, done, used, ok = _nodereal_chunk(
-            client, address, direction, category, start, cursor, pages_left, room,
+            client, address, direction, category, start, cursor, pages_left, room, lengths,
         )
         pages_left -= used
         accepted = accepted or ok
+        if reason == "repeated_cursor":
+            items.extend(page)
+            trimmed, trimmed_lengths = _limit_rows(items, lengths)
+            return trimmed, trimmed_lengths, "gap", "repeated_cursor"
         if not done:
             items.extend(page)
             if not accepted:
                 why = reason or "read_error"
                 if why in _CAP_REASONS:
-                    return [], "partial", why
-                return [], "gap", why
-            kept = items[:_NODEREAL_ITEM_CAP]
+                    return [], [], "partial", why
+                return [], [], "gap", why
             why = reason or "read_error"
+            trimmed, trimmed_lengths = _limit_rows(items, lengths)
             if len(items) >= _NODEREAL_ITEM_CAP and why == "item_cap":
-                return kept, "partial", "item_cap"
-            return kept, "partial", why
+                return trimmed, trimmed_lengths, "partial", "item_cap"
+            return trimmed, trimmed_lengths, "partial", why
         items.extend(page)
         if len(items) >= _NODEREAL_ITEM_CAP:
-            return items[:_NODEREAL_ITEM_CAP], "partial", "item_cap"
+            trimmed, trimmed_lengths = _limit_rows(items, lengths)
+            return trimmed, trimmed_lengths, "partial", "item_cap"
         if start == 0 or _covers(page, stop_timestamp):
-            return items, "complete", ""
+            return list(items), list(lengths), "complete", ""
         opening, why = lookups.one(start)
         if opening is None:
             why = why or "window_unchecked"
-            return items, "partial", why
+            return list(items), list(lengths), "partial", why
         if opening <= stop_timestamp:
-            return items, "complete", ""
+            return list(items), list(lengths), "complete", ""
         cursor = start - 1
-    return items[:_NODEREAL_ITEM_CAP], "partial", "page_cap"
+    trimmed, trimmed_lengths = _limit_rows(items, lengths)
+    return trimmed, trimmed_lengths, "partial", "page_cap"
 
 
-def _nodereal_chunk(client: NodeRealClient, address, direction, category, start, end, page_budget: int, item_budget: int):
+def _nodereal_chunk(
+    client: NodeRealClient,
+    address,
+    direction,
+    category,
+    start,
+    end,
+    page_budget: int,
+    item_budget: int,
+    lengths: list[int],
+):
     kept: list[Any] = []
     token: str | None = None
     used = 0
     succeeded = False
+    sent: set[str] = set()
     pause, rng = client.sleep, client.random
     while used < page_budget and len(kept) < item_budget:
+        if token is not None:
+            if token in sent:
+                return kept, "repeated_cursor", False, used, succeeded
+            sent.add(token)
         used += 1
         operation = client.operation(
             category=category, address=address, start=start, end=end, page_key=token, side=direction,
@@ -696,11 +894,16 @@ def _nodereal_chunk(client: NodeRealClient, address, direction, category, start,
         succeeded = True
         batch = payload["transfers"]
         room = item_budget - len(kept)
+        page_key = payload.get("pageKey")
+        if isinstance(page_key, str) and page_key != "" and page_key in sent:
+            return kept, "repeated_cursor", False, used, True
         if len(batch) > room:
-            kept.extend(batch[:room])
+            taken = batch[:room]
+            kept.extend(taken)
+            lengths.append(len(taken))
             return kept, "item_cap", False, used, True
         kept.extend(batch)
-        page_key = payload.get("pageKey")
+        lengths.append(len(batch))
         if page_key is None or page_key == "":
             return kept, "", True, used, True
         if not isinstance(page_key, str):
@@ -711,13 +914,17 @@ def _nodereal_chunk(client: NodeRealClient, address, direction, category, start,
     return kept, "page_cap", False, used, succeeded
 
 
-def _stamp_nodereal_rows(rows: list[Any], lookups: _Lookups, stopped: str = "") -> tuple[list[Any], str]:
+def _stamp_nodereal_rows(
+    rows: list[Any], lookups: _Lookups, stopped: str = "",
+) -> tuple[list[Any], str, list[int]]:
     stamped: list[Any] = []
+    indexes: list[int] = []
     reason = ""
     halted = False
-    for item in rows:
+    for index, item in enumerate(rows):
         if not isinstance(item, Mapping) or _nodereal_stamp(item) is not None or _failed(item):
             stamped.append(item)
+            indexes.append(index)
             continue
         if stopped:
             reason = stopped
@@ -725,6 +932,7 @@ def _stamp_nodereal_rows(rows: list[Any], lookups: _Lookups, stopped: str = "") 
         block = _flexible_block(item)
         if block is None:
             stamped.append(item)
+            indexes.append(index)
             continue
         if halted:
             continue
@@ -740,7 +948,8 @@ def _stamp_nodereal_rows(rows: list[Any], lookups: _Lookups, stopped: str = "") 
         merged["blockTimestamp"] = stamp
         copied["metadata"] = merged
         stamped.append(copied)
-    return stamped, reason
+        indexes.append(index)
+    return stamped, reason, indexes
 
 
 def _club_filter(address: str, direction: str, start: int, end: int) -> dict[str, Any]:
@@ -766,7 +975,7 @@ def _club_logs(logs, address, direction, network, family, source_id):
             continue
         edge, block = parsed
         blocks.add(block)
-        edges.append((edge, block))
+        edges.append((edge, block, item))
     return edges, zeros, bad, blocks
 
 

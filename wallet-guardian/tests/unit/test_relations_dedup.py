@@ -1,0 +1,580 @@
+"""Relations dedup. Fixture transport only. No live network."""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+from urllib.parse import urlsplit
+
+import pytest
+
+from guardian.relations.markdown import render_markdown
+from guardian.sources.fixtures import FixtureMiss
+
+_SPEC = importlib.util.spec_from_file_location(
+    "relations_dedup_helpers",
+    Path(__file__).with_name("test_relations_r1.py"),
+)
+assert _SPEC is not None and _SPEC.loader is not None
+r1 = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(r1)
+
+TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+CURSOR = {"block_number": 5, "index": 1}
+INSIDE = r1.STAMP
+
+
+def _parts(read: dict) -> dict:
+    return {part["part"]: part for part in read["parts"]}
+
+
+def _tail(call, name: str) -> bool:
+    return urlsplit(call.url).path.rstrip("/").endswith("/" + name)
+
+
+def _blockscout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> r1.PathBackend:
+    sources, routes, secrets = r1.blockscout_profile(
+        "ethereum-mainnet", "blockscout-eth", "BLOCKSCOUT_ETH_URL", "https://eth.blockscout.example.invalid",
+    )
+    return r1.install(
+        tmp_path, monkeypatch, networks=["ethereum-mainnet"], sources=sources, routes=routes, secrets=secrets,
+        address=r1.SEED, family="evm", account_networks=["ethereum-mainnet"],
+    )
+
+
+def _tron(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> r1.PathBackend:
+    sources = {"tron-grid": r1._source("tron_grid", "TRONGRID_API_URL", "tron-public")}
+    routes = [{"network": "tron-mainnet", "capability": "history.fungible", "source_ids": ["tron-grid"]}]
+    return r1.install(
+        tmp_path, monkeypatch, networks=["tron-mainnet"], sources=sources, routes=routes,
+        secrets={"TRONGRID_API_URL": "https://tron.example.invalid"},
+        address=r1.TRON_PAYER, family="tron", account_networks=["tron-mainnet"],
+    )
+
+
+def _nodereal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> r1.PathBackend:
+    sources = {
+        "nodereal-bsc": r1._source(
+            "nodereal_transfers", "NODEREAL_BSC_URL", "nodereal-bsc", "NODEREAL_API_KEY",
+        ),
+    }
+    routes = [{"network": "bsc-mainnet", "capability": "history.native_external", "source_ids": ["nodereal-bsc"]}]
+    return r1.install(
+        tmp_path, monkeypatch, networks=["bsc-mainnet"], sources=sources, routes=routes,
+        secrets={
+            "NODEREAL_API_KEY": "synthetic-nodereal-key-dedup",
+            "NODEREAL_BSC_URL": "https://nodereal.example.invalid",
+        },
+        address=r1.MONITORED, family="evm", account_networks=["bsc-mainnet"],
+    )
+
+
+def _club(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> r1.PathBackend:
+    sources = {"nodereal-bsc": r1._source("nodereal_transfers", "NODEREAL_BSC_URL", "nodereal-bsc")}
+    routes = [{"network": "bsc-mainnet", "capability": "history.native_external", "source_ids": ["nodereal-bsc"]}]
+    backend = r1.install(
+        tmp_path, monkeypatch, networks=["bsc-mainnet"], sources=sources, routes=routes,
+        secrets={"NODEREAL_BSC_URL": "https://bsc.example.invalid"},
+        address=r1.MONITORED, family="evm", account_networks=["bsc-mainnet"],
+    )
+    r1.allow_fixture_hosts(monkeypatch, "rpc-bsc.48.club")
+    return backend
+
+
+def _nr(sender: str, recipient: str, number: int, value: str) -> dict:
+    return {
+        "blockNum": hex(5),
+        "contractAddress": r1.TOKEN,
+        "from": sender,
+        "hash": r1.tx(number),
+        "isError": "0",
+        "metadata": {"blockTimestamp": INSIDE},
+        "to": recipient,
+        "tokenDecimal": "6",
+        "value": value,
+    }
+
+
+def _club_log(sender: str, recipient: str, digest: str, log_index: str) -> dict:
+    return {
+        "address": r1.TOKEN,
+        "blockNumber": hex(8),
+        "data": "0x" + f"{4:064x}",
+        "logIndex": log_index,
+        "topics": [
+            TOPIC,
+            "0x" + sender[2:].rjust(64, "0"),
+            "0x" + recipient[2:].rjust(64, "0"),
+        ],
+        "transactionHash": digest,
+    }
+
+
+def _internal(sender: str, recipient: str, value: int, digest: str, index: int) -> dict:
+    row = r1.native_item(sender, recipient, value, INSIDE, digest)
+    row["index"] = index
+    return row
+
+
+def _gaps(text: str) -> str:
+    start = text.index("## Gaps\n") + len("## Gaps\n")
+    end = text.index("\n\n", start)
+    return text[start:end]
+
+
+def _inbound(tmp_path: Path, capsys, backend: r1.PathBackend, *extra: str):
+    return r1.invoke(capsys, r1.inbound_argv(tmp_path / "monitor.json", "--yes", *extra), backend)
+
+
+def test_blockscout_repeated_cursor_drops_the_replayed_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Page 2's next points at page 2. That page is not fetched again and is not counted."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    seen = {"transactions": 0}
+
+    def answer(call):
+        if _tail(call, "token-transfers") or _tail(call, "internal-transactions"):
+            return r1.scout([])
+        if _tail(call, "transactions"):
+            seen["transactions"] += 1
+            if seen["transactions"] == 1:
+                return r1.scout([r1.native_item(r1.LEFT, r1.SEED, 10, INSIDE, r1.tx(1))], CURSOR)
+            return r1.scout([r1.native_item(r1.LEFT, r1.SEED, 20, INSIDE, r1.tx(2))], CURSOR)
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    calls = [call for call in backend.calls if _tail(call, "transactions")]
+    assert len(calls) == 2
+    assert r1.call_query(calls[1]).get("block_number") == ["5"]
+    assert r1.call_query(calls[1]).get("index") == ["1"]
+    read = body["reads"][0]
+    assert read["read_status"] == "gap"
+    assert read["reason"] == "repeated_cursor"
+    assert _parts(read)["transactions"] == {
+        "part": "transactions", "read_status": "gap", "reason": "repeated_cursor",
+    }
+    assert _parts(read)["token-transfers"]["read_status"] == "complete"
+    row = body["counterparties"][0]
+    assert row["address"] == r1.LEFT
+    assert row["count"] == 1
+    assert row["assets"][0]["raw_amount"] == "10"
+    assert row["tx_hashes"] == [r1.tx(1)]
+
+
+def test_blockscout_cross_page_overlap_is_partial_not_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Token rows have no log index here. The same row on a later page is not counted twice."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    seen = {"token-transfers": 0}
+    first = [
+        r1.token_item(r1.LEFT, r1.SEED, 1, INSIDE, r1.tx(1)),
+        r1.token_item(r1.LEFT, r1.SEED, 2, INSIDE, r1.tx(2)),
+    ]
+    second = [
+        r1.token_item(r1.LEFT, r1.SEED, 2, INSIDE, r1.tx(2)),
+        r1.token_item(r1.LEFT, r1.SEED, 3, INSIDE, r1.tx(3)),
+    ]
+
+    def answer(call):
+        if _tail(call, "transactions") or _tail(call, "internal-transactions"):
+            return r1.scout([])
+        if _tail(call, "token-transfers"):
+            seen["token-transfers"] += 1
+            if seen["token-transfers"] == 1:
+                return r1.scout(first, {"block_number": 4, "index": 0})
+            return r1.scout(second, None)
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "partial"
+    assert read["reason"] == "ambiguous_duplicate"
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "partial", "reason": "ambiguous_duplicate",
+    }
+    row = body["counterparties"][0]
+    assert row["count"] == 3
+    assert row["assets"][0]["raw_amount"] == "6"
+    assert row["tx_hashes"] == [r1.tx(1), r1.tx(2), r1.tx(3)]
+
+
+def test_blockscout_same_page_token_rows_both_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Two identical token rows on one page stay two rows, and the part stays complete."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    row = r1.token_item(r1.LEFT, r1.SEED, 4, INSIDE, r1.tx(1))
+    r1.fill_tails(backend, [row, dict(row)], [])
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert _parts(read)["token-transfers"] == {"part": "token-transfers", "read_status": "complete", "reason": ""}
+    assert body["counterparties"][0]["count"] == 2
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "8"
+
+
+def test_blockscout_internal_index_collapses_one_trace_and_keeps_another(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The same transaction hash plus index is one trace. A second index is another."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    rows = [
+        _internal(r1.LEFT, r1.SEED, 10, r1.tx(1), 1),
+        _internal(r1.LEFT, r1.SEED, 10, r1.tx(1), 1),
+        _internal(r1.LEFT, r1.SEED, 20, r1.tx(1), 2),
+    ]
+    backend.add(r1.tail_is("token-transfers"), r1.empty_scout())
+    backend.add(r1.tail_is("transactions"), r1.empty_scout())
+    backend.add(r1.tail_is("internal-transactions"), r1.scout(rows))
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert _parts(read)["internal-transactions"] == {
+        "part": "internal-transactions", "read_status": "complete", "reason": "",
+    }
+    row = body["counterparties"][0]
+    assert row["count"] == 2
+    assert row["assets"][0]["raw_amount"] == "30"
+    assert row["tx_hashes"] == [r1.tx(1)]
+
+
+def test_nodereal_repeated_page_key_drops_the_replayed_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A pageKey that points at the page just read stops the walk and does not count that page."""
+    backend = _nodereal(tmp_path, monkeypatch)
+    seen = {"20": 0}
+
+    def answer(call):
+        body = r1.rpc_call(call)
+        method = body["method"]
+        if method == "eth_blockNumber":
+            return r1.rpc(hex(1000))
+        if method != "nr_getAssetTransfers":
+            raise FixtureMiss()
+        params = body["params"][0]
+        if params["category"] != ["20"]:
+            return r1.rpc({"transfers": []})
+        seen["20"] += 1
+        if seen["20"] == 1:
+            return r1.rpc({"pageKey": "p2", "transfers": [_nr(r1.OTHER, r1.DISPERSE, 1, "4")]})
+        return r1.rpc({"pageKey": "p2", "transfers": [_nr(r1.OTHER, r1.DISPERSE, 2, "9")]})
+
+    backend.add(lambda _call: True, answer)
+    code, body = _inbound(
+        tmp_path, capsys, backend, "--seed", r1.DISPERSE, "--network", "bsc-mainnet",
+    )
+    assert code == 0, body
+    token_calls = []
+    for call in backend.calls:
+        payload = r1.rpc_call(call)
+        if payload["method"] == "nr_getAssetTransfers" and payload["params"][0]["category"] == ["20"]:
+            token_calls.append(payload["params"][0])
+    assert len(token_calls) == 2
+    assert "pageKey" not in token_calls[0]
+    assert token_calls[1]["pageKey"] == "p2"
+    read = body["reads"][0]
+    assert read["read_status"] == "gap"
+    assert read["reason"] == "repeated_cursor"
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "gap", "reason": "repeated_cursor",
+    }
+    row = body["counterparties"][0]
+    assert row["count"] == 1
+    assert row["assets"][0]["raw_amount"] == "4"
+    assert row["tx_hashes"] == [r1.tx(1)]
+
+
+def test_nodereal_cross_page_overlap_is_partial_not_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """NodeReal rows in these fixtures have no separate row key. A later copy is not a second event."""
+    backend = _nodereal(tmp_path, monkeypatch)
+
+    def answer(call):
+        body = r1.rpc_call(call)
+        method = body["method"]
+        if method == "eth_blockNumber":
+            return r1.rpc(hex(1000))
+        if method != "nr_getAssetTransfers":
+            raise FixtureMiss()
+        params = body["params"][0]
+        if params["category"] != ["20"]:
+            return r1.rpc({"transfers": []})
+        if params.get("pageKey"):
+            return r1.rpc({"transfers": [
+                _nr(r1.OTHER, r1.DISPERSE, 2, "5"),
+                _nr(r1.OTHER, r1.DISPERSE, 3, "6"),
+            ]})
+        return r1.rpc({"pageKey": "p2", "transfers": [
+            _nr(r1.OTHER, r1.DISPERSE, 1, "4"),
+            _nr(r1.OTHER, r1.DISPERSE, 2, "5"),
+        ]})
+
+    backend.add(lambda _call: True, answer)
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.DISPERSE, "--network", "bsc-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "partial"
+    assert read["reason"] == "ambiguous_duplicate"
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "partial", "reason": "ambiguous_duplicate",
+    }
+    assert _parts(read)["transactions"]["read_status"] == "complete"
+    row = body["counterparties"][0]
+    assert row["count"] == 3
+    assert row["assets"][0]["raw_amount"] == "15"
+    assert row["tx_hashes"] == [r1.tx(1), r1.tx(2), r1.tx(3)]
+
+
+def test_nodereal_same_page_rows_both_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Two identical NodeReal rows in one response both count, and the part stays complete."""
+    backend = _nodereal(tmp_path, monkeypatch)
+    row = _nr(r1.OTHER, r1.DISPERSE, 1, "4")
+
+    def answer(call):
+        body = r1.rpc_call(call)
+        method = body["method"]
+        if method == "eth_blockNumber":
+            return r1.rpc(hex(1000))
+        if method != "nr_getAssetTransfers":
+            raise FixtureMiss()
+        params = body["params"][0]
+        if params["category"] != ["20"]:
+            return r1.rpc({"transfers": []})
+        return r1.rpc({"transfers": [row, dict(row)]})
+
+    backend.add(lambda _call: True, answer)
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.DISPERSE, "--network", "bsc-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "complete", "reason": "",
+    }
+    assert body["counterparties"][0]["count"] == 2
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "8"
+
+
+def test_nodereal_exact_item_cap_stays_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A finished page that lands on the item cap is partial. It is not a finished window."""
+    monkeypatch.setattr("guardian.relations.fetch._NODEREAL_ITEM_CAP", 1)
+    backend = _nodereal(tmp_path, monkeypatch)
+
+    def answer(call):
+        body = r1.rpc_call(call)
+        method = body["method"]
+        if method == "eth_blockNumber":
+            return r1.rpc(hex(1000))
+        if method != "nr_getAssetTransfers":
+            raise FixtureMiss()
+        params = body["params"][0]
+        if params["category"] != ["20"]:
+            return r1.rpc({"transfers": []})
+        return r1.rpc({"transfers": [_nr(r1.OTHER, r1.DISPERSE, 1, "4")]})
+
+    backend.add(lambda _call: True, answer)
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.DISPERSE, "--network", "bsc-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "partial"
+    assert read["reason"] == "item_cap"
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "partial", "reason": "item_cap",
+    }
+    assert body["counterparties"][0]["count"] == 1
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "4"
+
+
+def _club_answer(logs: list):
+    def answer(call):
+        body = r1.rpc_call(call)
+        method = body["method"]
+        if method == "eth_blockNumber":
+            return r1.rpc(hex(10))
+        if method == "eth_getBlockByNumber":
+            return r1.rpc({"number": body["params"][0], "timestamp": hex(INSIDE)})
+        if method == "eth_getLogs":
+            return r1.rpc(logs)
+        raise FixtureMiss()
+
+    return answer
+
+
+def test_club_repeated_log_counts_once_and_stays_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The same transaction hash and log index is one transfer. The token part stays complete."""
+    backend = _club(tmp_path, monkeypatch)
+    row = _club_log(r1.OTHER, r1.DISPERSE, r1.tx(1), "0x0")
+    backend.add(lambda _call: True, _club_answer([row, dict(row)]))
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.DISPERSE, "--network", "bsc-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "complete", "reason": "",
+    }
+    assert body["counterparties"][0]["count"] == 1
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "4"
+    assert body["counterparties"][0]["tx_hashes"] == [r1.tx(1)]
+
+
+def test_club_two_log_indexes_in_one_transaction_count_two(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Two logs in one transaction stay two rows when their log indexes differ."""
+    backend = _club(tmp_path, monkeypatch)
+    backend.add(lambda _call: True, _club_answer([
+        _club_log(r1.OTHER, r1.DISPERSE, r1.tx(1), "0x0"),
+        _club_log(r1.OTHER, r1.DISPERSE, r1.tx(1), "0x1"),
+    ]))
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.DISPERSE, "--network", "bsc-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "complete", "reason": "",
+    }
+    assert body["counterparties"][0]["count"] == 2
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "8"
+    assert body["counterparties"][0]["tx_hash_count"] == 1
+
+
+def test_tron_same_page_duplicate_rows_both_count_and_stay_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """TRC-20 has no log index. Two identical rows on one page are both counted."""
+    backend = _tron(tmp_path, monkeypatch)
+    row = r1.tron_row(r1.TRON_SEED, r1.TRON_PAYER, "4", "ab" * 32)
+    backend.add(lambda call: "transactions/trc20" in call.url, r1.tron_page([row, dict(row)], None))
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.TRON_PAYER, "--network", "tron-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["parts"][0] == {"part": "trc20", "read_status": "complete", "reason": ""}
+    assert body["counterparties"][0]["count"] == 2
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "8"
+
+
+def test_tron_cross_page_duplicate_row_is_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The same TRC-20 row on a later page is kept once, and that part is no longer complete."""
+    backend = _tron(tmp_path, monkeypatch)
+    backend.add(lambda call: "transactions/trc20" in call.url, [
+        r1.tron_page([
+            r1.tron_row(r1.TRON_SEED, r1.TRON_PAYER, "4", "aa" * 32),
+            r1.tron_row(r1.TRON_SEED, r1.TRON_PAYER, "5", "bb" * 32),
+        ], "pageTwo"),
+        r1.tron_page([
+            r1.tron_row(r1.TRON_SEED, r1.TRON_PAYER, "4", "aa" * 32),
+            r1.tron_row(r1.TRON_SEED, r1.TRON_PAYER, "6", "cc" * 32),
+        ], None),
+    ])
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.TRON_PAYER, "--network", "tron-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "gap"
+    assert read["reason"] == "not_in_trc20_endpoint"
+    assert read["parts"][0] == {
+        "part": "trc20", "read_status": "partial", "reason": "ambiguous_duplicate",
+    }
+    assert read["parts"][1] == {"part": "trx", "read_status": "gap", "reason": "not_in_trc20_endpoint"}
+    row = body["counterparties"][0]
+    assert row["count"] == 3
+    assert row["assets"][0]["raw_amount"] == "15"
+    assert row["tx_hashes"] == ["aa" * 32, "bb" * 32, "cc" * 32]
+    assert len(backend.calls) == 2
+
+
+def test_markdown_gaps_list_each_part_and_the_node_cap() -> None:
+    """Gaps lists every part, then unqueried rows, then truncated. The text is the whole section."""
+    payload = {
+        "command": "inbound",
+        "generated_at": "2026-01-01T00:00:00Z",
+        "since_days": 90,
+        "status": "partial",
+        "networks": ["tron-mainnet", "ethereum-mainnet"],
+        "plan": {
+            "queries": [],
+            "unqueried": [{
+                "network": "solana-mainnet",
+                "address": r1.SOL,
+                "read_status": "unsupported",
+                "reason": "unsupported",
+            }],
+        },
+        "reads": [
+            {
+                "network": "tron-mainnet",
+                "source_id": "tron-grid",
+                "read_status": "gap",
+                "reason": "not_in_trc20_endpoint",
+                "parts": [
+                    {"part": "trc20", "read_status": "partial", "reason": "page_cap"},
+                    {"part": "trx", "read_status": "gap", "reason": "not_in_trc20_endpoint"},
+                    {"part": "trc10", "read_status": "gap", "reason": "not_in_trc20_endpoint"},
+                ],
+            },
+            {
+                "network": "bitcoin-mainnet",
+                "source_id": None,
+                "read_status": "unsupported",
+                "reason": "unsupported",
+                "parts": [],
+            },
+        ],
+        "counterparties": [],
+        "truncated": {"reason": "node_cap", "total": 3},
+    }
+    section = _gaps(render_markdown(payload))
+    assert section == "\n".join([
+        "- tron-mainnet tron-grid trc20 partial page_cap",
+        "- tron-mainnet tron-grid trx gap not_in_trc20_endpoint",
+        "- tron-mainnet tron-grid trc10 gap not_in_trc20_endpoint",
+        "- bitcoin-mainnet None unsupported unsupported",
+        f"- solana-mainnet {r1.SOL} unsupported unsupported",
+        "- truncated node_cap total 3",
+    ])
+
+
+def test_markdown_gaps_show_node_cap_when_every_part_is_complete() -> None:
+    """A complete read still shows its parts, and truncated is not rendered as None."""
+    payload = {
+        "command": "inbound",
+        "generated_at": "2026-01-01T00:00:00Z",
+        "since_days": 90,
+        "status": "partial",
+        "network": "ethereum-mainnet",
+        "plan": {"queries": []},
+        "reads": [{
+            "network": "ethereum-mainnet",
+            "source_id": "blockscout-eth",
+            "read_status": "complete",
+            "reason": "",
+            "parts": [
+                {"part": "token-transfers", "read_status": "complete", "reason": ""},
+                {"part": "transactions", "read_status": "complete", "reason": ""},
+                {"part": "internal-transactions", "read_status": "complete", "reason": ""},
+            ],
+        }],
+        "counterparties": [],
+        "truncated": {"reason": "node_cap", "total": 3},
+    }
+    section = _gaps(render_markdown(payload))
+    assert section == "\n".join([
+        "- ethereum-mainnet blockscout-eth token-transfers complete",
+        "- ethereum-mainnet blockscout-eth transactions complete",
+        "- ethereum-mainnet blockscout-eth internal-transactions complete",
+        "- truncated node_cap total 3",
+    ])
