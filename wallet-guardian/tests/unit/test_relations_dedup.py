@@ -116,6 +116,43 @@ def _internal(sender: str, recipient: str, value: int, digest: str, index: int) 
     return row
 
 
+def _token_at(sender: str, recipient: str, value: int, digest: str, log_index: int) -> dict:
+    row = r1.token_item(sender, recipient, value, INSIDE, digest)
+    row["logIndex"] = log_index
+    return row
+
+
+def _nr_native(sender: str, recipient: str, number: int, value: str, **extra: object) -> dict:
+    row = {
+        "blockNum": hex(5),
+        "from": sender,
+        "hash": r1.tx(number),
+        "isError": "0",
+        "metadata": {"blockTimestamp": INSIDE},
+        "to": recipient,
+        "value": value,
+    }
+    row.update(extra)
+    return row
+
+
+def _nr_routes(transfer):
+    """Head stays inside one block span. ``transfer`` sees one category's params."""
+
+    def answer(call):
+        body = r1.rpc_call(call)
+        method = body["method"]
+        if method == "eth_blockNumber":
+            return r1.rpc(hex(1000))
+        if method == "eth_getBlockByNumber":
+            return r1.rpc({"number": body["params"][0], "timestamp": hex(INSIDE)})
+        if method != "nr_getAssetTransfers":
+            raise FixtureMiss()
+        return transfer(body["params"][0])
+
+    return answer
+
+
 def _gaps(text: str) -> str:
     start = text.index("## Gaps\n") + len("## Gaps\n")
     end = text.index("\n\n", start)
@@ -578,3 +615,469 @@ def test_markdown_gaps_show_node_cap_when_every_part_is_complete() -> None:
         "- ethereum-mainnet blockscout-eth internal-transactions complete",
         "- truncated node_cap total 3",
     ])
+
+
+def test_dedup_r2_blockscout_same_page_native_hash_counts_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One transaction hash on one transactions page is one row, and the part stays complete."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    row = r1.native_item(r1.LEFT, r1.SEED, 10, INSIDE, r1.tx(1))
+    backend.add(r1.tail_is("token-transfers"), r1.empty_scout())
+    backend.add(r1.tail_is("transactions"), r1.scout([row, dict(row)]))
+    backend.add(r1.tail_is("internal-transactions"), r1.empty_scout())
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert _parts(read)["transactions"] == {"part": "transactions", "read_status": "complete", "reason": ""}
+    assert body["counterparties"][0]["count"] == 1
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "10"
+    assert body["counterparties"][0]["tx_hashes"] == [r1.tx(1)]
+
+
+def test_dedup_r2_blockscout_same_native_hash_across_pages_stays_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The same transaction hash on a later transactions page is still one complete row."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    seen = {"transactions": 0}
+
+    def answer(call):
+        if _tail(call, "token-transfers") or _tail(call, "internal-transactions"):
+            return r1.scout([])
+        if _tail(call, "transactions"):
+            seen["transactions"] += 1
+            row = r1.native_item(r1.LEFT, r1.SEED, 10, INSIDE, r1.tx(1))
+            if seen["transactions"] == 1:
+                return r1.scout([row], {"block_number": 4, "index": 0})
+            return r1.scout([row], None)
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert read["reason"] == ""
+    assert _parts(read)["transactions"] == {"part": "transactions", "read_status": "complete", "reason": ""}
+    assert body["counterparties"][0]["count"] == 1
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "10"
+    assert body["counterparties"][0]["tx_hashes"] == [r1.tx(1)]
+
+
+def test_dedup_r2_nodereal_same_page_external_hash_counts_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One external hash on one NodeReal page is one row, and that part stays complete."""
+    backend = _nodereal(tmp_path, monkeypatch)
+    row = _nr_native(r1.OTHER, r1.DISPERSE, 1, "10")
+
+    def transfer(params):
+        if params["category"] != ["external"]:
+            return r1.rpc({"transfers": []})
+        return r1.rpc({"transfers": [row, dict(row)]})
+
+    backend.add(lambda _call: True, _nr_routes(transfer))
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.DISPERSE, "--network", "bsc-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert _parts(read)["transactions"] == {"part": "transactions", "read_status": "complete", "reason": ""}
+    assert body["counterparties"][0]["count"] == 1
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "10"
+    assert body["counterparties"][0]["tx_hashes"] == [r1.tx(1)]
+
+
+def test_dedup_r2_nodereal_same_external_hash_across_pages_stays_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The same external hash on a later page is one complete row, not an ambiguous duplicate."""
+    backend = _nodereal(tmp_path, monkeypatch)
+    row = _nr_native(r1.OTHER, r1.DISPERSE, 1, "10")
+
+    def transfer(params):
+        if params["category"] != ["external"]:
+            return r1.rpc({"transfers": []})
+        if params.get("pageKey"):
+            return r1.rpc({"transfers": [dict(row)]})
+        return r1.rpc({"pageKey": "p2", "transfers": [row]})
+
+    backend.add(lambda _call: True, _nr_routes(transfer))
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.DISPERSE, "--network", "bsc-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert read["reason"] == ""
+    assert _parts(read)["transactions"] == {"part": "transactions", "read_status": "complete", "reason": ""}
+    assert body["counterparties"][0]["count"] == 1
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "10"
+
+
+def test_dedup_r2_blockscout_same_page_log_index_counts_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A token row that repeats the same log index on one page counts once and stays complete."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    row = _token_at(r1.LEFT, r1.SEED, 4, r1.tx(1), 1)
+    r1.fill_tails(backend, [row, dict(row)], [])
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert _parts(read)["token-transfers"] == {"part": "token-transfers", "read_status": "complete", "reason": ""}
+    assert body["counterparties"][0]["count"] == 1
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "4"
+
+
+def test_dedup_r2_blockscout_same_log_index_across_pages_stays_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The same transaction hash and log index on a later page is one complete token row."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    seen = {"token-transfers": 0}
+
+    def answer(call):
+        if _tail(call, "transactions") or _tail(call, "internal-transactions"):
+            return r1.scout([])
+        if _tail(call, "token-transfers"):
+            seen["token-transfers"] += 1
+            row = _token_at(r1.LEFT, r1.SEED, 4, r1.tx(1), 7)
+            if seen["token-transfers"] == 1:
+                return r1.scout([row], {"block_number": 4, "index": 0})
+            return r1.scout([dict(row)], None)
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert read["reason"] == ""
+    assert _parts(read)["token-transfers"] == {"part": "token-transfers", "read_status": "complete", "reason": ""}
+    assert body["counterparties"][0]["count"] == 1
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "4"
+    assert body["counterparties"][0]["tx_hashes"] == [r1.tx(1)]
+
+
+def test_dedup_r2_blockscout_distinct_log_indexes_across_pages_count_two(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Two log indexes of one transaction stay two complete rows when the pages differ."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    seen = {"token-transfers": 0}
+
+    def answer(call):
+        if _tail(call, "transactions") or _tail(call, "internal-transactions"):
+            return r1.scout([])
+        if _tail(call, "token-transfers"):
+            seen["token-transfers"] += 1
+            if seen["token-transfers"] == 1:
+                return r1.scout(
+                    [_token_at(r1.LEFT, r1.SEED, 4, r1.tx(1), 1)],
+                    {"block_number": 4, "index": 0},
+                )
+            second = r1.token_item(r1.LEFT, r1.SEED, 4, INSIDE, r1.tx(1))
+            second["log_index"] = 2
+            return r1.scout([second], None)
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert read["reason"] == ""
+    assert _parts(read)["token-transfers"] == {"part": "token-transfers", "read_status": "complete", "reason": ""}
+    row = body["counterparties"][0]
+    assert row["count"] == 2
+    assert row["assets"][0]["raw_amount"] == "8"
+    assert row["tx_hashes"] == [r1.tx(1)]
+
+
+def test_dedup_r2_nodereal_same_page_trace_counts_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One internal hash plus traceId on one page is one complete row."""
+    backend = _nodereal(tmp_path, monkeypatch)
+    row = _nr_native(r1.OTHER, r1.DISPERSE, 1, "10", traceId="0")
+
+    def transfer(params):
+        if params["category"] != ["internal"]:
+            return r1.rpc({"transfers": []})
+        return r1.rpc({"transfers": [row, dict(row)]})
+
+    backend.add(lambda _call: True, _nr_routes(transfer))
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.DISPERSE, "--network", "bsc-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert _parts(read)["internal-transactions"] == {
+        "part": "internal-transactions", "read_status": "complete", "reason": "",
+    }
+    assert body["counterparties"][0]["count"] == 1
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "10"
+
+
+def test_dedup_r2_nodereal_same_trace_across_pages_stays_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The same internal hash and traceId on a later page is one complete row."""
+    backend = _nodereal(tmp_path, monkeypatch)
+    row = _nr_native(r1.OTHER, r1.DISPERSE, 1, "10", traceId="0")
+
+    def transfer(params):
+        if params["category"] != ["internal"]:
+            return r1.rpc({"transfers": []})
+        if params.get("pageKey"):
+            return r1.rpc({"transfers": [dict(row)]})
+        return r1.rpc({"pageKey": "p2", "transfers": [row]})
+
+    backend.add(lambda _call: True, _nr_routes(transfer))
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.DISPERSE, "--network", "bsc-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert read["reason"] == ""
+    assert _parts(read)["internal-transactions"] == {
+        "part": "internal-transactions", "read_status": "complete", "reason": "",
+    }
+    assert body["counterparties"][0]["count"] == 1
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "10"
+
+
+def test_dedup_r2_nodereal_distinct_traces_across_pages_count_two(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Two trace positions of one internal hash stay two complete rows across pages."""
+    backend = _nodereal(tmp_path, monkeypatch)
+
+    def transfer(params):
+        if params["category"] != ["internal"]:
+            return r1.rpc({"transfers": []})
+        if params.get("pageKey"):
+            return r1.rpc({"transfers": [_nr_native(r1.OTHER, r1.DISPERSE, 1, "10", traceId="1")]})
+        return r1.rpc({
+            "pageKey": "p2",
+            "transfers": [_nr_native(r1.OTHER, r1.DISPERSE, 1, "10", traceId="0")],
+        })
+
+    backend.add(lambda _call: True, _nr_routes(transfer))
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.DISPERSE, "--network", "bsc-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert read["reason"] == ""
+    assert _parts(read)["internal-transactions"] == {
+        "part": "internal-transactions", "read_status": "complete", "reason": "",
+    }
+    row = body["counterparties"][0]
+    assert row["count"] == 2
+    assert row["assets"][0]["raw_amount"] == "20"
+    assert row["tx_hashes"] == [r1.tx(1)]
+
+
+def test_dedup_r2_nodereal_repeated_cursor_stamps_unstamped_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Kept rows with no timestamp are still looked up. The part stays gap/repeated_cursor."""
+    backend = _nodereal(tmp_path, monkeypatch)
+    row = _nr(r1.OTHER, r1.DISPERSE, 1, "4")
+    row.pop("metadata")
+
+    def transfer(params):
+        if params["category"] != ["20"]:
+            return r1.rpc({"transfers": []})
+        if params.get("pageKey"):
+            return r1.rpc({"pageKey": "p2", "transfers": [_nr(r1.OTHER, r1.DISPERSE, 2, "9")]})
+        return r1.rpc({"pageKey": "p2", "transfers": [row]})
+
+    backend.add(lambda _call: True, _nr_routes(transfer))
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.DISPERSE, "--network", "bsc-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "gap"
+    assert read["reason"] == "repeated_cursor"
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "gap", "reason": "repeated_cursor",
+    }
+    rows = body["counterparties"]
+    assert isinstance(rows, list) and len(rows) == 1
+    assert rows[0]["count"] == 1
+    assert rows[0]["assets"][0]["raw_amount"] == "4"
+    assert rows[0]["tx_hashes"] == [r1.tx(1)]
+    lookups = [
+        r1.rpc_call(call) for call in backend.calls if r1.rpc_call(call)["method"] == "eth_getBlockByNumber"
+    ]
+    assert lookups
+    assert lookups[0]["params"][0] == hex(5)
+
+
+def test_dedup_r2_blockscout_page_cap_keeps_rows_when_next_cursor_is_illegal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """At the page cap, an unusable next cursor does not erase the page already read."""
+    backend = _blockscout(tmp_path, monkeypatch)
+
+    def answer(call):
+        if _tail(call, "token-transfers") or _tail(call, "internal-transactions"):
+            return r1.scout([])
+        if _tail(call, "transactions"):
+            return r1.scout(
+                [r1.native_item(r1.LEFT, r1.SEED, 10, INSIDE, r1.tx(1))],
+                {"block_number": None},
+            )
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code, body = _inbound(
+        tmp_path, capsys, backend, "--max-pages", "1", "--seed", r1.SEED, "--network", "ethereum-mainnet",
+    )
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "partial"
+    assert read["reason"] == "page_cap"
+    assert _parts(read)["transactions"] == {
+        "part": "transactions", "read_status": "partial", "reason": "page_cap",
+    }
+    assert len([call for call in backend.calls if _tail(call, "transactions")]) == 1
+    row = body["counterparties"][0]
+    assert row["count"] == 1
+    assert row["assets"][0]["raw_amount"] == "10"
+    assert row["tx_hashes"] == [r1.tx(1)]
+
+
+def test_dedup_r2_tron_page_cap_keeps_its_reason_when_a_row_repeats(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A page cap stays page_cap when a later page repeats a row. The repeat is not counted."""
+    backend = _tron(tmp_path, monkeypatch)
+    backend.add(lambda call: "transactions/trc20" in call.url, [
+        r1.tron_page([
+            r1.tron_row(r1.TRON_SEED, r1.TRON_PAYER, "4", "aa" * 32),
+            r1.tron_row(r1.TRON_SEED, r1.TRON_PAYER, "5", "bb" * 32),
+        ], "pageTwo"),
+        r1.tron_page([
+            r1.tron_row(r1.TRON_SEED, r1.TRON_PAYER, "4", "aa" * 32),
+            r1.tron_row(r1.TRON_SEED, r1.TRON_PAYER, "6", "cc" * 32),
+        ], "pageThree"),
+    ])
+    code, body = _inbound(
+        tmp_path, capsys, backend, "--max-pages", "2", "--seed", r1.TRON_PAYER, "--network", "tron-mainnet",
+    )
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["parts"][0] == {"part": "trc20", "read_status": "partial", "reason": "page_cap"}
+    row = body["counterparties"][0]
+    assert row["count"] == 3
+    assert row["assets"][0]["raw_amount"] == "15"
+    assert row["tx_hashes"] == ["aa" * 32, "bb" * 32, "cc" * 32]
+    assert len(backend.calls) == 2
+
+
+def test_dedup_r2_blockscout_gap_keeps_repeated_cursor_when_kept_pages_overlap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Overlap on the pages kept before a repeated cursor does not replace gap/repeated_cursor."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    seen = {"token-transfers": 0}
+
+    def answer(call):
+        if _tail(call, "transactions") or _tail(call, "internal-transactions"):
+            return r1.scout([])
+        if _tail(call, "token-transfers"):
+            seen["token-transfers"] += 1
+            if seen["token-transfers"] == 1:
+                return r1.scout([
+                    r1.token_item(r1.LEFT, r1.SEED, 1, INSIDE, r1.tx(1)),
+                    r1.token_item(r1.LEFT, r1.SEED, 2, INSIDE, r1.tx(2)),
+                ], {"block_number": 8, "index": 1})
+            if seen["token-transfers"] == 2:
+                return r1.scout([
+                    r1.token_item(r1.LEFT, r1.SEED, 2, INSIDE, r1.tx(2)),
+                    r1.token_item(r1.LEFT, r1.SEED, 3, INSIDE, r1.tx(3)),
+                ], {"block_number": 6, "index": 1})
+            return r1.scout(
+                [r1.token_item(r1.LEFT, r1.SEED, 9, INSIDE, r1.tx(9))],
+                {"block_number": 6, "index": 1},
+            )
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    calls = [call for call in backend.calls if _tail(call, "token-transfers")]
+    assert len(calls) == 3
+    read = body["reads"][0]
+    assert read["read_status"] == "gap"
+    assert read["reason"] == "repeated_cursor"
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "gap", "reason": "repeated_cursor",
+    }
+    row = body["counterparties"][0]
+    assert row["count"] == 3
+    assert row["assets"][0]["raw_amount"] == "6"
+    assert row["tx_hashes"] == [r1.tx(1), r1.tx(2), r1.tx(3)]
+
+
+def test_dedup_r2_club_same_log_across_chunks_counts_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The same 48club hash and log index in two chunks is one complete token row."""
+    backend = _club(tmp_path, monkeypatch)
+    row = _club_log(r1.OTHER, r1.DISPERSE, r1.tx(1), "0x0")
+
+    def answer(call):
+        body = r1.rpc_call(call)
+        method = body["method"]
+        if method == "eth_blockNumber":
+            return r1.rpc(hex(1001))
+        if method == "eth_getBlockByNumber":
+            return r1.rpc({"number": body["params"][0], "timestamp": hex(INSIDE)})
+        if method == "eth_getLogs":
+            return r1.rpc([row])
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.DISPERSE, "--network", "bsc-mainnet")
+    assert code == 0, body
+    logs = [call for call in backend.calls if r1.rpc_call(call)["method"] == "eth_getLogs"]
+    assert len(logs) == 2
+    read = body["reads"][0]
+    assert _parts(read)["token-transfers"] == {
+        "part": "token-transfers", "read_status": "complete", "reason": "",
+    }
+    assert body["counterparties"][0]["count"] == 1
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "4"
+    assert body["counterparties"][0]["tx_hashes"] == [r1.tx(1)]
+
+
+def test_dedup_r2_blockscout_internal_same_index_across_pages_counts_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The same internal hash and index on a later page is one complete trace."""
+    backend = _blockscout(tmp_path, monkeypatch)
+    seen = {"internal-transactions": 0}
+
+    def answer(call):
+        if _tail(call, "token-transfers") or _tail(call, "transactions"):
+            return r1.scout([])
+        if _tail(call, "internal-transactions"):
+            seen["internal-transactions"] += 1
+            row = _internal(r1.LEFT, r1.SEED, 10, r1.tx(1), 1)
+            if seen["internal-transactions"] == 1:
+                return r1.scout([row], {"block_number": 4, "index": 0})
+            return r1.scout([dict(row)], None)
+        raise FixtureMiss()
+
+    backend.add(lambda _call: True, answer)
+    code, body = _inbound(tmp_path, capsys, backend, "--seed", r1.SEED, "--network", "ethereum-mainnet")
+    assert code == 0, body
+    read = body["reads"][0]
+    assert read["read_status"] == "complete"
+    assert _parts(read)["internal-transactions"] == {
+        "part": "internal-transactions", "read_status": "complete", "reason": "",
+    }
+    assert body["counterparties"][0]["count"] == 1
+    assert body["counterparties"][0]["assets"][0]["raw_amount"] == "10"
+    assert body["counterparties"][0]["tx_hashes"] == [r1.tx(1)]

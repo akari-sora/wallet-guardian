@@ -606,16 +606,20 @@ def read_nodereal(
         part_bad = False
         time_reason = ""
         indexes = list(range(len(rows)))
-        if state != "gap":
-            rows, time_reason, indexes = _stamp_nodereal_rows(rows, lookups, why if why in _CODE_SKIP else "")
-            if time_reason:
+        repeated = state == "gap" and why == "repeated_cursor"
+        if state != "gap" or repeated:
+            # A repeated cursor stays gap. The rows already kept still need timestamps.
+            rows, time_reason, indexes = _stamp_nodereal_rows(
+                rows, lookups, "" if repeated else (why if why in _CODE_SKIP else ""),
+            )
+            if time_reason and not repeated:
                 capped = time_reason in _CAP_REASONS
                 if not rows and state == "complete" and not capped and time_reason not in _CODE_SKIP:
                     state, why = "gap", time_reason
                 elif not rows or state == "complete":
                     state, why = "partial", time_reason
         if state != "gap" or why == "repeated_cursor":
-            fold = _PageFold(_no_row_key)
+            fold = _PageFold(_nodereal_key(category))
             for page in _indexed_pages(rows, indexes, lengths):
                 pairs: list[tuple[Any, Edge]] = []
                 for item in page:
@@ -737,12 +741,37 @@ def _no_row_key(_raw: Any, _edge: Edge):
 
 def _blockscout_key(kind: str):
     def key(raw: Any, edge: Edge):
-        if kind != "internal-transactions" or not isinstance(raw, Mapping) or not edge.tx_hash:
+        if not isinstance(raw, Mapping) or not edge.tx_hash:
             return None
-        position = _trace_position(raw)
-        if position is None:
+        if kind == "transactions":
+            return ("tx", edge.tx_hash)
+        if kind == "internal-transactions":
+            position = _trace_position(raw)
+            if position is None:
+                return None
+            return ("trace", edge.tx_hash, position)
+        if kind == "token-transfers":
+            position = _log_position(raw)
+            if position is None:
+                return None
+            return ("log", edge.tx_hash, position)
+        return None
+
+    return key
+
+
+def _nodereal_key(category: str):
+    def key(raw: Any, edge: Edge):
+        if not isinstance(raw, Mapping) or not edge.tx_hash:
             return None
-        return ("trace", edge.tx_hash, position)
+        if category == "external":
+            return ("tx", edge.tx_hash)
+        if category == "internal":
+            position = _trace_position(raw)
+            if position is None:
+                return None
+            return ("trace", edge.tx_hash, position)
+        return None
 
     return key
 
@@ -858,8 +887,6 @@ def _nodereal_chunk(
     pause, rng = client.sleep, client.random
     while used < page_budget and len(kept) < item_budget:
         if token is not None:
-            if token in sent:
-                return kept, "repeated_cursor", False, used, succeeded
             sent.add(token)
         used += 1
         operation = client.operation(

@@ -317,11 +317,18 @@ class BlockscoutClient:
         allowed key is ``filter``, and the only values are ``from`` and ``to``.
         ``keep_partial`` defaults to false. When it is true, a page or item cap
         returns the rows already read, with ``complete`` false and category
-        ``partial``. ``stop_timestamp`` stops on an earlier row and treats the
-        time window as read. ``skip_pending`` defaults to false. When it is
-        true, a row with no block number and ``result`` ``pending`` is skipped
-        instead of ``missing_block``. Callers that omit these arguments keep
-        the previous result.
+        ``partial``. When it is false, those caps are an error and return no
+        rows. A next cursor that repeats a query already sent is an error with
+        reason ``repeated_cursor``. ``keep_partial`` true keeps the earlier
+        pages on that error. ``keep_partial`` false returns no rows, so a
+        caller cannot submit them. The walk does not parse the next cursor
+        once ``page_cap`` is already reached, so an unusable next cursor does
+        not replace that cap result. ``stop_timestamp`` stops on an earlier
+        row and treats the time window as read. ``skip_pending`` defaults to
+        false. When it is true, a row with no block number and ``result``
+        ``pending`` is skipped instead of ``missing_block``. Callers that omit
+        these arguments keep the previous page-cap, item-cap, and time-stop
+        result.
         """
         name = _V2_TAILS.get(tail)
         if capability is None:
@@ -359,10 +366,7 @@ class BlockscoutClient:
                     return _kept(capability, previous_cursor, "bad_page")
             else:
                 request_query = first_query
-            sent_key = _cursor_key(request_query)
-            if sent_key in sent:
-                return _gap_items(capability, kept, previous_cursor, "repeated_cursor", page_lengths)
-            sent.add(sent_key)
+            sent.add(_cursor_key(request_query))
             operation = self.operation(path, request_query, headers)
             try:
                 result = read_with_retry(
@@ -427,6 +431,8 @@ class BlockscoutClient:
                     capability, tuple(kept), True, True, (), previous_cursor, category, False, "", (), "",
                     tuple(page_lengths),
                 )
+            if pages >= page_cap:
+                break
             try:
                 next_query = self.page_query(nxt)
             except ValueError:
@@ -435,7 +441,9 @@ class BlockscoutClient:
                 # This page's next cursor was already sent. Drop the page and keep earlier ones.
                 del kept[before:]
                 page_lengths.pop()
-                return _gap_items(capability, kept, previous_cursor, "repeated_cursor", page_lengths)
+                if keep_partial:
+                    return _gap_items(capability, kept, previous_cursor, "repeated_cursor", page_lengths)
+                return _kept(capability, previous_cursor, "repeated_cursor")
             token = nxt
         if keep_partial:
             return _partial(capability, kept, previous_cursor, "page_cap", page_lengths)
