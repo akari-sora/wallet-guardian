@@ -1,0 +1,16 @@
+{
+  "schema_version": "guardian.execution_registry.v1",
+  "send_enabled": false,
+  "user_approved": false,
+  "identity": {
+    "rule": "single_account_v1",
+    "siwe_address": "compare_when_session_present",
+    "own_address_list": false,
+    "on_account_switch": {
+      "clear": ["evidence"],
+      "keep": ["pending", "unknown"]
+    }
+  },
+  "deployments": [],
+  "policies": []
+}

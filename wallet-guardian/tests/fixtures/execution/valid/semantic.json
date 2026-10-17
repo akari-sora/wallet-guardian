@@ -1,0 +1,170 @@
+{
+  "chains": {
+    "chains": [
+      {
+        "chain_id": 56,
+        "network_id": "bsc-mainnet",
+        "revoked_at": null,
+        "rpc": [
+          {
+            "operator": "fixture",
+            "source": "https://example.invalid/source",
+            "url": "https://example.invalid/bsc"
+          }
+        ],
+        "status": "active"
+      }
+    ],
+    "enables_send": false,
+    "purpose": "execution_rpc_catalog",
+    "relationships": [
+      {
+        "execution_rpc": false,
+        "id": "monitor_chains_json",
+        "path": "config/chains.json",
+        "purpose": "monitor_enabled_declaration"
+      },
+      {
+        "execution_rpc": false,
+        "id": "planned_network_registry",
+        "path": "config/chains/",
+        "purpose": "mcm01_planned_registry"
+      },
+      {
+        "execution_rpc": false,
+        "id": "wheel_resource_copy",
+        "path": "src/guardian/_resources/config/",
+        "purpose": "installed_monitor_copy"
+      },
+      {
+        "execution_rpc": true,
+        "id": "execution_rpc_catalog",
+        "path": "config/execution/chains.json",
+        "purpose": "execution_rpc_catalog"
+      }
+    ],
+    "schema_version": "guardian.execution_chains.v1"
+  },
+  "registry": {
+    "deployments": [
+      {
+        "address": "0x0000000000000000000000000000000000000003",
+        "approval": "not_approved",
+        "assertions": [],
+        "chain_id": 56,
+        "id": "fixture-vault",
+        "implementation": {
+          "address": "0x0000000000000000000000000000000000000004",
+          "runtime_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "network_id": "bsc-mainnet",
+        "official_sources": [
+          {
+            "retrieved": "2026-10-17",
+            "url": "https://example.invalid/source"
+          }
+        ],
+        "permission_type": "erc4626_vault",
+        "pin_status": "pinned",
+        "protocol_id": "fixture",
+        "protocol_version": "1",
+        "proxy_kind": "eip1967_impl",
+        "proxy_kind_basis": "fixture pin",
+        "record_status": "active",
+        "revoked_at": null,
+        "runtime_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_block_hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "source_block_number": "10",
+        "source_files": [
+          "tests/fixtures/execution/valid/registry.json"
+        ],
+        "user_approved": false,
+        "valid_until": "2027-01-01T00:00:00Z"
+      }
+    ],
+    "identity": {
+      "on_account_switch": {
+        "clear": [
+          "evidence"
+        ],
+        "keep": [
+          "pending",
+          "unknown"
+        ]
+      },
+      "own_address_list": false,
+      "rule": "single_account_v1",
+      "siwe_address": "compare_when_session_present"
+    },
+    "policies": [
+      {
+        "action": "erc4626_redeem",
+        "allowance_cap": "0",
+        "allowed_spender_ids": [],
+        "amount_rule": "all",
+        "approval": "not_approved",
+        "asset_deployment_id": null,
+        "chain_id": 56,
+        "deployment_id": "fixture-vault",
+        "id": "fixture-redeem",
+        "loss_cap": "0",
+        "market_id": null,
+        "parameters": [
+          {
+            "name": "receiver",
+            "role": "receiver",
+            "solidity_type": "address"
+          },
+          {
+            "name": "owner",
+            "role": "owner",
+            "solidity_type": "address"
+          },
+          {
+            "name": "shares",
+            "solidity_type": "uint256"
+          }
+        ],
+        "penalty_cap": "0",
+        "position_id": null,
+        "recipient_rule": "self",
+        "record_status": "active",
+        "revoked_at": null,
+        "spend_cap": "0",
+        "user_approved": false
+      },
+      {
+        "action": "revoke_erc20",
+        "allowance_cap": "0",
+        "allowed_spender_ids": [
+          "fixture-vault"
+        ],
+        "amount_rule": "all",
+        "approval": "not_approved",
+        "asset_deployment_id": null,
+        "chain_id": 56,
+        "deployment_id": "fixture-vault",
+        "id": "fixture-revoke",
+        "loss_cap": "0",
+        "market_id": null,
+        "parameters": [
+          {
+            "name": "spender",
+            "role": "spender",
+            "solidity_type": "address"
+          }
+        ],
+        "penalty_cap": "0",
+        "position_id": null,
+        "recipient_rule": "self",
+        "record_status": "active",
+        "revoked_at": null,
+        "spend_cap": "0",
+        "user_approved": false
+      }
+    ],
+    "schema_version": "guardian.execution_registry.v1",
+    "send_enabled": false,
+    "user_approved": false
+  }
+}

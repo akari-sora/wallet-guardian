@@ -1,0 +1,115 @@
+{
+  "chains": {
+    "chains": [],
+    "enables_send": false,
+    "purpose": "execution_rpc_catalog",
+    "relationships": [
+      {
+        "execution_rpc": false,
+        "id": "monitor_chains_json",
+        "path": "config/chains.json",
+        "purpose": "monitor_enabled_declaration"
+      },
+      {
+        "execution_rpc": false,
+        "id": "planned_network_registry",
+        "path": "config/chains/",
+        "purpose": "mcm01_planned_registry"
+      },
+      {
+        "execution_rpc": false,
+        "id": "wheel_resource_copy",
+        "path": "src/guardian/_resources/config/",
+        "purpose": "installed_monitor_copy"
+      },
+      {
+        "execution_rpc": true,
+        "id": "execution_rpc_catalog",
+        "path": "config/execution/chains.json",
+        "purpose": "execution_rpc_catalog"
+      }
+    ],
+    "schema_version": "guardian.execution_chains.v1"
+  },
+  "registry": {
+    "deployments": [],
+    "identity": {
+      "on_account_switch": {
+        "clear": [
+          "evidence"
+        ],
+        "keep": [
+          "pending",
+          "unknown"
+        ]
+      },
+      "own_address_list": false,
+      "rule": "single_account_v1",
+      "siwe_address": "compare_when_session_present"
+    },
+    "policies": [],
+    "schema_version": "guardian.execution_registry.v1",
+    "send_enabled": false,
+    "user_approved": false
+  },
+  "trust_critical_paths": {
+    "categories": [
+      {
+        "name": "registry_and_policy",
+        "paths": [
+          "wallet-guardian/config/execution/",
+          "wallet-guardian/config/execution/trust-critical-paths.json"
+        ]
+      },
+      {
+        "name": "client_core",
+        "paths": [
+          "wallet-guardian/action-client/src/execution/"
+        ]
+      },
+      {
+        "name": "send_path",
+        "paths": [
+          "wallet-guardian/action-client/src/send/",
+          "wallet-guardian/action-client/src/wallets/"
+        ]
+      },
+      {
+        "name": "guided_flow",
+        "paths": [
+          "wallet-guardian/action-client/src/mode-a.mjs"
+        ]
+      },
+      {
+        "name": "build",
+        "paths": [
+          "wallet-guardian/action-client/package-lock.json",
+          "wallet-guardian/action-client/package.json",
+          "wallet-guardian/action-client/tools/",
+          "wallet-guardian/action-client/vite.config.ts"
+        ]
+      },
+      {
+        "name": "release_schema",
+        "paths": [
+          "wallet-guardian/action-client/deploy/release.schema.json"
+        ]
+      }
+    ],
+    "note": "Changing this list is a trust-critical review change. The list is not a boundary.",
+    "paths": [
+      "wallet-guardian/action-client/deploy/release.schema.json",
+      "wallet-guardian/action-client/package-lock.json",
+      "wallet-guardian/action-client/package.json",
+      "wallet-guardian/action-client/src/execution/",
+      "wallet-guardian/action-client/src/mode-a.mjs",
+      "wallet-guardian/action-client/src/send/",
+      "wallet-guardian/action-client/src/wallets/",
+      "wallet-guardian/action-client/tools/",
+      "wallet-guardian/action-client/vite.config.ts",
+      "wallet-guardian/config/execution/",
+      "wallet-guardian/config/execution/trust-critical-paths.json"
+    ],
+    "schema_version": "guardian.trust_critical_paths.v1"
+  }
+}

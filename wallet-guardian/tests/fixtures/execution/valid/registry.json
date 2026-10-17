@@ -1,0 +1,98 @@
+{
+  "schema_version": "guardian.execution_registry.v1",
+  "send_enabled": false,
+  "user_approved": false,
+  "identity": {
+    "rule": "single_account_v1",
+    "siwe_address": "compare_when_session_present",
+    "own_address_list": false,
+    "on_account_switch": {
+      "clear": ["evidence"],
+      "keep": ["pending", "unknown"]
+    }
+  },
+  "deployments": [
+    {
+      "id": "fixture-vault",
+      "chain_id": 56,
+      "network_id": "bsc-mainnet",
+      "address": "0x0000000000000000000000000000000000000003",
+      "protocol_id": "fixture",
+      "protocol_version": "1",
+      "permission_type": "erc4626_vault",
+      "proxy_kind": "eip1967_impl",
+      "proxy_kind_basis": "fixture pin",
+      "implementation": {
+        "address": "0x0000000000000000000000000000000000000004",
+        "runtime_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "runtime_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_block_number": "10",
+      "source_block_hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "pin_status": "pinned",
+      "assertions": [],
+      "valid_until": "2027-01-01T00:00:00Z",
+      "official_sources": [
+        {
+          "url": "https://example.invalid/source",
+          "retrieved": "2026-10-17"
+        }
+      ],
+      "record_status": "active",
+      "revoked_at": null,
+      "approval": "not_approved",
+      "user_approved": false,
+      "source_files": ["tests/fixtures/execution/valid/registry.json"]
+    }
+  ],
+  "policies": [
+    {
+      "id": "fixture-redeem",
+      "chain_id": 56,
+      "deployment_id": "fixture-vault",
+      "market_id": null,
+      "position_id": null,
+      "asset_deployment_id": null,
+      "allowed_spender_ids": [],
+      "action": "erc4626_redeem",
+      "recipient_rule": "self",
+      "spend_cap": "0",
+      "allowance_cap": "0",
+      "loss_cap": "0",
+      "penalty_cap": "0",
+      "amount_rule": "all",
+      "parameters": [
+        {"name": "receiver", "solidity_type": "address", "role": "receiver"},
+        {"name": "owner", "solidity_type": "address", "role": "owner"},
+        {"name": "shares", "solidity_type": "uint256"}
+      ],
+      "record_status": "active",
+      "revoked_at": null,
+      "approval": "not_approved",
+      "user_approved": false
+    },
+    {
+      "id": "fixture-revoke",
+      "chain_id": 56,
+      "deployment_id": "fixture-vault",
+      "market_id": null,
+      "position_id": null,
+      "asset_deployment_id": null,
+      "allowed_spender_ids": ["fixture-vault"],
+      "action": "revoke_erc20",
+      "recipient_rule": "self",
+      "spend_cap": "0",
+      "allowance_cap": "0",
+      "loss_cap": "0",
+      "penalty_cap": "0",
+      "amount_rule": "all",
+      "parameters": [
+        {"name": "spender", "solidity_type": "address", "role": "spender"}
+      ],
+      "record_status": "active",
+      "revoked_at": null,
+      "approval": "not_approved",
+      "user_approved": false
+    }
+  ]
+}

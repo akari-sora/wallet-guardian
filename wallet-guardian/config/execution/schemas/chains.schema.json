@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Execution RPC catalog. Presence does not enable send. The loader also rejects floats, duplicate keys, and unknown fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "purpose", "enables_send", "relationships", "chains"],
+  "properties": {
+    "schema_version": { "const": "guardian.execution_chains.v1" },
+    "purpose": { "const": "execution_rpc_catalog" },
+    "enables_send": { "const": false },
+    "relationships": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path", "purpose", "execution_rpc"],
+        "properties": {
+          "id": { "type": "string" },
+          "path": { "type": "string" },
+          "purpose": { "type": "string" },
+          "execution_rpc": { "type": "boolean" }
+        }
+      }
+    },
+    "chains": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/chain" }
+    }
+  },
+  "$defs": {
+    "chain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chain_id", "network_id", "status", "revoked_at", "rpc"],
+      "properties": {
+        "chain_id": { "type": "integer", "minimum": 1 },
+        "network_id": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["active", "revoked"] },
+        "revoked_at": { "type": ["string", "null"] },
+        "rpc": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["url", "operator", "source"],
+            "properties": {
+              "url": { "type": "string" },
+              "operator": { "type": "string" },
+              "source": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

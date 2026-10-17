@@ -27,6 +27,8 @@ const RELEASE_FIELDS = [
   "status",
 ];
 
+const DIGEST_FIELDS = ["execution_registry", "policy", "core_bundle", "dist"];
+
 export function loadJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
@@ -63,7 +65,20 @@ export function validateRelease(release, entries = approvedOriginEntries(), path
     if (!Object.prototype.hasOwnProperty.call(release, field)) push(errors, path, `missing ${field}`);
   }
   for (const field of Object.keys(release)) {
-    if (!RELEASE_FIELDS.includes(field)) push(errors, path, `unexpected ${field}`);
+    if (!RELEASE_FIELDS.includes(field) && field !== "digests") push(errors, path, `unexpected ${field}`);
+  }
+  if (Object.prototype.hasOwnProperty.call(release, "digests")) {
+    const digests = release.digests;
+    if (!digests || typeof digests !== "object" || Array.isArray(digests)) {
+      push(errors, path, "digests");
+    } else {
+      for (const field of DIGEST_FIELDS) {
+        if (!isSha256(digests[field])) push(errors, path, `digests ${field}`);
+      }
+      for (const field of Object.keys(digests)) {
+        if (!DIGEST_FIELDS.includes(field)) push(errors, path, `unexpected ${field}`);
+      }
+    }
   }
   if (typeof release.release_id !== "string" || release.release_id.length === 0) push(errors, path, "release_id");
   if (typeof release.deployment_id !== "string" || release.deployment_id.length === 0) push(errors, path, "deployment_id");

@@ -1,0 +1,46 @@
+{
+  "schema_version": "guardian.execution_chains.v1",
+  "purpose": "execution_rpc_catalog",
+  "enables_send": false,
+  "relationships": [
+    {
+      "id": "monitor_chains_json",
+      "path": "config/chains.json",
+      "purpose": "monitor_enabled_declaration",
+      "execution_rpc": false
+    },
+    {
+      "id": "planned_network_registry",
+      "path": "config/chains/",
+      "purpose": "mcm01_planned_registry",
+      "execution_rpc": false
+    },
+    {
+      "id": "wheel_resource_copy",
+      "path": "src/guardian/_resources/config/",
+      "purpose": "installed_monitor_copy",
+      "execution_rpc": false
+    },
+    {
+      "id": "execution_rpc_catalog",
+      "path": "config/execution/chains.json",
+      "purpose": "execution_rpc_catalog",
+      "execution_rpc": true
+    }
+  ],
+  "chains": [
+    {
+      "chain_id": 56,
+      "network_id": "bsc-mainnet",
+      "status": "active",
+      "revoked_at": null,
+      "rpc": [
+        {
+          "url": "https://example.invalid/bsc",
+          "operator": "fixture",
+          "source": "https://example.invalid/source"
+        }
+      ]
+    }
+  ]
+}

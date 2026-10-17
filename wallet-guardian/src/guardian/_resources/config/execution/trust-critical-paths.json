@@ -1,0 +1,60 @@
+{
+  "schema_version": "guardian.trust_critical_paths.v1",
+  "note": "Changing this list is a trust-critical review change. The list is not a boundary.",
+  "categories": [
+    {
+      "name": "registry_and_policy",
+      "paths": [
+        "wallet-guardian/config/execution/",
+        "wallet-guardian/config/execution/trust-critical-paths.json"
+      ]
+    },
+    {
+      "name": "client_core",
+      "paths": [
+        "wallet-guardian/action-client/src/execution/"
+      ]
+    },
+    {
+      "name": "send_path",
+      "paths": [
+        "wallet-guardian/action-client/src/send/",
+        "wallet-guardian/action-client/src/wallets/"
+      ]
+    },
+    {
+      "name": "guided_flow",
+      "paths": [
+        "wallet-guardian/action-client/src/mode-a.mjs"
+      ]
+    },
+    {
+      "name": "build",
+      "paths": [
+        "wallet-guardian/action-client/vite.config.ts",
+        "wallet-guardian/action-client/package.json",
+        "wallet-guardian/action-client/package-lock.json",
+        "wallet-guardian/action-client/tools/"
+      ]
+    },
+    {
+      "name": "release_schema",
+      "paths": [
+        "wallet-guardian/action-client/deploy/release.schema.json"
+      ]
+    }
+  ],
+  "paths": [
+    "wallet-guardian/action-client/deploy/release.schema.json",
+    "wallet-guardian/action-client/package-lock.json",
+    "wallet-guardian/action-client/package.json",
+    "wallet-guardian/action-client/src/execution/",
+    "wallet-guardian/action-client/src/mode-a.mjs",
+    "wallet-guardian/action-client/src/send/",
+    "wallet-guardian/action-client/src/wallets/",
+    "wallet-guardian/action-client/tools/",
+    "wallet-guardian/action-client/vite.config.ts",
+    "wallet-guardian/config/execution/",
+    "wallet-guardian/config/execution/trust-critical-paths.json"
+  ]
+}

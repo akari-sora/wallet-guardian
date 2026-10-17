@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Unapproved candidates. The generator prints this document and does not write config/execution/registry.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "approval", "user_approved", "deployments", "unclassified", "skipped"],
+  "properties": {
+    "schema_version": { "const": "guardian.execution_candidates.v1" },
+    "approval": { "const": "candidate_unapproved" },
+    "user_approved": { "const": false },
+    "deployments": { "type": "array" },
+    "unclassified": { "type": "array" },
+    "skipped": { "type": "array" }
+  }
+}

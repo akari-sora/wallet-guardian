@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import { pagesHeaders } from "./src/csp.mjs";
@@ -27,6 +29,22 @@ function pagesHeadersPlugin(walletConnect: boolean): Plugin {
     apply: "build",
     generateBundle() {
       this.emitFile({ type: "asset", fileName: "_headers", source: pagesHeaders({ walletConnect }) });
+    },
+  };
+}
+
+function executionRegistryCopy(): Plugin {
+  const directory = fileURLToPath(new URL("../config/execution", import.meta.url));
+  return {
+    name: "wallet-guardian-execution-registry-copy",
+    apply: "build",
+    generateBundle() {
+      if (!existsSync(directory)) return;
+      for (const name of ["chains.json", "registry.json", "trust-critical-paths.json"]) {
+        const file = join(directory, name);
+        if (!existsSync(file)) continue;
+        this.emitFile({ type: "asset", fileName: `execution/${name}`, source: readFileSync(file) });
+      }
     },
   };
 }
@@ -68,7 +86,7 @@ export default defineConfig(async ({ mode }) => {
     define: {
       __WG_SEND_VARIANT__: JSON.stringify(SEND_VARIANT),
     },
-    plugins: [pagesHeadersPlugin(wc.enabled), forbidSendModules(SEND_VARIANT)],
+    plugins: [pagesHeadersPlugin(wc.enabled), executionRegistryCopy(), forbidSendModules(SEND_VARIANT)],
     ...(SEND_VARIANT === "mode_a"
       ? {
           build: {

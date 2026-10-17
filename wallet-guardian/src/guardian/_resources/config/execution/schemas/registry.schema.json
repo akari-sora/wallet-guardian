@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Execution registry and policies. user_approved true and approved_by_user are rejected by the loader. mainnet send is not a field here. send_enabled must be false.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "send_enabled", "user_approved", "identity", "deployments", "policies"],
+  "properties": {
+    "schema_version": { "const": "guardian.execution_registry.v1" },
+    "send_enabled": { "const": false },
+    "user_approved": { "const": false },
+    "identity": { "$ref": "#/$defs/identity" },
+    "deployments": { "type": "array", "items": { "$ref": "#/$defs/deployment" } },
+    "policies": { "type": "array", "items": { "$ref": "#/$defs/policy" } }
+  },
+  "$defs": {
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule", "siwe_address", "own_address_list", "on_account_switch"],
+      "properties": {
+        "rule": { "const": "single_account_v1" },
+        "siwe_address": { "const": "compare_when_session_present" },
+        "own_address_list": { "const": false },
+        "on_account_switch": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["clear", "keep"],
+          "properties": {
+            "clear": { "const": ["evidence"] },
+            "keep": { "const": ["pending", "unknown"] }
+          }
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "retrieved"],
+      "properties": {
+        "url": { "type": "string" },
+        "retrieved": { "type": "string" }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "chain_id", "network_id", "address", "protocol_id", "protocol_version",
+        "permission_type", "proxy_kind", "proxy_kind_basis", "implementation",
+        "runtime_hash", "source_block_number", "source_block_hash", "pin_status",
+        "assertions", "valid_until", "official_sources", "record_status", "revoked_at",
+        "approval", "user_approved", "source_files"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "chain_id": { "type": "integer", "minimum": 1 },
+        "network_id": { "type": "string" },
+        "address": { "type": "string" },
+        "protocol_id": { "type": "string" },
+        "protocol_version": { "type": "string" },
+        "permission_type": {
+          "enum": [
+            "erc20_allowance", "erc721_operator", "erc721_token", "permit2",
+            "credit_delegation", "aave_debt_token", "morpho_like", "erc4626_vault", "queue_vault"
+          ]
+        },
+        "proxy_kind": { "enum": ["none", "eip1967_impl"] },
+        "proxy_kind_basis": { "type": "string" },
+        "implementation": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["address", "runtime_hash"],
+              "properties": {
+                "address": { "type": "string" },
+                "runtime_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+              }
+            }
+          ]
+        },
+        "runtime_hash": { "type": ["string", "null"] },
+        "source_block_number": { "type": ["string", "null"] },
+        "source_block_hash": { "type": ["string", "null"] },
+        "pin_status": { "enum": ["pinned", "not_read_offline"] },
+        "assertions": { "type": "array", "items": { "type": "string" } },
+        "valid_until": { "type": ["string", "null"] },
+        "official_sources": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/source" } },
+        "record_status": { "enum": ["active", "revoked"] },
+        "revoked_at": { "type": ["string", "null"] },
+        "approval": { "const": "not_approved" },
+        "user_approved": { "const": false },
+        "source_files": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "solidity_type"],
+      "properties": {
+        "name": { "type": "string" },
+        "solidity_type": { "enum": ["address", "address payable", "uint256", "bool", "bytes"] },
+        "role": { "enum": ["receiver", "onBehalf", "owner", "spender", "target"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "solidity_type": { "enum": ["address", "address payable"] } }, "required": ["solidity_type"] },
+          "then": { "required": ["role"] }
+        }
+      ]
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "chain_id", "deployment_id", "market_id", "position_id", "asset_deployment_id",
+        "allowed_spender_ids", "action", "recipient_rule", "spend_cap", "allowance_cap",
+        "loss_cap", "penalty_cap", "amount_rule", "parameters", "record_status", "revoked_at",
+        "approval", "user_approved"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "chain_id": { "type": "integer", "minimum": 1 },
+        "deployment_id": { "type": "string" },
+        "market_id": { "type": ["string", "null"] },
+        "position_id": { "type": ["string", "null"] },
+        "asset_deployment_id": { "type": ["string", "null"] },
+        "allowed_spender_ids": { "type": "array", "items": { "type": "string" } },
+        "action": {
+          "enum": [
+            "revoke_erc20", "revoke_erc721_operator", "revoke_erc721_token", "revoke_credit_delegation",
+            "revoke_morpho", "erc4626_redeem", "aave_withdraw", "moolah_withdraw_collateral",
+            "queue_request", "queue_claim", "aave_repay", "moolah_repay"
+          ]
+        },
+        "recipient_rule": { "const": "self" },
+        "spend_cap": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$" },
+        "allowance_cap": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$" },
+        "loss_cap": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$" },
+        "penalty_cap": { "const": "0" },
+        "amount_rule": { "const": "all" },
+        "parameters": { "type": "array", "items": { "$ref": "#/$defs/parameter" } },
+        "record_status": { "enum": ["active", "revoked"] },
+        "revoked_at": { "type": ["string", "null"] },
+        "approval": { "const": "not_approved" },
+        "user_approved": { "const": false }
+      }
+    }
+  }
+}

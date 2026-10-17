@@ -1,0 +1,835 @@
+{
+  "approval": "candidate_unapproved",
+  "deployments": [
+    {
+      "address": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+      "approval": "candidate_unapproved",
+      "assertions": [],
+      "chain_id": 10,
+      "id": "candidate:10:permit2:permit2",
+      "implementation": null,
+      "network_id": "optimism-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-08",
+          "url": "https://github.com/Uniswap/permit2"
+        }
+      ],
+      "permission_type": "permit2",
+      "pin_status": "not_read_offline",
+      "protocol_id": "permit2",
+      "protocol_version": "1",
+      "proxy_kind": "none",
+      "proxy_kind_basis": "The deployment file records one contract address and does not describe a proxy. protocol_version is 1 because that file has no version field.",
+      "record_status": "candidate",
+      "revoked_at": null,
+      "runtime_hash": null,
+      "source_block_hash": null,
+      "source_block_number": null,
+      "source_files": [
+        "config/deployments/permit2/optimism-mainnet.json"
+      ],
+      "user_approved": false,
+      "valid_until": null
+    },
+    {
+      "address": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+      "approval": "candidate_unapproved",
+      "assertions": [],
+      "chain_id": 137,
+      "id": "candidate:137:permit2:permit2",
+      "implementation": null,
+      "network_id": "polygon-pos",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-08",
+          "url": "https://github.com/Uniswap/permit2"
+        }
+      ],
+      "permission_type": "permit2",
+      "pin_status": "not_read_offline",
+      "protocol_id": "permit2",
+      "protocol_version": "1",
+      "proxy_kind": "none",
+      "proxy_kind_basis": "The deployment file records one contract address and does not describe a proxy. protocol_version is 1 because that file has no version field.",
+      "record_status": "candidate",
+      "revoked_at": null,
+      "runtime_hash": null,
+      "source_block_hash": null,
+      "source_block_number": null,
+      "source_files": [
+        "config/deployments/permit2/polygon-pos.json"
+      ],
+      "user_approved": false,
+      "valid_until": null
+    },
+    {
+      "address": "0x83F20F44975D03b1b09e64809B757c47f942BEeA",
+      "approval": "candidate_unapproved",
+      "assertions": [],
+      "chain_id": 1,
+      "id": "candidate:1:erc4626_pins:sdai",
+      "implementation": null,
+      "network_id": "ethereum-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-10",
+          "url": "https://docs.spark.fi/dev/savings/sdai-token"
+        }
+      ],
+      "permission_type": "erc4626_vault",
+      "pin_status": "not_read_offline",
+      "protocol_id": "erc4626_pins",
+      "protocol_version": "1",
+      "proxy_kind": "none",
+      "proxy_kind_basis": "The packaged notes say the implementation identity is at this address.",
+      "record_status": "candidate",
+      "revoked_at": null,
+      "runtime_hash": null,
+      "source_block_hash": null,
+      "source_block_number": null,
+      "source_files": [
+        "config/protocols/erc4626-pins.json"
+      ],
+      "user_approved": false,
+      "valid_until": null
+    },
+    {
+      "address": "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb",
+      "approval": "candidate_unapproved",
+      "assertions": [],
+      "chain_id": 1,
+      "id": "candidate:1:erc4626_pins:steakhouse_morpho",
+      "implementation": null,
+      "network_id": "ethereum-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-10",
+          "url": "https://docs.morpho.org/get-started/resources/addresses/"
+        }
+      ],
+      "permission_type": "morpho_like",
+      "pin_status": "not_read_offline",
+      "protocol_id": "erc4626_pins",
+      "protocol_version": "1",
+      "proxy_kind": "none",
+      "proxy_kind_basis": "The packaged notes name Morpho Blue at this address.",
+      "record_status": "candidate",
+      "revoked_at": null,
+      "runtime_hash": null,
+      "source_block_hash": null,
+      "source_block_number": null,
+      "source_files": [
+        "config/protocols/erc4626-pins.json"
+      ],
+      "user_approved": false,
+      "valid_until": null
+    },
+    {
+      "address": "0xBEEF01735c132Ada46AA9aA4c54623cAA92A64CB",
+      "approval": "candidate_unapproved",
+      "assertions": [],
+      "chain_id": 1,
+      "id": "candidate:1:erc4626_pins:steakhouse_usdc",
+      "implementation": null,
+      "network_id": "ethereum-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-10",
+          "url": "https://github.com/morpho-org/metamorpho"
+        }
+      ],
+      "permission_type": "erc4626_vault",
+      "pin_status": "not_read_offline",
+      "protocol_id": "erc4626_pins",
+      "protocol_version": "1",
+      "proxy_kind": "none",
+      "proxy_kind_basis": "The packaged notes say the implementation identity is at this address.",
+      "record_status": "candidate",
+      "revoked_at": null,
+      "runtime_hash": null,
+      "source_block_hash": null,
+      "source_block_number": null,
+      "source_files": [
+        "config/protocols/erc4626-pins.json"
+      ],
+      "user_approved": false,
+      "valid_until": null
+    },
+    {
+      "address": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+      "approval": "candidate_unapproved",
+      "assertions": [],
+      "chain_id": 1,
+      "id": "candidate:1:permit2:permit2",
+      "implementation": null,
+      "network_id": "ethereum-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-08",
+          "url": "https://github.com/Uniswap/permit2"
+        }
+      ],
+      "permission_type": "permit2",
+      "pin_status": "not_read_offline",
+      "protocol_id": "permit2",
+      "protocol_version": "1",
+      "proxy_kind": "none",
+      "proxy_kind_basis": "The deployment file records one contract address and does not describe a proxy. protocol_version is 1 because that file has no version field.",
+      "record_status": "candidate",
+      "revoked_at": null,
+      "runtime_hash": null,
+      "source_block_hash": null,
+      "source_block_number": null,
+      "source_files": [
+        "config/deployments/permit2/ethereum-mainnet.json"
+      ],
+      "user_approved": false,
+      "valid_until": null
+    },
+    {
+      "address": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+      "approval": "candidate_unapproved",
+      "assertions": [],
+      "chain_id": 42161,
+      "id": "candidate:42161:permit2:permit2",
+      "implementation": null,
+      "network_id": "arbitrum-one",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-08",
+          "url": "https://github.com/Uniswap/permit2"
+        }
+      ],
+      "permission_type": "permit2",
+      "pin_status": "not_read_offline",
+      "protocol_id": "permit2",
+      "protocol_version": "1",
+      "proxy_kind": "none",
+      "proxy_kind_basis": "The deployment file records one contract address and does not describe a proxy. protocol_version is 1 because that file has no version field.",
+      "record_status": "candidate",
+      "revoked_at": null,
+      "runtime_hash": null,
+      "source_block_hash": null,
+      "source_block_number": null,
+      "source_files": [
+        "config/deployments/permit2/arbitrum-one.json"
+      ],
+      "user_approved": false,
+      "valid_until": null
+    },
+    {
+      "address": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+      "approval": "candidate_unapproved",
+      "assertions": [],
+      "chain_id": 43114,
+      "id": "candidate:43114:permit2:permit2",
+      "implementation": null,
+      "network_id": "avalanche-c",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-08",
+          "url": "https://github.com/Uniswap/permit2"
+        }
+      ],
+      "permission_type": "permit2",
+      "pin_status": "not_read_offline",
+      "protocol_id": "permit2",
+      "protocol_version": "1",
+      "proxy_kind": "none",
+      "proxy_kind_basis": "The deployment file records one contract address and does not describe a proxy. protocol_version is 1 because that file has no version field.",
+      "record_status": "candidate",
+      "revoked_at": null,
+      "runtime_hash": null,
+      "source_block_hash": null,
+      "source_block_number": null,
+      "source_files": [
+        "config/deployments/permit2/avalanche-c.json"
+      ],
+      "user_approved": false,
+      "valid_until": null
+    },
+    {
+      "address": "0x1adB950d8bB3dA4bE104211D5AB038628e477fE6",
+      "approval": "candidate_unapproved",
+      "assertions": [],
+      "chain_id": 56,
+      "id": "candidate:56:lista_slisbnb:proxy",
+      "implementation": null,
+      "network_id": "bsc-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-07",
+          "url": "https://docs.bsc.lista.org/for-developer/liquid-staking-slisbnb/mechanics"
+        },
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://docs.bsc.lista.org/for-developer/liquid-staking-slisbnb/smart-contract"
+        }
+      ],
+      "permission_type": "queue_vault",
+      "pin_status": "not_read_offline",
+      "protocol_id": "lista_slisbnb",
+      "protocol_version": "1",
+      "proxy_kind": "eip1967_impl",
+      "proxy_kind_basis": "The EIP-1967 implementation slot constant is in action-client/src/trusted-lista.mjs. This generator does not read a chain, so the implementation address stays unpinned.",
+      "record_status": "candidate",
+      "revoked_at": null,
+      "runtime_hash": null,
+      "source_block_hash": null,
+      "source_block_number": null,
+      "source_files": [
+        "config/protocols/lista-bsc.json",
+        "config/protocols/lista-slisbnb.json"
+      ],
+      "user_approved": false,
+      "valid_until": null
+    },
+    {
+      "address": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+      "approval": "candidate_unapproved",
+      "assertions": [],
+      "chain_id": 56,
+      "id": "candidate:56:permit2:permit2",
+      "implementation": null,
+      "network_id": "bsc-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-08",
+          "url": "https://github.com/Uniswap/permit2"
+        }
+      ],
+      "permission_type": "permit2",
+      "pin_status": "not_read_offline",
+      "protocol_id": "permit2",
+      "protocol_version": "1",
+      "proxy_kind": "none",
+      "proxy_kind_basis": "The deployment file records one contract address and does not describe a proxy. protocol_version is 1 because that file has no version field.",
+      "record_status": "candidate",
+      "revoked_at": null,
+      "runtime_hash": null,
+      "source_block_hash": null,
+      "source_block_number": null,
+      "source_files": [
+        "config/deployments/permit2/bsc-mainnet.json"
+      ],
+      "user_approved": false,
+      "valid_until": null
+    },
+    {
+      "address": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+      "approval": "candidate_unapproved",
+      "assertions": [],
+      "chain_id": 8453,
+      "id": "candidate:8453:permit2:permit2",
+      "implementation": null,
+      "network_id": "base-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-08",
+          "url": "https://github.com/Uniswap/permit2"
+        }
+      ],
+      "permission_type": "permit2",
+      "pin_status": "not_read_offline",
+      "protocol_id": "permit2",
+      "protocol_version": "1",
+      "proxy_kind": "none",
+      "proxy_kind_basis": "The deployment file records one contract address and does not describe a proxy. protocol_version is 1 because that file has no version field.",
+      "record_status": "candidate",
+      "revoked_at": null,
+      "runtime_hash": null,
+      "source_block_hash": null,
+      "source_block_number": null,
+      "source_files": [
+        "config/deployments/permit2/base-mainnet.json"
+      ],
+      "user_approved": false,
+      "valid_until": null
+    }
+  ],
+  "schema_version": "guardian.execution_candidates.v1",
+  "skipped": [],
+  "unclassified": [
+    {
+      "address": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 42161,
+      "network_id": "arbitrum-one",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://github.com/bgd-labs/aave-address-book"
+        }
+      ],
+      "protocol_id": "aave_v3",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "pool",
+      "source_file": "config/protocols/aave-v3.json",
+      "user_approved": false
+    },
+    {
+      "address": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 43114,
+      "network_id": "avalanche-c",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://github.com/bgd-labs/aave-address-book"
+        }
+      ],
+      "protocol_id": "aave_v3",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "pool",
+      "source_file": "config/protocols/aave-v3.json",
+      "user_approved": false
+    },
+    {
+      "address": "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 8453,
+      "network_id": "base-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://github.com/bgd-labs/aave-address-book"
+        }
+      ],
+      "protocol_id": "aave_v3",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "pool",
+      "source_file": "config/protocols/aave-v3.json",
+      "user_approved": false
+    },
+    {
+      "address": "0x6807dc923806fE8Fd134338EABCA509979a7e0cB",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 56,
+      "network_id": "bsc-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://github.com/bgd-labs/aave-address-book"
+        }
+      ],
+      "protocol_id": "aave_v3",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "pool",
+      "source_file": "config/protocols/aave-v3.json",
+      "user_approved": false
+    },
+    {
+      "address": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 1,
+      "network_id": "ethereum-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://github.com/bgd-labs/aave-address-book"
+        }
+      ],
+      "protocol_id": "aave_v3",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "pool",
+      "source_file": "config/protocols/aave-v3.json",
+      "user_approved": false
+    },
+    {
+      "address": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 10,
+      "network_id": "optimism-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://github.com/bgd-labs/aave-address-book"
+        }
+      ],
+      "protocol_id": "aave_v3",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "pool",
+      "source_file": "config/protocols/aave-v3.json",
+      "user_approved": false
+    },
+    {
+      "address": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 137,
+      "network_id": "polygon-pos",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://github.com/bgd-labs/aave-address-book"
+        }
+      ],
+      "protocol_id": "aave_v3",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "pool",
+      "source_file": "config/protocols/aave-v3.json",
+      "user_approved": false
+    },
+    {
+      "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 1,
+      "network_id": "ethereum-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-10",
+          "url": "https://developers.circle.com/stablecoins/usdc-contract-addresses"
+        }
+      ],
+      "protocol_id": "compound_v3",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "base_token",
+      "source_file": "config/protocols/compound-v3.json",
+      "user_approved": false
+    },
+    {
+      "address": "0xc3d688B66703497DAA19211EEdff47f25384cdc3",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 1,
+      "network_id": "ethereum-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-10",
+          "url": "https://docs.compound.finance/"
+        }
+      ],
+      "protocol_id": "compound_v3",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "comet",
+      "source_file": "config/protocols/compound-v3.json",
+      "user_approved": false
+    },
+    {
+      "address": "0x42F9505a376761b180e27a01bA0554244ED1DE7D",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 1,
+      "network_id": "ethereum-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-10",
+          "url": "https://docs.compound.finance/"
+        }
+      ],
+      "protocol_id": "compound_v3",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "implementation",
+      "source_file": "config/protocols/compound-v3.json",
+      "user_approved": false
+    },
+    {
+      "address": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 1,
+      "network_id": "ethereum-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-10",
+          "url": "https://github.com/makerdao/dss"
+        }
+      ],
+      "protocol_id": "erc4626_pins",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "sdai_asset",
+      "source_file": "config/protocols/erc4626-pins.json",
+      "user_approved": false
+    },
+    {
+      "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 1,
+      "network_id": "ethereum-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-10",
+          "url": "https://developers.circle.com/stablecoins/usdc-contract-addresses"
+        }
+      ],
+      "protocol_id": "erc4626_pins",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "steakhouse_asset",
+      "source_file": "config/protocols/erc4626-pins.json",
+      "user_approved": false
+    },
+    {
+      "address": "0xCa20a50ea454Bd9F37a895182ff3309F251Fd7cE",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 56,
+      "network_id": "bsc-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://docs.kinza.finance/resources/deployed-contracts/bnb-chain"
+        }
+      ],
+      "protocol_id": "kinza",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "addresses_provider",
+      "source_file": "config/protocols/kinza.json",
+      "user_approved": false
+    },
+    {
+      "address": "0xcB0620b181140e57D1C0D8b724cde623cA963c8C",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 56,
+      "network_id": "bsc-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://docs.kinza.finance/resources/deployed-contracts/bnb-chain"
+        }
+      ],
+      "protocol_id": "kinza",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "pool",
+      "source_file": "config/protocols/kinza.json",
+      "user_approved": false
+    },
+    {
+      "address": "0x0218890dd636c3a1cf0f98557eE2d3612c6bD953",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 1,
+      "network_id": "ethereum-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://docs.kinza.finance/resources/deployed-contracts/ethereum"
+        }
+      ],
+      "protocol_id": "kinza",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "addresses_provider",
+      "source_file": "config/protocols/kinza.json",
+      "user_approved": false
+    },
+    {
+      "address": "0xeA14474946C59Dee1F103aD517132B3F19Cef1bE",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 1,
+      "network_id": "ethereum-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://docs.kinza.finance/resources/deployed-contracts/ethereum"
+        }
+      ],
+      "protocol_id": "kinza",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "pool",
+      "source_file": "config/protocols/kinza.json",
+      "user_approved": false
+    },
+    {
+      "address": "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 1,
+      "network_id": "ethereum-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://docs.lido.fi/deployed-contracts/"
+        }
+      ],
+      "protocol_id": "lido",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "steth",
+      "source_file": "config/protocols/lido.json",
+      "user_approved": false
+    },
+    {
+      "address": "0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 1,
+      "network_id": "ethereum-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://docs.lido.fi/deployed-contracts/"
+        }
+      ],
+      "protocol_id": "lido",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "withdrawal_queue",
+      "source_file": "config/protocols/lido.json",
+      "user_approved": false
+    },
+    {
+      "address": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 1,
+      "network_id": "ethereum-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://docs.lido.fi/deployed-contracts/"
+        }
+      ],
+      "protocol_id": "lido",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "wsteth",
+      "source_file": "config/protocols/lido.json",
+      "user_approved": false
+    },
+    {
+      "address": "0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 56,
+      "network_id": "bsc-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-07",
+          "url": "https://docs.bsc.lista.org/for-developer/liquid-staking-slisbnb/mechanics"
+        },
+        {
+          "retrieved": "2026-10-07",
+          "url": "https://docs.bsc.lista.org/for-developer/liquid-staking-slisbnb/smart-contract"
+        }
+      ],
+      "protocol_id": "lista-slisbnb",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "slisbnb",
+      "source_file": "config/protocols/lista-bsc.json",
+      "user_approved": false
+    },
+    {
+      "address": "0xB0b84D294e0C75A6abe60171b70edEb2EFd14A1B",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 56,
+      "network_id": "bsc-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://docs.bsc.lista.org/for-developer/liquid-staking-slisbnb/smart-contract"
+        }
+      ],
+      "protocol_id": "lista_slisbnb",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "slisbnb",
+      "source_file": "config/protocols/lista-slisbnb.json",
+      "user_approved": false
+    },
+    {
+      "address": "Stake11111111111111111111111111111111111111",
+      "address_family": "solana",
+      "approval": "candidate_unapproved",
+      "chain_id": null,
+      "network_id": "solana-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://docs.solana.com/developing/runtime-facilities/programs"
+        }
+      ],
+      "protocol_id": "solana_stake",
+      "protocol_version": "1",
+      "reason": "not_evm",
+      "role": "stake_program",
+      "source_file": "config/protocols/solana-stake.json",
+      "user_approved": false
+    },
+    {
+      "address": "0x1A6B3A62391ECcaaa992ade44cd4AFe6bEC8CfF1",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 42161,
+      "network_id": "arbitrum-one",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://docs.uxlink.io/layer/announcement/notice"
+        }
+      ],
+      "protocol_id": "uxlink_holdings",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "token",
+      "source_file": "config/protocols/uxlink-holdings.json",
+      "user_approved": false
+    },
+    {
+      "address": "0x1A6B3A62391ECcaaa992ade44cd4AFe6bEC8CfF1",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 56,
+      "network_id": "bsc-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://docs.uxlink.io/layer/announcement/notice"
+        }
+      ],
+      "protocol_id": "uxlink_holdings",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "token",
+      "source_file": "config/protocols/uxlink-holdings.json",
+      "user_approved": false
+    },
+    {
+      "address": "0x3991B07b2951a4300Da8c76e7d2c7eddE861Fef3",
+      "address_family": "evm",
+      "approval": "candidate_unapproved",
+      "chain_id": 1,
+      "network_id": "ethereum-mainnet",
+      "official_sources": [
+        {
+          "retrieved": "2026-10-09",
+          "url": "https://docs.uxlink.io/layer/announcement/uxlink-supply-distribution"
+        }
+      ],
+      "protocol_id": "uxlink_holdings",
+      "protocol_version": "1",
+      "reason": "proxy_kind_not_documented",
+      "role": "token",
+      "source_file": "config/protocols/uxlink-holdings.json",
+      "user_approved": false
+    }
+  ],
+  "user_approved": false
+}
