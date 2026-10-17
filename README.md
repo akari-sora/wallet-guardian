@@ -1,5 +1,7 @@
 # Wallet Guardian
 
+> 正本和 issue 在 https://gitlab.com/aa22396584/wallet-guardian。Releases 和下載：https://gitlab.com/aa22396584/wallet-guardian/-/releases
+
 唯讀的錢包監控與錢包瀏覽器任務工作台，程式在 `wallet-guardian/`。
 
 ```bash
