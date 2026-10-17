@@ -51,7 +51,18 @@
         },
         "headers_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "cf_deployment_url": { "type": "string", "minLength": 1 },
-        "status": { "enum": ["active", "retired", "deleted"] }
+        "status": { "enum": ["active", "retired", "deleted"] },
+        "digests": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["execution_registry", "policy", "core_bundle", "dist"],
+          "properties": {
+            "execution_registry": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "policy": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "core_bundle": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "dist": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        }
       },
       "allOf": [
         {

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Shared classification rules for the candidate generator. A rule is not user approval.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "eip1967_slot", "eip1967_slot_file", "rules", "permit2"],
+  "properties": {
+    "schema_version": { "const": "guardian.execution_candidate_rules.v1" },
+    "eip1967_slot": { "const": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc" },
+    "eip1967_slot_file": { "const": "action-client/src/trusted-lista.mjs" },
+    "rules": { "type": "array" },
+    "permit2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["permission_type", "proxy_kind", "proxy_kind_basis"],
+      "properties": {
+        "permission_type": { "const": "permit2" },
+        "proxy_kind": { "const": "none" },
+        "proxy_kind_basis": { "type": "string" }
+      }
+    }
+  }
+}

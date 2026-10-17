@@ -1,0 +1,45 @@
+{
+  "schema_version": "guardian.execution_candidate_rules.v1",
+  "eip1967_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+  "eip1967_slot_file": "action-client/src/trusted-lista.mjs",
+  "rules": [
+    {
+      "protocol_id": "lista_slisbnb",
+      "also_protocol_ids": ["lista-slisbnb"],
+      "role": "proxy",
+      "permission_type": "queue_vault",
+      "proxy_kind": "eip1967_impl",
+      "proxy_kind_basis": "The EIP-1967 implementation slot constant is in action-client/src/trusted-lista.mjs. This generator does not read a chain, so the implementation address stays unpinned.",
+      "requires_slot_file": true
+    },
+    {
+      "protocol_id": "erc4626_pins",
+      "role": "sdai",
+      "permission_type": "erc4626_vault",
+      "proxy_kind": "none",
+      "proxy_kind_basis": "The packaged notes say the implementation identity is at this address.",
+      "requires_note_includes": "Implementation identity"
+    },
+    {
+      "protocol_id": "erc4626_pins",
+      "role": "steakhouse_usdc",
+      "permission_type": "erc4626_vault",
+      "proxy_kind": "none",
+      "proxy_kind_basis": "The packaged notes say the implementation identity is at this address.",
+      "requires_note_includes": "Implementation identity"
+    },
+    {
+      "protocol_id": "erc4626_pins",
+      "role": "steakhouse_morpho",
+      "permission_type": "morpho_like",
+      "proxy_kind": "none",
+      "proxy_kind_basis": "The packaged notes name Morpho Blue at this address.",
+      "requires_note_includes": "Morpho Blue"
+    }
+  ],
+  "permit2": {
+    "permission_type": "permit2",
+    "proxy_kind": "none",
+    "proxy_kind_basis": "The deployment file records one contract address and does not describe a proxy. protocol_version is 1 because that file has no version field."
+  }
+}
