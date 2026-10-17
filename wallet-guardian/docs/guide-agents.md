@@ -27,9 +27,9 @@ The longer limits are in `wallet-guardian/AGENTS.md` and in `skills/wallet-guard
 
 ## Install the command
 
-Install only a wheel file whose SHA256 you have checked. The release page named in the project README is `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.4`. Download `SHA256SUMS` and every file it lists, including `constraints.txt`, into one directory, and check the hashes before install. The steps are in [install.md](install.md). Do not install `guardian` or `wallet-guardian-monitor` by name from any index (pip, uv, or pipx). A package in an index with one of those names is not this project.
+Install only a wheel file whose SHA256 you have checked. The release page named in the project README is `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.5`. Download `SHA256SUMS` and every file it lists, including `constraints.txt`, into one directory, and check the hashes before install. The steps are in [install.md](install.md). Do not install `guardian` or `wallet-guardian-monitor` by name from any index (pip, uv, or pipx). A package in an index with one of those names is not this project.
 
-The rc.4 wheel currently on that release page is older than this skill and does not include `capabilities`. Wait for the next release. The first command `guardian capabilities` returns `invalid choice` on that wheel. If it does, stop.
+The rc.5 wheel on that release page includes `capabilities`. `v0.4.0-rc.4` and earlier wheels do not. The first command `guardian capabilities` returns `invalid choice` on an older wheel. If it does, stop.
 
 ## Install the skill
 

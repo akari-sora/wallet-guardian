@@ -67,7 +67,7 @@ _ONE_RUN_CONSENT = (
     "Agreement to any class B or class C command covers that one execution only. "
     "It is not standing consent for later runs, other commands, or other classes."
 )
-_DO_NOT_GUESS = "Do not guess a command. Do not install or upgrade. Wait for the next release."
+_DO_NOT_GUESS = "Do not guess a command. Do not install or upgrade. The owner installs the release."
 _EXACT_FLAG = (
     "A flag must match the spelling that --help lists exactly. "
     "Treat any abbreviated flag as class D."
@@ -90,8 +90,8 @@ _OPERATING_RULES_MOVED = (
     "Do not commit `private/`, `data/`, or `evidence/`.",
 )
 _RC4_WHEEL_STOPS = (
-    "The rc.4 wheel on the release page does not include `capabilities`. "
-    "Wait for the next release. On rc.4 the bot stops at the first step."
+    "The rc.5 wheel on the release page includes `capabilities`. "
+    "`v0.4.0-rc.4` and earlier wheels do not. On rc.4 or earlier the bot stops at the first step."
 )
 _NEUTRAL_FLAG_EXAMPLE = re.compile(r"`(--[A-Za-z0-9-]+)` on `([a-z0-9-]+)`")
 _AGENTS_KEY_RULE_START = "Do not read, print, or hand over API keys."
@@ -461,7 +461,7 @@ def test_new_agent_files_have_no_placeholders_or_live_addresses() -> None:
         SKILL / "agents" / "openai.yaml",
         GROK,
     ]
-    release = "https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.4"
+    release = "https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.5"
     banned = (
         "TODO",
         "pytest" + ".skip",
@@ -1069,8 +1069,8 @@ def test_skill_stops_when_installed_capabilities_are_missing() -> None:
     for path in (SKILL / "SKILL.md", GROK):
         text = path.read_text(encoding="utf-8")
         install = text[text.index("## Install"):text.index("## First command")]
-        assert "The rc.4 wheel currently on that release page is older than this skill and does not include `capabilities`." in install
-        assert "Wait for the next release." in install
+        assert "The rc.5 wheel on that release page includes `capabilities`. `v0.4.0-rc.4` and earlier wheels do not." in install
+        assert "Wait for the next release." not in install
         first = text.index("## First command")
         classes = text.index("## Classes", first)
         section = text[first:classes]
@@ -1083,12 +1083,12 @@ def test_skill_stops_when_installed_capabilities_are_missing() -> None:
         assert "The newest release" not in text
         assert "Do not guess a command." in section
         assert "Do not install or upgrade." in section
-        assert "Wait for the next release." in section
+        assert "The owner installs the release." in section
     guide = (ROOT / "docs" / "guide-agents.md").read_text(encoding="utf-8")
     install = guide[guide.index("## Install the command"):guide.index("## Install the skill")]
-    assert "The rc.4 wheel currently on that release page is older than this skill and does not include `capabilities`." in install
-    assert "Wait for the next release." in install
-    assert "The first command `guardian capabilities` returns `invalid choice` on that wheel. If it does, stop." in install
+    assert "The rc.5 wheel on that release page includes `capabilities`. `v0.4.0-rc.4` and earlier wheels do not." in install
+    assert "Wait for the next release." not in install
+    assert "The first command `guardian capabilities` returns `invalid choice` on an older wheel. If it does, stop." in install
 
 
 def test_safety_has_repository_change_section() -> None:

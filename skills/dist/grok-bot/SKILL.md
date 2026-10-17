@@ -13,9 +13,9 @@ Use the installed `guardian` command. Do not reimplement the monitor and do not 
 
 ## Install
 
-Install only a wheel file whose SHA256 you have checked. The release page named in the project README is `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.4`. Download `SHA256SUMS` and every file it lists, including `constraints.txt`, into one directory, and check the hashes before install. The wheel for this tree is `wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl`.
+Install only a wheel file whose SHA256 you have checked. The release page named in the project README is `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.5`. Download `SHA256SUMS` and every file it lists, including `constraints.txt`, into one directory, and check the hashes before install. The wheel for this tree is `wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl`.
 
-The rc.4 wheel currently on that release page is older than this skill and does not include `capabilities`. Wait for the next release.
+The rc.5 wheel on that release page includes `capabilities`. `v0.4.0-rc.4` and earlier wheels do not.
 
 Do not install `guardian` or `wallet-guardian-monitor` by name from any index (pip, uv, or pipx). A package in an index with one of those names is not this project.
 
@@ -27,9 +27,9 @@ uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc5
 
 Run `guardian capabilities` before any other command. It prints the package version, every subcommand class, and the exit-code map. It does not open a socket and it does not write a file. Then run `guardian --version` if you need the version alone.
 
-If the `guardian` command does not exist, stop. Tell the owner: 沒有安裝. Do not guess a command. Do not install or upgrade. Wait for the next release.
+If the `guardian` command does not exist, stop. Tell the owner: 沒有安裝. Do not guess a command. Do not install or upgrade. The owner installs the release.
 
-If `guardian` is installed and `guardian capabilities` returns `invalid choice`, stop. `v0.4.0-rc.4` and earlier releases do not include `capabilities`. Tell the owner: 已安裝的版本沒有能力目錄，請安裝含 `capabilities` 的 release. Do not guess a command. Do not install or upgrade. Wait for the next release.
+If `guardian` is installed and `guardian capabilities` returns `invalid choice`, stop. `v0.4.0-rc.4` and earlier releases do not include `capabilities`. Tell the owner: 已安裝的版本沒有能力目錄，請安裝含 `capabilities` 的 release. Do not guess a command. Do not install or upgrade. The owner installs the release.
 
 If `guardian capabilities` does not exit 0, its output is not JSON, it names a class the catalog does not define, or its JSON `version` differs from this skill's `metadata.version`, stop. Tell the owner. Do not guess.
 
