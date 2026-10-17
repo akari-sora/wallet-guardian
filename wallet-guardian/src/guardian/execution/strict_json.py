@@ -28,6 +28,17 @@ def parse_strict_json(text: str) -> Any:
     def reject_constant(value: str) -> float:
         raise ExecutionRegistryError("float_rejected", value)
 
+    def parse_int(raw: str) -> int:
+        # Longer than 16 digits cannot be a JS safe integer. Reject before int()
+        # so CPython's digit limit cannot turn this into ValueError.
+        digits = raw[1:] if raw.startswith("-") else raw
+        if len(digits) > 16:
+            raise ExecutionRegistryError("integer_out_of_range", raw)
+        number = int(raw)
+        if number > _JS_MAX_SAFE or number < -_JS_MAX_SAFE:
+            raise ExecutionRegistryError("integer_out_of_range", raw)
+        return number
+
     def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
         parsed: dict[str, Any] = {}
         for key, item in items:
@@ -37,34 +48,14 @@ def parse_strict_json(text: str) -> Any:
         return parsed
 
     try:
-        value = json.loads(
+        return json.loads(
             text,
             object_pairs_hook=pairs,
             parse_float=reject_float,
             parse_constant=reject_constant,
+            parse_int=parse_int,
         )
     except ExecutionRegistryError:
         raise
     except json.JSONDecodeError as exc:
         raise ExecutionRegistryError("bad_json", exc.msg) from exc
-    except ValueError as exc:
-        # CPython refuses integers above 4300 digits before parse_int runs.
-        if "digits" not in str(exc):
-            raise
-        raise ExecutionRegistryError("integer_out_of_range", str(exc)) from exc
-    _reject_unsafe_integers(value)
-    return value
-
-
-def _reject_unsafe_integers(value: Any) -> None:
-    if type(value) is int:
-        if value > _JS_MAX_SAFE or value < -_JS_MAX_SAFE:
-            raise ExecutionRegistryError("integer_out_of_range", str(value))
-        return
-    if isinstance(value, dict):
-        for item in value.values():
-            _reject_unsafe_integers(item)
-        return
-    if isinstance(value, list):
-        for item in value:
-            _reject_unsafe_integers(item)

@@ -54,10 +54,6 @@ class Parser {
   }
 
   rejectConstant(word) {
-    const next = this.i + word.length < this.n ? this.text[this.i + word.length] : "";
-    if (next !== "" && !" \n\r\t,}]".includes(next)) {
-      throw new ExecutionRegistryError("bad_json", "value");
-    }
     throw new ExecutionRegistryError("float_rejected", word);
   }
 
@@ -71,11 +67,11 @@ class Parser {
 
   parseObject() {
     this.i += 1;
-    const obj = Object.create(null);
+    const pairs = [];
     this.skipWs();
     if (this.peek() === "}") {
       this.i += 1;
-      return obj;
+      return Object.create(null);
     }
     while (this.i < this.n) {
       this.skipWs();
@@ -85,10 +81,7 @@ class Parser {
       if (this.peek() !== ":") throw new ExecutionRegistryError("bad_json", "colon");
       this.i += 1;
       const value = this.parseValue();
-      if (Object.prototype.hasOwnProperty.call(obj, key)) {
-        throw new ExecutionRegistryError("duplicate_key", key);
-      }
-      Object.defineProperty(obj, key, { value, writable: true, enumerable: true, configurable: true });
+      pairs.push([key, value]);
       this.skipWs();
       const char = this.peek();
       if (char === ",") {
@@ -97,11 +90,22 @@ class Parser {
       }
       if (char === "}") {
         this.i += 1;
-        return obj;
+        return this.objectFromPairs(pairs);
       }
       throw new ExecutionRegistryError("bad_json", "object");
     }
     throw new ExecutionRegistryError("bad_json", "object");
+  }
+
+  objectFromPairs(pairs) {
+    const obj = Object.create(null);
+    for (const [key, value] of pairs) {
+      if (Object.prototype.hasOwnProperty.call(obj, key)) {
+        throw new ExecutionRegistryError("duplicate_key", key);
+      }
+      Object.defineProperty(obj, key, { value, writable: true, enumerable: true, configurable: true });
+    }
+    return obj;
   }
 
   parseArray() {

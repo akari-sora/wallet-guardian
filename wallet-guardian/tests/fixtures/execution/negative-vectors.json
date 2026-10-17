@@ -278,6 +278,90 @@
         "data": "0x"
       },
       "code": null
+    },
+    {
+      "id": "nan-prefix",
+      "loader": "parse",
+      "input": "NaNx",
+      "code": "float_rejected"
+    },
+    {
+      "id": "infinity-prefix",
+      "loader": "parse",
+      "input": "[Infinity1]",
+      "code": "float_rejected"
+    },
+    {
+      "id": "negative-infinity-prefix",
+      "loader": "parse",
+      "input": "{\"a\": -Infinityx}",
+      "code": "float_rejected"
+    },
+    {
+      "id": "unsafe-int-then-nan",
+      "loader": "parse",
+      "input": "[9007199254740992, NaN]",
+      "code": "integer_out_of_range"
+    },
+    {
+      "id": "duplicate-key-then-nan",
+      "loader": "parse",
+      "input": "{\"a\":1,\"a\":2,\"b\":NaN}",
+      "code": "float_rejected"
+    },
+    {
+      "id": "duplicate-key-then-unsafe-int",
+      "loader": "parse",
+      "input": "{\"a\":1,\"a\":9007199254740992}",
+      "code": "integer_out_of_range"
+    },
+    {
+      "id": "unsafe-int-then-float",
+      "loader": "parse",
+      "input": "[9007199254740992, 1.5]",
+      "code": "integer_out_of_range"
+    },
+    {
+      "id": "duplicate-key-then-float",
+      "loader": "parse",
+      "input": "{\"a\":1,\"a\":2,\"b\":1.5}",
+      "code": "float_rejected"
+    },
+    {
+      "id": "call-target-revoked",
+      "loader": "check_call",
+      "registry_replace": [
+        [
+          "    }\n  ],\n  \"policies\": [",
+          "    },\n    {\n      \"id\": \"fixture-revoked\",\n      \"chain_id\": 56,\n      \"network_id\": \"bsc-mainnet\",\n      \"address\": \"0x0000000000000000000000000000000000000005\",\n      \"protocol_id\": \"fixture\",\n      \"protocol_version\": \"1\",\n      \"permission_type\": \"erc4626_vault\",\n      \"proxy_kind\": \"eip1967_impl\",\n      \"proxy_kind_basis\": \"fixture pin\",\n      \"implementation\": {\n        \"address\": \"0x0000000000000000000000000000000000000004\",\n        \"runtime_hash\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"\n      },\n      \"runtime_hash\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n      \"source_block_number\": \"10\",\n      \"source_block_hash\": \"0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\n      \"pin_status\": \"pinned\",\n      \"assertions\": [],\n      \"valid_until\": \"2027-01-01T00:00:00Z\",\n      \"official_sources\": [\n        {\n          \"url\": \"https://example.invalid/source\",\n          \"retrieved\": \"2026-10-17\"\n        }\n      ],\n      \"record_status\": \"revoked\",\n      \"revoked_at\": \"2026-10-17T00:00:00Z\",\n      \"approval\": \"not_approved\",\n      \"user_approved\": false,\n      \"source_files\": [\n        \"tests/fixtures/execution/valid/registry.json\"\n      ]\n    }\n  ],\n  \"policies\": ["
+        ],
+        [
+          "{\"name\": \"shares\", \"solidity_type\": \"uint256\"}",
+          "{\"name\": \"target\", \"solidity_type\": \"address\", \"role\": \"target\"}"
+        ]
+      ],
+      "policy_id": "fixture-redeem",
+      "arguments": {
+        "owner": "0x0000000000000000000000000000000000000001",
+        "receiver": "0x0000000000000000000000000000000000000001",
+        "target": "0x0000000000000000000000000000000000000005"
+      },
+      "code": "not_registered"
+    },
+    {
+      "id": "registry-two-faults",
+      "loader": "registry",
+      "registry_replace": [
+        [
+          "\"chain_id\": 56",
+          "\"chain_id\": 9007199254740992"
+        ],
+        [
+          "\"spend_cap\": \"0\"",
+          "\"spend_cap\": NaN"
+        ]
+      ],
+      "code": "integer_out_of_range"
     }
   ]
 }

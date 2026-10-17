@@ -105,7 +105,7 @@ def _rule(value: Any, index: int) -> dict[str, Any]:
         raise ExecutionRegistryError("bad_type", f"{label}.basis")
     if slot is not True and (not isinstance(note, str) or note == ""):
         raise ExecutionRegistryError("missing_field", f"{label}.basis")
-    if slot not in {True, False}:
+    if slot is not True and slot is not False:
         raise ExecutionRegistryError("bad_type", f"{label}.requires_slot_file")
     return value
 
