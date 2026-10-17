@@ -1,6 +1,6 @@
 # Scheduling
 
-`guardian install-service` prints a plan for three separate schedules. It does not sign, broadcast, or fetch code. The package version in this tree is `0.4.0rc4`. No unit has been installed on a host by this preview. Host smoke, including reboot and missed-slot recording on a real machine, is `NOT_RUN`.
+`guardian install-service` prints a plan for three separate schedules. It does not sign, broadcast, or fetch code. The package version in this tree is `0.4.0rc5`. No unit has been installed on a host by this preview. Host smoke, including reboot and missed-slot recording on a real machine, is `NOT_RUN`.
 
 The 72h shadow validation is not complete. A timer does not start that count. The formal series of 24 successive 3-hour windows has not been run.
 

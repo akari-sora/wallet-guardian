@@ -4,11 +4,11 @@
 
 只安裝你從 GitLab release 下載、而且 SHA256 對過的 wheel。需要 Python 3.12 或更新的版本，以及 [uv](https://docs.astral.sh/uv/) 或 pip。Docker 不在這份說明裡。
 
-監控程式只讀。它不簽名、不組交易、不廣播。簽章和可選 Action Client 的差別只寫在 [docs/threat-model.md](threat-model.md#monitor-does-not-sign)。金鑰由你自己保管。設定檔只寫環境變數的名稱（`endpoint_env`、`credential_env`），不寫 key，也不寫真實監控地址。Telegram 發送器存在，但是選用；投遞預設關閉（`outbox_only`）。`--no-send` 禁止送出。標籤 `v0.4.0-rc.4` 是否已發布，see GitLab releases。
+監控程式只讀。它不簽名、不組交易、不廣播。簽章和可選 Action Client 的差別只寫在 [docs/threat-model.md](threat-model.md#monitor-does-not-sign)。金鑰由你自己保管。設定檔只寫環境變數的名稱（`endpoint_env`、`credential_env`），不寫 key，也不寫真實監控地址。Telegram 發送器存在，但是選用；投遞預設關閉（`outbox_only`）。`--no-send` 禁止送出。標籤 `v0.4.0-rc.5` 是否已發布，see GitLab releases。
 
 ## 從 GitLab release 安裝
 
-到這個專案的 GitLab release，下載 `SHA256SUMS`，以及 `SHA256SUMS` 裡列出的每一個檔案（wheel `wallet_guardian_monitor-0.4.0rc4-py3-none-any.whl`、sdist、`constraints.txt`、`release-manifest.json`、`release-evidence.json`），全部放在同一個目錄。
+到這個專案的 GitLab release，下載 `SHA256SUMS`，以及 `SHA256SUMS` 裡列出的每一個檔案（wheel `wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl`、sdist、`constraints.txt`、`release-manifest.json`、`release-evidence.json`），全部放在同一個目錄。
 
 sdist（`.tar.gz`）是原始碼封裝，一般安裝用 wheel。
 
@@ -37,7 +37,7 @@ sys.exit(1 if bad else 0)"
 
 ```bash
 uv venv --python 3.12
-uv pip install --python .venv/bin/python --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc4-py3-none-any.whl
+uv pip install --python .venv/bin/python --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl
 ```
 
 Windows 的直譯器在 `.venv\Scripts\python.exe`。
@@ -45,14 +45,14 @@ Windows 的直譯器在 `.venv\Scripts\python.exe`。
 或安裝成工具（仍然要自己給 constraints；這不會讀 `uv.lock`）：
 
 ```bash
-uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc4-py3-none-any.whl
+uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl
 ```
 
 用 pip 時也要同一份 constraints，而且不要向 PyPI 要名為 `guardian` 的套件：
 
 ```bash
 python -m venv .venv
-.venv/bin/python -m pip install -c constraints.txt ./wallet_guardian_monitor-0.4.0rc4-py3-none-any.whl
+.venv/bin/python -m pip install -c constraints.txt ./wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl
 ```
 
 wheel 本身仍要用 `SHA256SUMS` 先對過。這份 constraints 沒有雜湊，pip 會為了相依套件連到 PyPI，但版本必須和 constraints 裡的 `==` 一致。不要改成 `pip install guardian`。
@@ -95,6 +95,8 @@ cp -a "$XDG_STATE_HOME/guardian" "$XDG_STATE_HOME/guardian.backup-$(date -u +%Y%
 然後用**那一版 release 自己的** `constraints.txt` 安裝新的 wheel（同上，`uv pip install` 或 `uv tool install --constraints`）。
 
 從 rc.3 升到 rc.4：rc.4 會新增遷移（原生餘額觀測與解釋工作的資料表）。升級保留既有的錢包身分、歷史游標、警報與送達狀態，不會補造過去的原生餘額基準，也不會因為新功能初始化而產生追溯警報；第一次成功的觀測才是基準。要退回 rc.3，請還原升級前的備份，不要在原地降版。
+
+從 rc.4 升到 rc.5：rc.5 會新增遷移 `0010_pending_alert_candidates` 與 `0011_balance_probe`。升級前先備份狀態目錄。要退回 rc.4，請還原備份，不要在原地降版。
 
 同一個 schema 世代再裝回上一版 wheel 時，私人狀態仍可讀。若新版已經套用了舊版沒有的遷移，舊版會拒絕開啟，訊息含 `database schema is newer than this build`，並且不刪資料。這時要回到舊版，請把備份複製回來，不要指望舊程式把 schema 降回去。
 

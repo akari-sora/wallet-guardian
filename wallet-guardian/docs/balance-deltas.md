@@ -47,6 +47,6 @@ The gaps this package addresses are narrower:
 
 - Cadence: the patrol had no balance-delta check. This package does not change the three-hour `run-once` cadence. `guardian balance-probe` is a separate read-only command. It does not add a scheduler. See `docs/balance-probe-design.md`.
 - Other chains: the patrol made no large-inflow judgment on non-BSC chains. A balance delta does not depend on a history source. Covers configured EVM networks for which an eligible definite-block native observation and a usable threshold are available.
-- This package's history layer: before it, `history.native_internal` was `not_queried` in rc.3. Now only BSC via NodeReal `internal` is queried, with offline fixtures. Other networks stay `not_queried` or `unsupported`.
+- This package's history layer: before it, `history.native_internal` was `not_queried` in rc.3. When this package landed, only BSC via NodeReal `internal` was queried. Since then `examples/monitor.json` also routes Optimism through keyless Blockscout REST v2 (offline fixtures, not live-qualified). Other networks stay `not_queried` or `unsupported`.
 
 A known protocol sender such as the Lista StakeManager is a static label. It is labelled, and the counterparty stays UNVERIFIED unless a source proves it.
