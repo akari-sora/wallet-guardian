@@ -1,6 +1,6 @@
 # Wallet Guardian
 
-> 正本和 issue 在 https://gitlab.com/aa22396584/wallet-guardian；GitHub 上的 https://github.com/hoshitabi/wallet-guardian 是唯讀鏡像。
+> 正本和 issue 在 https://gitlab.com/aa22396584/wallet-guardian。
 
 唯讀的錢包監控與錢包瀏覽器任務工作台，程式在 `wallet-guardian/`。
 
