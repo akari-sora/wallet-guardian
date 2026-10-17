@@ -2,26 +2,17 @@
 
 This page says how an agent should call the installed `guardian` command. The package in this tree is `wallet-guardian-monitor` `0.4.0rc5`. The skill text is `skills/wallet-guardian/`. Host installs below were not exercised (未實測).
 
-The monitor is watch-only. An agent must not sign, approve, revoke, claim, or broadcast. It must not ask for a seed phrase, a private key, a keystore, or an API key. It must not run `guardian relations`, including inbound, expand, and dry-run. Only the owner may run that command, by hand, in their own terminal.
-
-If the owner pastes a seed phrase, private key, keystore, or API key into the chat, do not use it, repeat it, store it, or pass it to a command. Tell the owner that it is now exposed. API keys belong in the owner's own environment, set by the owner.
+見 Hard limits.
 
 ## Before any other command
 
 Run `guardian capabilities`. It prints the package version, a class for every subcommand, and the exit-code map. It does not open a socket and it does not write a file. If this page and that JSON disagree, trust the command. The catalog is the source.
 
-A subcommand path the catalog does not list is class D. Do not run it. A flag that appears in any variant id of a subcommand must occur only in a combination that matches one listed variant exactly. Any other combination is class D. Do not run it. A flag that does not appear in any variant id of that subcommand does not change the class, for example `--db` on `snapshot`, `--tenant` on `init`, and `--news-input` on `run-once`. A flag must match the spelling that --help lists exactly. Treat any abbreviated flag as class D.
+`guardian --version` does not show whether `capabilities` is present. Use the result of `guardian capabilities`.
 
-Top-level `guardian --help` and `guardian --version`, and `guardian <subcommand> --help`, are class A. They exit while arguments are parsed, before the command runs, and they do not open a database or a socket. This does not relax any class D rule. Do not call `--help` under `relations` or any other class D path. `relations` is class D in every form. `guardian --version` prints only the version and exits 0.
+見 Classes.
 
-Agreement to any class B or class C command covers that one execution only. It is not standing consent for later runs, other commands, or other classes.
-
-- `A_read_only_offline`: no network and no local writes. Commands that open a database are not in this class.
-- `B_network_requires_owner_ok`: contacts a configured host. Run it only after the owner agrees to that read. Some of these commands also write local files.
-- `C_writes_local_state_owner_decides`: writes local files or rows, or prints an install plan. The owner decides. Most view commands are in this class because opening the monitor database can create it or apply additive migrations. Run those only after the owner agrees to that run.
-- `D_never_from_agent`: do not run these. This includes every form of `relations`, and `install-service` with apply, including apply together with dry-run.
-
-A gap is not safe, not zero, and not complete. Exit code 3 is not success. An empty outbox is not all clear. Unknown prices stay null. Do not enable GoPlus or Chainabuse. Do not claim that the 72-hour shadow validation is finished, that CI passed, or that this package was published on PyPI. Call only flags that the installed `--help` lists. There is no MCP server in this tree.
+There is no MCP server in this tree.
 
 The longer limits are in `wallet-guardian/AGENTS.md` and in `skills/wallet-guardian/references/safety.md`.
 
@@ -29,7 +20,7 @@ The longer limits are in `wallet-guardian/AGENTS.md` and in `skills/wallet-guard
 
 Install only a wheel file whose SHA256 you have checked. The release page named in the project README is `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.5`. Download `SHA256SUMS` and every file it lists, including `constraints.txt`, into one directory, and check the hashes before install. The steps are in [install.md](install.md). Do not install `guardian` or `wallet-guardian-monitor` by name from any index (pip, uv, or pipx). A package in an index with one of those names is not this project.
 
-The rc.5 wheel on that release page includes `capabilities`. `v0.4.0-rc.4` and earlier wheels do not. The first command `guardian capabilities` returns `invalid choice` on an older wheel. If it does, stop.
+The rc.5 wheel on that release page includes `capabilities`. `v0.4.0-rc.4` and earlier wheels do not, so on an older wheel the first command fails with `invalid choice`. If `guardian capabilities` returns `invalid choice`, stop. Do not run any further `guardian` command, including `--help` at any level. Do not look for a renamed command.
 
 ## Install the skill
 

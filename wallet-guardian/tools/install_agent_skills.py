@@ -267,8 +267,20 @@ def doctor(home: Path) -> dict:
     return {"installs": installs, "ok": ok}
 
 
+class _ExactFlagParser(argparse.ArgumentParser):
+    """Long options must be spelled in full. A prefix is not a flag."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        kwargs["allow_abbrev"] = False
+        super().__init__(*args, **kwargs)
+
+    def add_subparsers(self, **kwargs: object):  # type: ignore[no-untyped-def]
+        kwargs.setdefault("parser_class", type(self))
+        return super().add_subparsers(**kwargs)
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Install the wallet-guardian skill. Default is dry-run.")
+    parser = _ExactFlagParser(description="Install the wallet-guardian skill. Default is dry-run.")
     parser.add_argument("--home", default=None)
     sub = parser.add_subparsers(dest="cmd", required=True)
     install = sub.add_parser("install", help="copy the skill; writes only with --apply")
