@@ -207,8 +207,8 @@ def test_version_prints_the_package_version(capsys: pytest.CaptureFixture[str]) 
     with pytest.raises(SystemExit) as caught:
         main(["--version"])
     assert caught.value.code == 0
-    assert capsys.readouterr().out == "0.4.0rc4\n"
-    assert dist_version("wallet-guardian-monitor") == __version__ == "0.4.0rc4"
+    assert capsys.readouterr().out == "0.4.0rc5\n"
+    assert dist_version("wallet-guardian-monitor") == __version__ == "0.4.0rc5"
 
 
 def test_capabilities_matches_the_parser_and_catalog(capsys: pytest.CaptureFixture[str]) -> None:
@@ -216,7 +216,7 @@ def test_capabilities_matches_the_parser_and_catalog(capsys: pytest.CaptureFixtu
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     catalog = _catalog()
-    assert payload["version"] == catalog["version"] == "0.4.0rc4"
+    assert payload["version"] == catalog["version"] == "0.4.0rc5"
     assert set(payload["classes"]) == _CLASSES
     assert [row["code"] for row in payload["exit_codes"]] == [0, 1, 2, 3, 4]
     assert "credential_missing" in " ".join(payload["gap_rules"])
@@ -350,7 +350,7 @@ def test_capabilities_does_not_use_the_network_or_write_files(
     assert calls == []
     assert _files(tmp_path) == before
     payload = json.loads(capsys.readouterr().out)
-    assert payload["version"] == "0.4.0rc4"
+    assert payload["version"] == "0.4.0rc5"
 
 
 def test_skill_frontmatter_and_relations_ban() -> None:
@@ -360,12 +360,12 @@ def test_skill_frontmatter_and_relations_ban() -> None:
     assert front["name"] == SKILL.name == "wallet-guardian"
     assert len(front["description"]) <= 1024
     assert front["license"] == "AGPL-3.0-only"
-    assert "0.4.0rc4" in front["compatibility"]
+    assert "0.4.0rc5" in front["compatibility"]
     assert "wallet-guardian-monitor" in front["compatibility"]
     assert "index" in front["compatibility"]
     assert "72-hour shadow validation" in text
     assert set(front["metadata"]) == {"version"}
-    assert front["metadata"]["version"] == "0.4.0rc4"
+    assert front["metadata"]["version"] == "0.4.0rc5"
     assert RELATIONS_BAN in text
     assert RELATIONS_BAN in (SKILL / "references" / "safety.md").read_text(encoding="utf-8")
     grok = GROK.read_text(encoding="utf-8")
@@ -390,8 +390,8 @@ def test_generated_skill_files_match_the_catalog(tmp_path: Path) -> None:
     )
     assert completed.returncode == 0, completed.stderr
     versions = _load("check_version_consistency", ROOT / "tools" / "check_version_consistency.py")
-    assert versions.collect_versions(ROOT)["capabilities"] == "0.4.0rc4"
-    assert versions.collect_versions(ROOT)["skill"] == "0.4.0rc4"
+    assert versions.collect_versions(ROOT)["capabilities"] == "0.4.0rc5"
+    assert versions.collect_versions(ROOT)["skill"] == "0.4.0rc5"
     assert versions.consistency_errors(ROOT) == []
     isolated = tmp_path / "checkout" / "wallet-guardian"
     isolated.mkdir(parents=True)
@@ -665,7 +665,7 @@ def _synthetic_skill(body: str) -> str:
         "license: AGPL-3.0-only\n"
         'compatibility: "synthetic"\n'
         "metadata:\n"
-        '  version: "0.4.0rc4"\n'
+        '  version: "0.4.0rc5"\n'
         "---\n\n"
         + body
     )
@@ -689,7 +689,7 @@ def _expected_synthetic(body: list[str]) -> str:
                 "license: AGPL-3.0-only",
                 'compatibility: "synthetic"',
                 "metadata:",
-                '  version: "0.4.0rc4"',
+                '  version: "0.4.0rc5"',
                 "---",
                 "",
                 *body,
@@ -708,18 +708,18 @@ def test_render_grok_rejects_headings_that_would_swallow_later_text() -> None:
         "# Doc\n\n## Section\n\nSee [Safety rules](references/safety.md).\n\n- leftover bullet\n\n## Later\n"
     )
     with pytest.raises(ValueError, match="not the last content"):
-        tool.render_grok(swallowing, {"references/safety.md": "# Safety\n\nBody.\n"}, "0.4.0rc4")
+        tool.render_grok(swallowing, {"references/safety.md": "# Safety\n\nBody.\n"}, "0.4.0rc5")
     plain = tool.render_grok(
         swallowing,
         {"references/safety.md": "Plain line.\n"},
-        "0.4.0rc4",
+        "0.4.0rc5",
     )
     assert "- leftover bullet" in plain
     assert "Plain line." in plain
     closed = _synthetic_skill(
         "# Doc\n\n## Section\n\n- stated first\n\nSee [Safety rules](references/safety.md).\n\n## Later\n"
     )
-    rendered = tool.render_grok(closed, {"references/safety.md": "# Safety\n\nBody.\n"}, "0.4.0rc4")
+    rendered = tool.render_grok(closed, {"references/safety.md": "# Safety\n\nBody.\n"}, "0.4.0rc5")
     assert "- stated first" in rendered
     assert "Body." in rendered
     assert "## Later" in rendered
@@ -738,14 +738,14 @@ def test_render_grok_rejects_fences_and_indented_headings() -> None:
         "  #\n",
     ):
         with pytest.raises(ValueError, match="fence or an indented heading"):
-            tool.render_grok(skill, {"references/safety.md": body}, "0.4.0rc4")
-    allowed = tool.render_grok(skill, {"references/safety.md": "# Safety\n\nColumn zero.\n"}, "0.4.0rc4")
+            tool.render_grok(skill, {"references/safety.md": body}, "0.4.0rc5")
+    allowed = tool.render_grok(skill, {"references/safety.md": "# Safety\n\nColumn zero.\n"}, "0.4.0rc5")
     assert "Column zero." in allowed
     with pytest.raises(ValueError, match="fence or an indented heading"):
         tool.render_grok(
             skill,
             {"references/safety.md": "    # not an atx heading\n"},
-            "0.4.0rc4",
+            "0.4.0rc5",
         )
 
 
@@ -760,7 +760,7 @@ def test_render_grok_rejects_indented_code_empty_atx_and_setext() -> None:
         "---\n",
     ):
         try:
-            tool.render_grok(skill, {"references/safety.md": body}, "0.4.0rc4")
+            tool.render_grok(skill, {"references/safety.md": body}, "0.4.0rc5")
         except ValueError as exc:
             assert "fence or an indented heading" in str(exc), (body, exc)
         else:
@@ -783,7 +783,7 @@ def test_render_grok_keeps_frontmatter_indentation_and_fence_headings() -> None:
         "## Later\n"
     )
     reference = "\n\n  kept indent\n\n# Safety\n\nBody.\n\n"
-    rendered = tool.render_grok(skill, {"references/safety.md": reference}, "0.4.0rc4")
+    rendered = tool.render_grok(skill, {"references/safety.md": reference}, "0.4.0rc5")
     expected = "\n".join(
         [
             "---",
@@ -792,7 +792,7 @@ def test_render_grok_keeps_frontmatter_indentation_and_fence_headings() -> None:
             "license: AGPL-3.0-only",
             'compatibility: "synthetic"',
             "metadata:",
-            '  version: "0.4.0rc4"',
+            '  version: "0.4.0rc5"',
             "---",
             "",
             "# Doc",
@@ -842,7 +842,7 @@ def test_render_grok_keeps_tilde_lines_inside_a_backtick_fence() -> None:
         "\n"
         "See [Safety rules](references/safety.md).\n"
     )
-    rendered = tool.render_grok(skill, {"references/safety.md": "# Safety\n\nKept.\n"}, "0.4.0rc4")
+    rendered = tool.render_grok(skill, {"references/safety.md": "# Safety\n\nKept.\n"}, "0.4.0rc5")
     assert rendered == _expected_synthetic(
         [
             "# Doc",
@@ -877,7 +877,7 @@ def test_render_grok_keeps_short_backticks_inside_a_longer_fence() -> None:
         "\n"
         "See [Safety rules](references/safety.md).\n"
     )
-    rendered = tool.render_grok(skill, {"references/safety.md": "# Safety\n\nKept.\n"}, "0.4.0rc4")
+    rendered = tool.render_grok(skill, {"references/safety.md": "# Safety\n\nKept.\n"}, "0.4.0rc5")
     assert rendered == _expected_synthetic(
         [
             "# Doc",
@@ -908,7 +908,7 @@ def test_render_grok_does_not_open_a_backtick_fence_whose_info_has_a_backtick() 
         "\n"
         "See [Safety rules](references/safety.md).\n"
     )
-    rendered = tool.render_grok(skill, {"references/safety.md": "# Safety\n\nKept.\n"}, "0.4.0rc4")
+    rendered = tool.render_grok(skill, {"references/safety.md": "# Safety\n\nKept.\n"}, "0.4.0rc5")
     assert rendered == _expected_synthetic(
         [
             "# Doc",
@@ -931,18 +931,18 @@ def test_render_grok_rejects_a_single_dash_setext_underline() -> None:
     tool = _load("build_agent_skills_setext_dash", ROOT / "tools" / "build_agent_skills.py")
     skill = _synthetic_skill("# Doc\n\n## Section\n\nSee [Safety rules](references/safety.md).\n")
     with pytest.raises(ValueError, match="fence or an indented heading"):
-        tool.render_grok(skill, {"references/safety.md": "Title\n-\n"}, "0.4.0rc4")
+        tool.render_grok(skill, {"references/safety.md": "Title\n-\n"}, "0.4.0rc5")
 
 
 def test_render_grok_rejects_outer_setext_and_allows_it_inside_a_fence() -> None:
     tool = _load("build_agent_skills_outer_setext", ROOT / "tools" / "build_agent_skills.py")
     bare = _synthetic_skill("# Doc\n\nTitle\n---\n\n## Section\n\nSee [Safety rules](references/safety.md).\n")
     with pytest.raises(ValueError, match="setext underline"):
-        tool.render_grok(bare, {"references/safety.md": "# Safety\n\nBody.\n"}, "0.4.0rc4")
+        tool.render_grok(bare, {"references/safety.md": "# Safety\n\nBody.\n"}, "0.4.0rc5")
     fenced = _synthetic_skill(
         "# Doc\n\n~~~\nTitle\n---\n~~~\n\n## Section\n\nSee [Safety rules](references/safety.md).\n"
     )
-    rendered = tool.render_grok(fenced, {"references/safety.md": "# Safety\n\nBody.\n"}, "0.4.0rc4")
+    rendered = tool.render_grok(fenced, {"references/safety.md": "# Safety\n\nBody.\n"}, "0.4.0rc5")
     assert rendered == _expected_synthetic(
         [
             "# Doc",
@@ -970,7 +970,7 @@ def test_render_grok_keeps_one_trailing_punctuation() -> None:
 
     def run(middle: str) -> str:
         skill = _synthetic_skill(f"# Doc\n\n## Section\n\n{middle}\n\n## Later\n")
-        return tool.render_grok(skill, references, "0.4.0rc4")
+        return tool.render_grok(skill, references, "0.4.0rc5")
 
     colon = run("See [Safety rules](references/safety.md):")
     assert "See Safety rules:\n" in colon
@@ -1603,7 +1603,7 @@ def test_render_grok_keeps_reference_links_inside_an_outer_fence() -> None:
         "\n"
         "See [Safety rules](references/safety.md).\n"
     )
-    rendered = tool.render_grok(skill, {"references/safety.md": "# Safety\n\nKept.\n"}, "0.4.0rc4")
+    rendered = tool.render_grok(skill, {"references/safety.md": "# Safety\n\nKept.\n"}, "0.4.0rc5")
     assert rendered == _expected_synthetic(
         [
             "# Doc",
@@ -1628,7 +1628,7 @@ def test_render_grok_rejects_html_comments_in_references() -> None:
     tool = _load("build_agent_skills_html_comment", ROOT / "tools" / "build_agent_skills.py")
     skill = _synthetic_skill("# Doc\n\n## Section\n\nSee [Safety rules](references/safety.md).\n")
     with pytest.raises(ValueError, match="HTML comment") as caught:
-        tool.render_grok(skill, {"references/safety.md": "<!--\n# x\n-->\n"}, "0.4.0rc4")
+        tool.render_grok(skill, {"references/safety.md": "<!--\n# x\n-->\n"}, "0.4.0rc5")
     assert "hide" in str(caught.value)
 
 
@@ -1666,7 +1666,7 @@ def test_render_grok_rejects_a_punctuation_only_line() -> None:
     tool = _load("build_agent_skills_punct_line", ROOT / "tools" / "build_agent_skills.py")
     skill = _synthetic_skill("# Doc\n\n## Section\n\nSee [Safety rules](references/safety.md).\n")
     with pytest.raises(ValueError, match="punctuation-only line"):
-        tool.render_grok(skill, {"references/safety.md": "Kept.\n\n.\n"}, "0.4.0rc4")
+        tool.render_grok(skill, {"references/safety.md": "Kept.\n\n.\n"}, "0.4.0rc5")
 
 
 def _side_effects(catalog: dict, path: tuple[str, ...], variant_id: str) -> tuple[bool, bool]:

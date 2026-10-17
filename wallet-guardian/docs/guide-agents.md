@@ -1,6 +1,6 @@
 # Use Wallet Guardian from an AI agent
 
-This page says how an agent should call the installed `guardian` command. The package in this tree is `wallet-guardian-monitor` `0.4.0rc4`. The skill text is `skills/wallet-guardian/`. Host installs below were not exercised (未實測).
+This page says how an agent should call the installed `guardian` command. The package in this tree is `wallet-guardian-monitor` `0.4.0rc5`. The skill text is `skills/wallet-guardian/`. Host installs below were not exercised (未實測).
 
 The monitor is watch-only. An agent must not sign, approve, revoke, claim, or broadcast. It must not ask for a seed phrase, a private key, a keystore, or an API key. It must not run `guardian relations`, including inbound, expand, and dry-run. Only the owner may run that command, by hand, in their own terminal.
 
