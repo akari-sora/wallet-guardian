@@ -20,8 +20,8 @@ The monitor never signs, never builds a transaction, and never broadcasts. The o
 
 - The operator, who chooses addresses and env var names and confirms the summary.
 - Other local users and backup tools on the same machine, who can read files the mode bits allow.
-- Chain RPC operators and indexers the operator enables: public or self-hosted EVM RPC, Solana RPC, Etherscan, Blockscout, NodeReal, Helius, Esplora, TronGrid, TON Center, Sui, Aptos, and Cosmos REST hosts.
-- Risk and list publishers that are off by default: GoPlus, Chainabuse, and the OFAC list host. A later opt-in is a separate decision.
+- Chain RPC operators and indexers the operator enables: public or self-hosted EVM RPC, Solana RPC, Etherscan, Blockscout, NodeReal, Helius, Esplora, and TronGrid. Init can also write TON Center, Sui, Aptos, and Cosmos REST sources. `run-once` does not query those four. It records `unsupported_family`.
+- Risk and list publishers that stay uncalled in this preview: GoPlus and Chainabuse. The OFAC list host is queried only when the monitor file contains an `ofac_sls` source. Init does not add that source.
 - A notification recipient. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`), and `--no-send` forbids sends. Slack, email, and webhook clients are not in this package. The outbox stays local while delivery mode is `outbox_only`.
 - The supply chain: the Python package, its pinned dependencies, and whatever host serves the wheel. Tests do not call the network.
 - The author of a plugin that already ships in this package. Plugins are local code selected by id. Init does not download or execute a plugin from the network.
@@ -43,11 +43,13 @@ Init's summary is the operator-facing list. The flows below match that summary.
 | EVM or Solana RPC named by the operator | Watch address inside balance, log, and call reads. Not the machine hostname. | The endpoint variable is unset, so there is no host to call. |
 | Etherscan | Watch address and, by that API's design, the key as the `apikey` query parameter. | The key is missing. The call is skipped and coverage is `credential_missing`. |
 | Blockscout | Watch address. The key, when present, is a bearer header, not a query secret. | The key is missing. Init does not use the Blockscout PRO key name that would probe once without a key. |
-| NodeReal, Helius | Watch address. Helius puts `api-key` in the query when the call is made. | The key is missing, so the call is not made. |
-| Esplora, TON Center, Sui, Aptos, Cosmos REST | Nothing in this build. Those families are not queried yet. | Coverage stays unsupported, not zero. |
-| TronGrid | Nothing until a Tron adapter runs. A missing `TRON_PRO_API_KEY` would still block a later call. | Init does not send the address today. |
-| GoPlus, Chainabuse | Without `GOPLUS_API_KEY` or `GOPLUS_API_BASE`, the row is `credential_missing` and no request is made. | Stays uncalled unless the operator sets the key, the base, and consent. |
-| OFAC list host | `OFAC_SLS_FEED` may be a local `file://` SDN XML or an HTTPS URL. The match is local. | No address is uploaded. Unset stays `feed_not_supplied`. A stale or malformed list is not a clear screen. |
+| NodeReal | Watch address, when that source is called. | The key is missing, so the call is not made. |
+| Helius | Nothing from `run-once` in this preview. Init can write an enabled `helius-parser` source and list `HELIUS_API_KEY`. The adapter is not called, with or without the key. | The call is not made. |
+| Esplora (Bitcoin) | The watch address, on `/address/{address}`, `/address/{address}/txs/chain`, and `/address/{address}/txs/mempool`, to the base URL in that source's endpoint variable. Init writes `BITCOIN_MAINNET_URL` for `bitcoin-mainnet`. `examples/monitor.json` uses `ESPLORA_API_URL`. | The endpoint variable is unset, or no Bitcoin account is configured. |
+| TON Center, Sui, Aptos, Cosmos REST | Nothing in this build. Init can write a source for these families. `run-once` marks them `unsupported_family` and does not query them. | Coverage stays unsupported. A missing row is not a zero balance. |
+| TronGrid (opt-in, experimental) | The watch address, to the host in `TRONGRID_API_URL`, when a TRON account is configured. `TRON_PRO_API_KEY` is optional. Without it the read is keyless and still sends the address. A set key goes out only as the `TRON-PRO-API-KEY` header. | `TRONGRID_API_URL` is unset, or no TRON account is configured. |
+| GoPlus, Chainabuse | Nothing in this preview. `run-once` does not call them, with or without a key, a base URL, or consent. The `address_risk` row stays a blocked gap (`credential_missing`, `third_party_denied`, or `not_run`). | No address-risk screening is performed. |
+| OFAC list host | A local match, and only when the monitor file has a source with `"adapter": "ofac_sls"`. Then `OFAC_SLS_FEED` may be a local `file://` SDN XML or an HTTPS URL. Init stores the list name `us-ofac-sdn` and does not add that source, so the variable alone stays `feed_not_supplied`. `examples/monitor.json` includes an `ofac_sls` source. | No address is uploaded. A missing source, or an unset feed, stays `feed_not_supplied`. A stale or malformed list is not a clear screen. |
 | Notification channel | The Telegram sender exists and is opt-in. `--no-send` forbids sends. | Mode defaults to `outbox_only`. `install-service` does not start a sender. |
 
 The provider on the other end of an enabled call learns the watch address, the query shape, the client IP, and the time. That is the disclosure the summary asks the operator to accept.
@@ -86,7 +88,7 @@ A webhook URL, if one is ever configured, is an egress decision of its own and h
 - Hosted multi-tenant isolation. One operator, one machine.
 - Deriving addresses from a seed, an xpub, or another chain.
 - Turning on GoPlus or Chainabuse by default.
-- Installing systemd units, cron, or a login item. `install-service` only prints a plan and exits non-zero.
+- Treating a printed plan as an installed service. `install-service --dry-run`, and a run without `--apply`, prints planned unit names and exits non-zero. `install-service --apply` writes and enables systemd units, or replaces the managed crontab block. `--schedule-mode launchd_agent` prints LaunchAgents and does not call `launchctl`, including when `--apply` is set. Every scheduled command carries `--no-send`. Init does not run `install-service`. Host smoke of an applied unit is `NOT_RUN`.
 - The Action Client's wallet session, D1, or Pages deployment.
 - Claiming that a clear OFAC check, a missing price, or an empty log scan means the wallet is safe or complete.
 - Live network tests. Acceptance tests use a fake transport. A real socket in those tests is a failure.

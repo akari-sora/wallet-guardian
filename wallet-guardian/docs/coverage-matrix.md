@@ -150,7 +150,7 @@ Not added: Bitcoin Core `rss.xml` (593 KB) is refused by the parser's item cap. 
 | * | sanctions | public OFAC feed named by OFAC_SLS_FEED; no API key | not_verified | no keyed OFAC source | not_verified | not_verified |
 | * | address_risk | not enabled in examples/monitor.json | not_verified | Chainabuse would need an operator key this package does not configure | not_verified | not_verified |
 | * | positions | not enabled in examples/monitor.json | not_verified | DeBank is not a configured keyed source | not_verified | not_verified |
-| cosmos-hub | comet.rpc | comet_rpc adapter file only | not_verified | no keyed Comet source in the example monitor | not_verified | not_verified |
+| cosmos-hub | comet.rpc | capability JSON only; no Python reader; `run-once` reports `unsupported_family` | not_verified | no keyed Comet source in the example monitor | not_verified | not_verified |
 | linea-mainnet | enabled_route | not in examples/monitor.json enabled_networks | not_verified | no keyed route in the example monitor | not_verified | not_verified |
 | zksync-era | enabled_route | not in examples/monitor.json enabled_networks | not_verified | no keyed route in the example monitor | not_verified | not_verified |
 | scroll-mainnet | enabled_route | not in examples/monitor.json enabled_networks | not_verified | no keyed route in the example monitor | not_verified | not_verified |
@@ -239,7 +239,8 @@ Keyless sources that the routes still name:
 - The Base keyless Blockscout result depends on the host.
 - BSC external history has no keyless source.
 - Avalanche deep native history is expansion_pending.
-- `guardian install-service` is a dry-run installer. No unit has been installed on a host, and the host smoke is NOT_RUN. See `docs/box-unattended.md`.
+- `guardian install-service --dry-run` prints a plan and does not install a unit. `install-service --apply` writes and enables systemd units, or replaces the managed crontab block. Every scheduled command includes `--no-send`. `--schedule-mode launchd_agent` does not call `launchctl`. No unit has been installed on a host by this preview, and the host smoke is NOT_RUN. See `docs/box-unattended.md`.
+- Permit2 internal allowances are not tracked. A Permit2 `Permit` log is a `relay_permit` note with `not_current_allowance`. It is not an approval row and it is not an alert. The approval scan topics are `Approval(address,address,uint256)` and `ApprovalForAll(address,address,bool)`, from the bootstrap origin.
 - Tagged previews are published only as GitLab releases. Nothing is uploaded to PyPI or any package index.
 - Deferred and not claimed: sUSDe, Morpho Blue markets, TRC-20 and approval alerting on TRON, TRON genesis identity verification, yield live fetch, scheduler and delivery.
 - Text-handling residuals (see `docs/injection-privacy-tests.md`): a double HTML escape is cosmetic; the incident matcher can miss digit-plus-letter tokens such as "Aave v3 incident"; `privacy_boundary` is a policy table, not proof of isolation; there is no claim of general prompt-injection immunity.
@@ -1025,7 +1026,7 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "id": "cosmos/comet",
       "network": "cosmos-hub",
       "capability": "comet.rpc",
-      "no_key_path": "comet_rpc adapter file only",
+      "no_key_path": "capability JSON only; no Python reader; `run-once` reports `unsupported_family`",
       "no_key_status": "not_verified",
       "keyed_path": "no keyed Comet source in the example monitor",
       "keyed_status": "not_verified",
@@ -1033,7 +1034,7 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "capability_files": [
         "config/source-capabilities/comet_rpc.json"
       ],
-      "note": "The adapter file is a contract. The example monitor does not enable Cosmos. network-tiers.plan.json marks the network planned_not_live_verified."
+      "note": "config/source-capabilities/comet_rpc.json is a capability declaration. No Python reader exists. run-once reports unsupported_family. The example monitor does not enable Cosmos. network-tiers.plan.json marks the network planned_not_live_verified."
     },
     {
       "id": "linea-mainnet/enabled-route",

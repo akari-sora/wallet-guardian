@@ -24,7 +24,7 @@ PEP 440 `0.4.0rc4` is the version in `pyproject.toml`, `guardian.__version__`, `
 | Coverage matrix | This preview | `docs/coverage-matrix.md` | Update the matrix when a probe changes. Do not promote a gap |
 | Release manifest | Draft only | `tools/release_manifest.py`, `schemas/release-manifest.schema.json`, `release/manifest.draft.json` | The tool still refuses `published: true` |
 | Formal 24-window shadow | `NOT_RUN` | `docs/mcm-live-01.md` describes the counter. The tool does not start it | Blocker. An unrun shadow is not a finished qualification |
-| Service installer | Dry-run installer met. Host smoke `NOT_RUN` | `guardian install-service` (S3), `docs/box-unattended.md`, S3 tests | A printed plan is not an installed service; no unit was applied on any host |
+| Service installer | Dry-run evidence met. Host smoke `NOT_RUN`. `--apply` can write systemd units or the managed crontab block; this gate did not run that apply | `guardian install-service` (S3), `docs/box-unattended.md`, `docs/scheduling.md`, S3 tests | A printed plan is not an installed service. Host apply stays `NOT_RUN` |
 | Tag and upload | see GitLab releases | Whether tag `v0.4.0-rc.4` is published, see GitLab releases. Nothing is pushed by this preview | Operator steps below, done later by a person |
 
 ## What stays NOT_RUN

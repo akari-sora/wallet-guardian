@@ -1,5 +1,7 @@
 # 覆蓋範圍
 
+> 歷史紀錄。下面「2026-10-07」一節描述的是套件 `0.3.0` 當天的 Lista／BSC 路徑，以及那天記下來的離線測試數字。現況的套件版本是 `0.4.0rc4`（`pyproject.toml`）。rc.4 的覆蓋以 `docs/coverage-matrix.md` 為準。DeBank、Zerion、Tenderly 沒有會被 `run-once` 呼叫的 adapter，設了 key 也不會呼叫。Alchemy 只出現在 `examples/monitor.json` 的 Base 路由，`guardian init` 不會加。
+
 更新時間：2026-10-07。離線測試，加上先前一次唯讀 `doctor` / `run-once`（約 13:28 Asia/Taipei）。這次沒有重跑鏈上讀取，也沒有帶 Etherscan key，所以沒有新的 chainlist LIVE_PASS。私人餘額只留在 gitignore 的 `evidence/`。套件版本是 0.3.0。客戶端建置 `action-client@0.3.0` 已通過 `npm run build`。
 
 ## 這次實際執行
@@ -20,9 +22,9 @@
 | Etherscan V2 chainlist | 有 key 才 LIVE_PASS | 這次環境沒有 key，所以沒有新的 LIVE_PASS。一把 `ETHERSCAN_API_KEY` 涵蓋 V2 |
 | 手機錢包內建瀏覽器 | 未測 | 沒有發行公開任務連結。手機瀏覽器未測 |
 | 固定 HTTPS 網域 | 紀錄見 deploy.md | Cloudflare Pages 於這次核對回 HTTP 200。程式常數 `fixed_https_origin` 仍是 false。沒有重新部署，也沒有因此發行任務連結 |
-| Ethereum、其他 EVM | 未啟用 | 沒有預先核准的 RPC |
-| DeBank / Zerion / Alchemy discovery | BLOCKED | 沒有 key |
-| GoPlus | LIMITED_DISCOVERY | 沒有 key，不宣稱已做風險篩選 |
+| Ethereum、其他 EVM | （0.3.0 當時）未啟用 | 當時沒有預先核准的 RPC。現在的 `guardian init` 會為選到的 EVM 鏈寫 `evm_rpc`。這列不是現況 |
+| DeBank / Zerion / Alchemy discovery | （0.3.0 當時）BLOCKED | 當時寫「沒有 key」。現況是 DeBank 與 Zerion 沒有 adapter，設了 key 也不會呼叫。Alchemy 不是全鏈 discovery，只在 `examples/monitor.json` 的 Base 路由 |
+| GoPlus | （0.3.0 當時）LIMITED_DISCOVERY | 當時沒有 key。現況是 `run-once` 不論有沒有 key 都不呼叫 GoPlus |
 | OFAC | 視 doctor 結果 | SDN CSV 若沒有 0x 地址集合，就不能說已篩過 |
 | Hyperliquid info | 由 run-once 實測 | 空的 master 回應不是所有子帳戶為零；未知模式不相加 spot 與 perp |
 | 新聞 RSS | LIMITED_DISCOVERY | 只有過濾規則，不把錢包地址送去搜尋 |
