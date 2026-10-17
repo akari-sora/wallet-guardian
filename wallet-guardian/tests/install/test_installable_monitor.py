@@ -432,7 +432,7 @@ def test_mcm_share_s4_03_pinned_install_uv_pip(release_dist: Path) -> None:
         )
         assert pip_installed.returncode == 0, pip_installed.stderr
         installed = _installed_versions(python, work)
-        assert installed["wallet-guardian-monitor"] == "0.4.0rc5"
+        assert installed["wallet-guardian-monitor"] == "0.4.0rc6"
         for name, version in pins.items():
             assert installed[name] == version
     finally:
@@ -690,7 +690,7 @@ def _build_future_wheel(source: Path, out: Path) -> Path:
         "src/guardian/_resources/runtime-pin.json",
     ):
         path = source / relative
-        path.write_text(path.read_text(encoding="utf-8").replace("0.4.0rc5", "0.4.0rc6"), encoding="utf-8")
+        path.write_text(path.read_text(encoding="utf-8").replace("0.4.0rc6", "0.4.0rc7"), encoding="utf-8")
     built = _run(
         ["uv", "build", "--offline", "--no-create-gitignore", "--out-dir", str(out), str(source)],
         cwd=source,

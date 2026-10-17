@@ -1,21 +1,21 @@
 # CLI guide
 
-Wallet Guardian's monitor is a preview you run on a machine you control. The package version in this tree is `0.4.0rc5`. It is read-only: it does not sign, build a transaction, or broadcast, and it does not ask for a seed phrase or a private key. The named chains are Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS, and Solana, with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path. What each chain can actually read is [coverage-matrix.md](coverage-matrix.md). The 72h shadow validation is not complete. Release evidence for rc.5 is `NOT_RUN`. No gate result is recorded for the rc.5 release commit. The only CI run cited in CHANGELOG `[0.4.0rc5]` is pipeline #2957467957 on `5a2c33f`, not on the release commit. There is no PyPI release.
+Wallet Guardian's monitor is a preview you run on a machine you control. The package version in this tree is `0.4.0rc6`. It is read-only: it does not sign, build a transaction, or broadcast, and it does not ask for a seed phrase or a private key. The named chains are Ethereum, BNB Chain, Arbitrum One, Base, Optimism, Polygon PoS, and Solana, with limited Avalanche C-Chain coverage and an address-set-only Bitcoin path. What each chain can actually read is [coverage-matrix.md](coverage-matrix.md). The 72h shadow validation is not complete. Release evidence for rc.6 is `NOT_RUN`. No gate result is recorded for the rc.6 release commit. CHANGELOG `[0.4.0rc6]` cites no CI run. There is no PyPI release.
 
 You do not need Grok Bot, Cloudflare, D1, a wallet login, or Node to follow this page. Flags for every command are in [cli-reference.md](cli-reference.md).
 
 ## Install
 
-Download one release's wheel, `SHA256SUMS`, and `constraints.txt` from the project's GitLab Releases page: `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.5`. Check the hash before you install. `uv tool install` does not apply `constraints.txt` unless you pass it. Do not install a package named `guardian` from PyPI. The steps and the Windows interpreter path are in [install.md](install.md).
+Download one release's wheel, `SHA256SUMS`, and `constraints.txt` from the project's GitLab Releases page: `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.6`. Check the hash before you install. `uv tool install` does not apply `constraints.txt` unless you pass it. Do not install a package named `guardian` from PyPI. The steps and the Windows interpreter path are in [install.md](install.md).
 
 ```bash
-uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl
+uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc6-py3-none-any.whl
 guardian --help
 ```
 
 Before the first `run-once`, export an endpoint for each chain you enabled, for example `export RPC_ETHEREUM_MAINNET_URL="https://ethereum-rpc.publicnode.com"` (any public JSON-RPC URL you choose). Without it `run-once` stops with `endpoint_missing`. `ethereum-rpc.publicnode.com` answers balance reads but refuses address-less `eth_getLogs` (-32701, recorded in [coverage-matrix.md](coverage-matrix.md)). With only that endpoint, `permissions.standard` and `history.token` stay gaps. For approval monitoring, use an endpoint that accepts topic-only `eth_getLogs` over a 2000-block range; the matrix lists the ones that did on the recorded probe. See [faq-troubleshooting.md](faq-troubleshooting.md).
 
-The wheel name in this tree is `wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl`. A later release uses that release's own wheel and constraints file.
+The wheel name in this tree is `wallet_guardian_monitor-0.4.0rc6-py3-none-any.whl`. A later release uses that release's own wheel and constraints file.
 
 ## Quickstart
 
@@ -73,7 +73,7 @@ No-key (`key_mode` `none`) leaves credential variables unset. Public RPC still r
 
 Init's data-sharing summary lists each source before the write: whether a wallet address would be sent, that the machine hostname is not added, and which host would receive the call. That summary is not a complete match for the reads. A keyless Esplora source (no `credential_env`, which is how init writes Bitcoin) is summarized as not queried, with `sends_addresses` false. `run-once` still sends the Bitcoin address to the host in `BITCOIN_MAINNET_URL` when that variable is set. GoPlus and Chainabuse are listed as off. `privacy.third_party_wallet_queries` stays `deny_until_local_consent`.
 
-If you include Solana, init lists a Helius source, but rc.5 `run-once` never calls it. Solana coverage is native balance, token accounts, the signature list and SPL authorities. Transactions are not parsed, so there are no Solana transfer rows or transfer alerts. The checked-in `examples/monitor.json` leaves Helius disabled; a profile you create with `init` lists the source and still does not call it.
+If you include Solana, init lists a Helius source, but rc.6 `run-once` never calls it. Solana coverage is native balance, token accounts, the signature list and SPL authorities. Transactions are not parsed, so there are no Solana transfer rows or transfer alerts. The checked-in `examples/monitor.json` leaves Helius disabled; a profile you create with `init` lists the source and still does not call it.
 
 Endpoint variables are URLs you choose. Do not put a key inside the URL. Some providers put the key in the query string themselves (Etherscan `apikey`, Helius `api-key`). Blockscout sends its key as a bearer header.
 

@@ -1,5 +1,5 @@
 {
-  "version": "0.4.0rc5",
+  "version": "0.4.0rc6",
   "classes": {
     "A_read_only_offline": "No network. Does not write any local state.",
     "B_network_requires_owner_ok": "Contacts a configured host or resolver. The owner must agree before an agent runs it.",

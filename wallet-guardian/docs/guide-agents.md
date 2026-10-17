@@ -1,6 +1,6 @@
 # Use Wallet Guardian from an AI agent
 
-This page says how an agent should call the installed `guardian` command. The package in this tree is `wallet-guardian-monitor` `0.4.0rc5`. The skill text is `skills/wallet-guardian/`. Host installs below were not exercised (未實測).
+This page says how an agent should call the installed `guardian` command. The package in this tree is `wallet-guardian-monitor` `0.4.0rc6`. The skill text is `skills/wallet-guardian/`. Host installs below were not exercised (未實測).
 
 see `## Hard limits` in `skills/wallet-guardian/SKILL.md`.
 
@@ -18,9 +18,9 @@ The longer limits are in `wallet-guardian/AGENTS.md` and in `skills/wallet-guard
 
 ## Install the command
 
-Install only a wheel file whose SHA256 you have checked. The release page named in the project README is `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.5`. Download `SHA256SUMS` and every file it lists, including `constraints.txt`, into one directory, and check the hashes before install. The steps are in [install.md](install.md). Do not install `guardian` or `wallet-guardian-monitor` by name from any index (pip, uv, or pipx). A package in an index with one of those names is not this project.
+Install only a wheel file whose SHA256 you have checked. The release page named in the project README is `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.6`. Download `SHA256SUMS` and every file it lists, including `constraints.txt`, into one directory, and check the hashes before install. The steps are in [install.md](install.md). Do not install `guardian` or `wallet-guardian-monitor` by name from any index (pip, uv, or pipx). A package in an index with one of those names is not this project.
 
-The rc.5 wheel on that release page includes `capabilities`. `v0.4.0-rc.4` and earlier wheels do not, so on an older wheel the first command fails with `invalid choice`. If `guardian capabilities` returns `invalid choice`, stop. Do not run any further `guardian` command, including `--help` at any level. Do not look for a renamed command.
+The rc.6 wheel on that release page includes `capabilities`. `v0.4.0-rc.4` and earlier wheels do not, so on an older wheel the first command fails with `invalid choice`. If `guardian capabilities` returns `invalid choice`, stop. Do not run any further `guardian` command, including `--help` at any level. Do not look for a renamed command.
 
 ## Install the skill
 

@@ -8,7 +8,7 @@ When the files exist, this also checks ``agent-capabilities.json`` and the
 wallet-guardian skill ``metadata.version``. A checkout that does not contain
 those files omits them.
 
-PEP 440 ``0.4.0rc5`` maps to ``v0.4.0-rc.5``.
+PEP 440 ``0.4.0rc6`` maps to ``v0.4.0-rc.6``.
 This tool does not create a tag.
 """
 
@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-EXPECTED = "0.4.0rc5"
+EXPECTED = "0.4.0rc6"
 _RC = re.compile(r"^(\d+\.\d+\.\d+)rc(\d+)$")
 _PYPROJECT = re.compile(r'(?m)^version = "([^"]+)"')
 _INIT = re.compile(r'(?m)^__version__ = "([^"]+)"')
@@ -33,7 +33,7 @@ def repo_root() -> Path:
 
 
 def tag_name_for_pep440(version: str) -> str | None:
-    """Map ``0.4.0rc5`` to ``v0.4.0-rc.5``. Other versions return None."""
+    """Map ``0.4.0rc6`` to ``v0.4.0-rc.6``. Other versions return None."""
     match = _RC.fullmatch(version)
     if match is None:
         return None

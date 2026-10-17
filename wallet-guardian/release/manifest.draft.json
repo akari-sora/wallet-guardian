@@ -1,8 +1,8 @@
 {
   "schema_version": "guardian.release-manifest.v1",
-  "version": "0.4.0rc5",
-  "pep440": "0.4.0rc5",
-  "git_tag_name": "v0.4.0-rc.5",
+  "version": "0.4.0rc6",
+  "pep440": "0.4.0rc6",
+  "git_tag_name": "v0.4.0-rc.6",
   "tag_created": false,
   "source_sha": null,
   "content_hash": "f5cee9df5770b8301db6ff536d1bfc06e97591f73bd1a4a9867208b942db68ec",
