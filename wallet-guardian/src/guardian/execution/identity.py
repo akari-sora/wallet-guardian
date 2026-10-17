@@ -11,6 +11,7 @@ states that retention. It does not touch a browser store; later packages call it
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from guardian.execution.errors import ExecutionRegistryError
@@ -22,6 +23,8 @@ from guardian.execution.model import (
     require_checksum,
     require_uint_string,
 )
+
+_BYTES = re.compile(r"0x(?:[0-9a-fA-F]{2})*")
 
 
 def check_identity(account: str, identity: dict[str, Any]) -> None:
@@ -114,7 +117,7 @@ def check_call(
             if type(value) is not bool:
                 raise ExecutionRegistryError("bad_type", param["name"])
         elif solidity_type == "bytes":
-            if not isinstance(value, str):
+            if not isinstance(value, str) or _BYTES.fullmatch(value) is None:
                 raise ExecutionRegistryError("bad_type", param["name"])
         else:
             raise ExecutionRegistryError("bad_enum", solidity_type)

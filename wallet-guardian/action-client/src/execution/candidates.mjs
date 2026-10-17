@@ -11,6 +11,7 @@ import {
   PERMISSION_TYPES,
   PROXY_KINDS,
   RULES_VERSION,
+  compareCodePoints,
   expectObject,
   requireText,
 } from "./model.mjs";
@@ -33,13 +34,13 @@ function assemble(root) {
   const skipped = [];
   const protocols = join(root, "config", "protocols");
   if (existsDir(protocols)) {
-    for (const name of readdirSync(protocols).filter((item) => item.endsWith(".json")).sort()) {
+    for (const name of readdirSync(protocols).filter((item) => item.endsWith(".json")).sort(compareCodePoints)) {
       readProtocol(join(protocols, name), root, byNetwork, byChain, observations, skipped);
     }
   }
   const permit2Dir = join(root, "config", "deployments", "permit2");
   if (existsDir(permit2Dir)) {
-    for (const name of readdirSync(permit2Dir).filter((item) => item.endsWith(".json")).sort()) {
+    for (const name of readdirSync(permit2Dir).filter((item) => item.endsWith(".json")).sort(compareCodePoints)) {
       readPermit2(join(permit2Dir, name), root, byNetwork, permit2, observations, skipped);
     }
   }
@@ -106,7 +107,7 @@ function chainIndex(root) {
   const byChain = new Map();
   const directory = join(root, "config", "chains");
   if (!existsDir(directory)) return { byNetwork, byChain };
-  for (const name of readdirSync(directory).filter((item) => item.endsWith(".json")).sort()) {
+  for (const name of readdirSync(directory).filter((item) => item.endsWith(".json")).sort(compareCodePoints)) {
     const document = parseStrictJson(readFileSync(join(directory, name), "utf8"));
     if (document === null || typeof document !== "object" || Array.isArray(document)) continue;
     const network = document.network;
@@ -395,7 +396,7 @@ function mergeClassified(classified) {
       demoted.push(preferred);
       continue;
     }
-    const sourceFiles = [...new Set(group.map((item) => item.source_file))].sort();
+    const sourceFiles = [...new Set(group.map((item) => item.source_file))].sort(compareCodePoints);
     deployments.push(deploymentFrom(preferred, sources, sourceFiles));
   }
   return { deployments, demoted };
@@ -407,7 +408,7 @@ function prefer(left, right) {
   if (right.protocol_id === primary) return right;
   if (left.protocol_id.includes("-") && !right.protocol_id.includes("-")) return right;
   if (right.protocol_id.includes("-") && !left.protocol_id.includes("-")) return left;
-  if (left.protocol_id <= right.protocol_id) return left;
+  if (compareCodePoints(left.protocol_id, right.protocol_id) <= 0) return left;
   return right;
 }
 
@@ -421,7 +422,7 @@ function deploymentFrom(item, sources, sourceFiles) {
     id: `candidate:${item.chain_id}:${item.protocol_id}:${item.role}`,
     implementation: null,
     network_id: item.network_id,
-    official_sources: [...sources.keys()].sort().map((url) => ({ retrieved: sources.get(url), url })),
+    official_sources: [...sources.keys()].sort(compareCodePoints).map((url) => ({ retrieved: sources.get(url), url })),
     permission_type: ruleRow.permission_type,
     pin_status: "not_read_offline",
     protocol_id: item.protocol_id,

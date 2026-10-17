@@ -120,7 +120,7 @@ RELATIONSHIPS = (
 )
 
 _DATE = re.compile(r"^20[0-9]{2}-[01][0-9]-[0-3][0-9]$")
-_TIME = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+_TIME = re.compile(r"^[1-9][0-9]{3}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 _UINT = re.compile(r"^(0|[1-9][0-9]*)$")
 _HASH64 = re.compile(r"^[0-9a-f]{64}$")
 _BLOCK_HASH = re.compile(r"^0x[0-9a-f]{64}$")

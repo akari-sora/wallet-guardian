@@ -84,11 +84,23 @@ export const RELATIONSHIPS = [
 ];
 
 const DATE = /^20[0-9]{2}-[01][0-9]-[0-3][0-9]$/;
-const TIME = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/;
+const TIME = /^[1-9][0-9]{3}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/;
 const UINT = /^(0|[1-9][0-9]*)$/;
 const HASH64 = /^[0-9a-f]{64}$/;
 const BLOCK_HASH = /^0x[0-9a-f]{64}$/;
 const RELATIVE_PATH = /^[A-Za-z0-9_./-]+$/;
+
+/** Code-point order. JS `<` compares UTF-16 code units and diverges above U+FFFF. */
+export function compareCodePoints(left, right) {
+  const leftPoints = [...left];
+  const rightPoints = [...right];
+  const count = Math.min(leftPoints.length, rightPoints.length);
+  for (let index = 0; index < count; index += 1) {
+    const diff = leftPoints[index].codePointAt(0) - rightPoints[index].codePointAt(0);
+    if (diff !== 0) return diff;
+  }
+  return leftPoints.length - rightPoints.length;
+}
 
 export function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -126,7 +138,7 @@ export function requireUintString(value, label) {
 }
 
 export function requireHttpsUrl(value, label) {
-  if (typeof value !== "string" || !value.startsWith("https://") || value.length > 400) {
+  if (typeof value !== "string" || !value.startsWith("https://") || [...value].length > 400) {
     throw new ExecutionRegistryError("bad_url", label);
   }
   if ([...value].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) {
@@ -166,7 +178,7 @@ export function requireTime(value, label) {
 }
 
 export function requireText(value, label, maxLen = 400) {
-  if (typeof value !== "string" || value === "" || value.length > maxLen) {
+  if (typeof value !== "string" || value === "" || [...value].length > maxLen) {
     throw new ExecutionRegistryError("bad_type", label);
   }
   if ([...value].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) {

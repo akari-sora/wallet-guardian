@@ -25,6 +25,9 @@ def parse_strict_json(text: str) -> Any:
     def reject_float(value: str) -> float:
         raise ExecutionRegistryError("float_rejected", value)
 
+    def reject_constant(value: str) -> float:
+        raise ExecutionRegistryError("float_rejected", value)
+
     def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
         parsed: dict[str, Any] = {}
         for key, item in items:
@@ -34,11 +37,21 @@ def parse_strict_json(text: str) -> Any:
         return parsed
 
     try:
-        value = json.loads(text, object_pairs_hook=pairs, parse_float=reject_float)
+        value = json.loads(
+            text,
+            object_pairs_hook=pairs,
+            parse_float=reject_float,
+            parse_constant=reject_constant,
+        )
     except ExecutionRegistryError:
         raise
     except json.JSONDecodeError as exc:
         raise ExecutionRegistryError("bad_json", exc.msg) from exc
+    except ValueError as exc:
+        # CPython refuses integers above 4300 digits before parse_int runs.
+        if "digits" not in str(exc):
+            raise
+        raise ExecutionRegistryError("integer_out_of_range", str(exc)) from exc
     _reject_unsafe_integers(value)
     return value
 

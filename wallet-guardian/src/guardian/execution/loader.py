@@ -7,6 +7,7 @@ rejected. Loaded entries always report ``user_approved`` false.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -130,6 +131,25 @@ _CANDIDATE_REASONS = frozenset(
 )
 
 
+def _same_json(left: Any, right: Any) -> bool:
+    """Compare JSON values without key order. Integers and booleans stay distinct."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        if left.keys() != right.keys():
+            return False
+        return all(_same_json(left[key], right[key]) for key in left)
+    if isinstance(left, list):
+        return len(left) == len(right) and all(_same_json(item, right[index]) for index, item in enumerate(left))
+    return left == right
+
+
+def _one_of(value: Any, allowed: set[str] | frozenset[str], label: str) -> str:
+    if not isinstance(value, str) or value not in allowed:
+        raise ExecutionRegistryError("bad_enum", label)
+    return value
+
+
 def load_chains_text(text: str) -> dict[str, Any]:
     document = _parsed_object(text)
     return _chains(document)
@@ -202,7 +222,7 @@ def _chains(document: dict[str, Any]) -> dict[str, Any]:
         raise ExecutionRegistryError("bad_enum", "chains.purpose")
     if document["enables_send"] is not False:
         raise ExecutionRegistryError("enables_send_rejected", "chains.enables_send")
-    if document["relationships"] != [dict(item) for item in RELATIONSHIPS]:
+    if not _same_json(document["relationships"], [dict(item) for item in RELATIONSHIPS]):
         raise ExecutionRegistryError("catalog_relationship", "chains.relationships")
     if not isinstance(document["chains"], list):
         raise ExecutionRegistryError("bad_type", "chains.chains")
@@ -227,11 +247,9 @@ def _chain(value: Any, index: int) -> dict[str, Any]:
     item = expect_object(value, _CHAIN_KEYS, _CHAIN_KEYS, label)
     chain_id = require_chain_id(item["chain_id"], f"{label}.chain_id")
     network_id = require_text(item["network_id"], f"{label}.network_id", max_len=80)
-    if not network_id.replace("-", "").isalnum() or network_id != network_id.lower():
+    if re.fullmatch(r"[0-9a-z]+", network_id.replace("-", "")) is None or network_id != network_id.lower():
         raise ExecutionRegistryError("bad_type", f"{label}.network_id")
-    status = item["status"]
-    if status not in {"active", "revoked"}:
-        raise ExecutionRegistryError("bad_enum", f"{label}.status")
+    status = _one_of(item["status"], {"active", "revoked"}, f"{label}.status")
     if not isinstance(item["rpc"], list):
         raise ExecutionRegistryError("bad_type", f"{label}.rpc")
     rpc = [_rpc(entry, f"{label}.rpc[{rpc_index}]") for rpc_index, entry in enumerate(item["rpc"])]
@@ -315,9 +333,9 @@ def _deployment(
     if item["user_approved"] is not False:
         raise ExecutionRegistryError("user_approved_has_no_effect", f"{label}.user_approved")
     record_status = item["record_status"]
-    if mode == "registry" and record_status not in {"active", "revoked"}:
-        raise ExecutionRegistryError("bad_enum", f"{label}.record_status")
-    if mode == "candidate" and record_status != "candidate":
+    if mode == "registry":
+        _one_of(record_status, {"active", "revoked"}, f"{label}.record_status")
+    elif record_status != "candidate":
         raise ExecutionRegistryError("bad_enum", f"{label}.record_status")
     approval = "candidate_unapproved" if mode == "candidate" else "not_approved"
     if item["approval"] != approval:
@@ -336,9 +354,7 @@ def _deployment(
     permission = item["permission_type"]
     if permission not in PERMISSION_TYPES:
         raise ExecutionRegistryError("bad_enum", f"{label}.permission_type")
-    pin_status = item["pin_status"]
-    if pin_status not in {"pinned", "not_read_offline"}:
-        raise ExecutionRegistryError("bad_enum", f"{label}.pin_status")
+    pin_status = _one_of(item["pin_status"], {"pinned", "not_read_offline"}, f"{label}.pin_status")
     if record_status == "candidate":
         if pin_status != "not_read_offline":
             raise ExecutionRegistryError("bad_enum", f"{label}.pin_status")
@@ -411,9 +427,7 @@ def _policy(value: Any, index: int, deployments: dict[str, dict[str, Any]]) -> d
         raise ExecutionRegistryError("user_approved_has_no_effect", f"{label}.user_approved")
     if item["approval"] != "not_approved":
         raise ExecutionRegistryError("bad_enum", f"{label}.approval")
-    record_status = item["record_status"]
-    if record_status not in {"active", "revoked"}:
-        raise ExecutionRegistryError("bad_enum", f"{label}.record_status")
+    record_status = _one_of(item["record_status"], {"active", "revoked"}, f"{label}.record_status")
     if item["recipient_rule"] != "self":
         raise ExecutionRegistryError("recipient_not_self", f"{label}.recipient_rule")
     if item["amount_rule"] != "all":
@@ -490,7 +504,7 @@ def _parameters(value: Any, label: str) -> list[dict[str, str]]:
         allowed = _PARAM_KEYS if solidity_type in ADDRESS_TYPES else frozenset({"name", "solidity_type"})
         expect_object(item, allowed, allowed, param_label)
         name = require_text(item["name"], f"{param_label}.name", max_len=80)
-        if not name.replace("_", "").isalnum() or name[:1].isdigit():
+        if re.fullmatch(r"[0-9A-Za-z]+", name.replace("_", "")) is None or re.match(r"[0-9]", name) is not None:
             raise ExecutionRegistryError("bad_type", f"{param_label}.name")
         if name in names:
             raise ExecutionRegistryError("duplicate_key", name)
@@ -569,9 +583,7 @@ def _unclassified(value: Any, index: int) -> dict[str, Any]:
     item = expect_object(value, _UNCLASSIFIED_KEYS, _UNCLASSIFIED_KEYS, label)
     if item["approval"] != "candidate_unapproved" or item["user_approved"] is not False:
         raise ExecutionRegistryError("user_approved_has_no_effect", label)
-    reason = item["reason"]
-    if reason not in _CANDIDATE_REASONS:
-        raise ExecutionRegistryError("bad_enum", f"{label}.reason")
+    reason = _one_of(item["reason"], _CANDIDATE_REASONS, f"{label}.reason")
     chain_id = item["chain_id"]
     if chain_id is not None:
         chain_id = require_chain_id(chain_id, f"{label}.chain_id")
@@ -597,9 +609,7 @@ def _unclassified(value: Any, index: int) -> dict[str, Any]:
 def _skipped(value: Any, index: int) -> dict[str, Any]:
     label = f"skipped[{index}]"
     item = expect_object(value, _SKIPPED_KEYS, _SKIPPED_KEYS, label)
-    reason = item["reason"]
-    if reason not in _CANDIDATE_REASONS:
-        raise ExecutionRegistryError("bad_enum", f"{label}.reason")
+    reason = _one_of(item["reason"], _CANDIDATE_REASONS, f"{label}.reason")
     return {
         "address": _optional_text(item["address"], f"{label}.address"),
         "network_id": _optional_text(item["network_id"], f"{label}.network_id"),

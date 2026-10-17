@@ -46,8 +46,19 @@ class Parser {
     if (char === "t") return this.parseLiteral("true", true);
     if (char === "f") return this.parseLiteral("false", false);
     if (char === "n") return this.parseLiteral("null", null);
+    if (this.text.startsWith("-Infinity", this.i)) return this.rejectConstant("-Infinity");
+    if (this.text.startsWith("Infinity", this.i)) return this.rejectConstant("Infinity");
+    if (this.text.startsWith("NaN", this.i)) return this.rejectConstant("NaN");
     if (char === "-" || (char >= "0" && char <= "9")) return this.parseNumber();
     throw new ExecutionRegistryError("bad_json", "value");
+  }
+
+  rejectConstant(word) {
+    const next = this.i + word.length < this.n ? this.text[this.i + word.length] : "";
+    if (next !== "" && !" \n\r\t,}]".includes(next)) {
+      throw new ExecutionRegistryError("bad_json", "value");
+    }
+    throw new ExecutionRegistryError("float_rejected", word);
   }
 
   parseLiteral(word, value) {
@@ -164,11 +175,24 @@ class Parser {
     } else {
       throw new ExecutionRegistryError("bad_json", "number");
     }
-    const next = this.peek();
-    if (next === "." || next === "e" || next === "E") {
-      throw new ExecutionRegistryError("float_rejected", this.text.slice(start, Math.min(this.n, start + 32)));
+    let isFloat = false;
+    if (this.peek() === ".") {
+      this.i += 1;
+      if (this.peek() < "0" || this.peek() > "9") throw new ExecutionRegistryError("bad_json", "number");
+      while (this.peek() >= "0" && this.peek() <= "9") this.i += 1;
+      isFloat = true;
+    }
+    const exponent = this.peek();
+    if (exponent === "e" || exponent === "E") {
+      this.i += 1;
+      const sign = this.peek();
+      if (sign === "+" || sign === "-") this.i += 1;
+      if (this.peek() < "0" || this.peek() > "9") throw new ExecutionRegistryError("bad_json", "number");
+      while (this.peek() >= "0" && this.peek() <= "9") this.i += 1;
+      isFloat = true;
     }
     const raw = this.text.slice(start, this.i);
+    if (isFloat) throw new ExecutionRegistryError("float_rejected", raw.slice(0, 32));
     const numeric = BigInt(raw);
     if (numeric > MAX_SAFE || numeric < -MAX_SAFE) {
       throw new ExecutionRegistryError("integer_out_of_range", raw);

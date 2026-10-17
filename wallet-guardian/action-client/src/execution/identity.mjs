@@ -100,7 +100,9 @@ export function checkCall(registry, { policy_id: policyId, account, identity, ar
     } else if (solidityType === "bool") {
       if (typeof value !== "boolean") throw new ExecutionRegistryError("bad_type", param.name);
     } else if (solidityType === "bytes") {
-      if (typeof value !== "string") throw new ExecutionRegistryError("bad_type", param.name);
+      if (typeof value !== "string" || !/^0x(?:[0-9a-fA-F]{2})*$/.test(value)) {
+        throw new ExecutionRegistryError("bad_type", param.name);
+      }
     } else {
       throw new ExecutionRegistryError("bad_enum", solidityType);
     }

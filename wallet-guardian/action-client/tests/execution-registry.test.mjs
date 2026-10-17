@@ -241,3 +241,86 @@ test("candidates match the python oracle and stay unapproved", async () => {
   assert.equal(document.approval, "candidate_unapproved");
   assert.equal(document.deployments.length, 11);
 });
+
+const negativeVectors = JSON.parse(read(join(oracleDir, "negative-vectors.json"))).vectors;
+
+function applyPairs(text, pairs) {
+  let next = text;
+  for (const [oldText, newText] of pairs ?? []) {
+    const index = next.indexOf(oldText);
+    if (index < 0) throw new Error(`patch not found: ${oldText.slice(0, 80)}`);
+    next = `${next.slice(0, index)}${newText}${next.slice(index + oldText.length)}`;
+  }
+  return next;
+}
+
+function expectCode(fn, code) {
+  try {
+    fn();
+  } catch (error) {
+    assert.equal(error instanceof ExecutionRegistryError, true, String(error));
+    assert.equal(error.code, code);
+    return;
+  }
+  assert.fail(`expected ${code}`);
+}
+
+function assertNotApproved(text, chains = undefined) {
+  let granted;
+  try {
+    granted = userApprovalGranted(text, chains);
+  } catch (error) {
+    assert.fail(`userApprovalGranted raised ${error}`);
+  }
+  assert.equal(granted, false);
+}
+
+for (const vector of negativeVectors) {
+  test(`negative vector ${vector.id}`, () => {
+    const chains = applyPairs(chainsText(), vector.chains_replace);
+    const registry = applyPairs(registryText(), vector.registry_replace);
+    const code = vector.code;
+    if (vector.loader === "parse") {
+      if (code == null) parseStrictJson(vector.input);
+      else expectCode(() => parseStrictJson(vector.input), code);
+      assertNotApproved(vector.input);
+      return;
+    }
+    if (vector.loader === "chains") {
+      if (code == null) loadChainsText(chains);
+      else expectCode(() => loadChainsText(chains), code);
+      assertNotApproved(registry, chains);
+      return;
+    }
+    if (vector.loader === "registry") {
+      const loadedChains = loadChainsText(chains);
+      if (code == null) {
+        const loaded = loadRegistryText(registry, loadedChains);
+        if (vector.expect_urls) {
+          assert.deepEqual(loaded.deployments[0].official_sources.map((item) => item.url), vector.expect_urls);
+        }
+        if (vector.registry_digest) assert.equal(registryDigest(loaded), vector.registry_digest);
+        if (vector.expect_protocol_version) {
+          assert.equal(loaded.deployments[0].protocol_version, vector.expect_protocol_version);
+        }
+      } else {
+        expectCode(() => loadRegistryText(registry, loadedChains), code);
+      }
+      assertNotApproved(registry, chains);
+      return;
+    }
+    if (vector.loader === "check_call") {
+      const loaded = loadRegistryText(registry, loadChainsText(chains));
+      const call = () => checkCall(loaded, {
+        policy_id: vector.policy_id,
+        account: ACCOUNT,
+        identity: identity(ACCOUNT),
+        arguments: vector.arguments,
+      });
+      if (code == null) call();
+      else expectCode(call, code);
+      return;
+    }
+    assert.fail(vector.loader);
+  });
+}

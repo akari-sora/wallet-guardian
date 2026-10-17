@@ -352,3 +352,96 @@ def test_execution_package_does_not_open_send(api) -> None:
     assert "enabled_not_allowed" in manifest
     assert "live_pass" in manifest
     assert api.user_approval_granted(_text(), _chains_text()) is False
+
+
+def _negative_vectors() -> list[dict]:
+    payload = json.loads((ORACLE / "negative-vectors.json").read_text(encoding="utf-8"))
+    return payload["vectors"]
+
+
+def _apply_pairs(text: str, pairs: list[list[str]] | None) -> str:
+    for old, new in pairs or []:
+        if old not in text:
+            raise AssertionError(f"patch not found: {old[:80]!r}")
+        text = text.replace(old, new, 1)
+    return text
+
+
+def _expect_code(api, fn, code: str) -> None:
+    try:
+        fn()
+    except api.ExecutionRegistryError as exc:
+        assert exc.code == code
+        return
+    except Exception as exc:
+        raise AssertionError(f"expected {code}, got {type(exc).__name__}: {exc}") from exc
+    raise AssertionError(f"expected {code}")
+
+
+def _assert_not_approved(api, text: str, chains: str | None = None) -> None:
+    try:
+        granted = api.user_approval_granted(text, chains)
+    except Exception as exc:
+        raise AssertionError(f"user_approval_granted raised {type(exc).__name__}: {exc}") from exc
+    assert granted is False
+
+
+@pytest.mark.parametrize("vector", _negative_vectors(), ids=lambda item: item["id"])
+def test_negative_vector(api, vector: dict) -> None:
+    """Same crafted inputs and expected codes as the JS loader."""
+    chains = _apply_pairs(_chains_text(), vector.get("chains_replace"))
+    registry = _apply_pairs(_text(), vector.get("registry_replace"))
+    code = vector.get("code")
+    loader = vector["loader"]
+    if loader == "parse":
+        raw = vector["input"]
+        if code is None:
+            api.parse_strict_json(raw)
+        else:
+            _expect_code(api, lambda: api.parse_strict_json(raw), code)
+        _assert_not_approved(api, raw)
+        return
+    if loader == "chains":
+        if code is None:
+            api.load_chains_text(chains)
+        else:
+            _expect_code(api, lambda: api.load_chains_text(chains), code)
+        _assert_not_approved(api, registry, chains)
+        return
+    if loader == "registry":
+        loaded_chains = api.load_chains_text(chains)
+
+        def load_registry():
+            return api.load_registry_text(registry, loaded_chains)
+
+        if code is None:
+            loaded = load_registry()
+            if "expect_urls" in vector:
+                urls = [item["url"] for item in loaded["deployments"][0]["official_sources"]]
+                assert urls == vector["expect_urls"]
+            if "registry_digest" in vector:
+                assert api.registry_digest(loaded) == vector["registry_digest"]
+            if "expect_protocol_version" in vector:
+                assert loaded["deployments"][0]["protocol_version"] == vector["expect_protocol_version"]
+        else:
+            _expect_code(api, load_registry, code)
+        _assert_not_approved(api, registry, chains)
+        return
+    if loader == "check_call":
+        loaded = api.load_registry_text(registry, api.load_chains_text(chains))
+
+        def call() -> None:
+            api.check_call(
+                loaded,
+                policy_id=vector["policy_id"],
+                account=ACCOUNT,
+                identity=_identity(ACCOUNT),
+                arguments=vector["arguments"],
+            )
+
+        if code is None:
+            call()
+        else:
+            _expect_code(api, call, code)
+        return
+    raise AssertionError(loader)

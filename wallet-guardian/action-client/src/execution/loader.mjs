@@ -20,6 +20,7 @@ import {
   TRUST_NOTE,
   TRUST_PATH,
   TRUST_VERSION,
+  compareCodePoints,
   expectObject,
   rejectInertApproval,
   requireBlockHash,
@@ -64,7 +65,25 @@ const CANDIDATE_REASONS = new Set([
 ]);
 
 function sameJson(left, right) {
-  return JSON.stringify(left) === JSON.stringify(right);
+  if (left === right) return true;
+  if (typeof left !== typeof right) return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index += 1) {
+      if (!sameJson(left[index], right[index])) return false;
+    }
+    return true;
+  }
+  if (isPlain(left) || isPlain(right)) {
+    if (!isPlain(left) || !isPlain(right)) return false;
+    const leftKeys = Object.keys(left);
+    if (leftKeys.length !== Object.keys(right).length) return false;
+    for (const key of leftKeys) {
+      if (!Object.prototype.hasOwnProperty.call(right, key) || !sameJson(left[key], right[key])) return false;
+    }
+    return true;
+  }
+  return false;
 }
 
 export function loadChainsText(text) {
@@ -623,17 +642,20 @@ function unique(items, key, label) {
 }
 
 function compareText(left, right) {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
+  return compareCodePoints(left, right);
 }
 
 function compareUnclassified(left, right) {
   const leftKey = [left.protocol_id, left.network_id, left.role, left.source_file, left.address, left.chain_id == null ? -1 : left.chain_id];
   const rightKey = [right.protocol_id, right.network_id, right.role, right.source_file, right.address, right.chain_id == null ? -1 : right.chain_id];
   for (let index = 0; index < leftKey.length; index += 1) {
-    if (leftKey[index] < rightKey[index]) return -1;
-    if (leftKey[index] > rightKey[index]) return 1;
+    if (typeof leftKey[index] === "number") {
+      if (leftKey[index] < rightKey[index]) return -1;
+      if (leftKey[index] > rightKey[index]) return 1;
+      continue;
+    }
+    const diff = compareCodePoints(leftKey[index], rightKey[index]);
+    if (diff !== 0) return diff;
   }
   return 0;
 }
@@ -642,8 +664,8 @@ function compareSkipped(left, right) {
   const leftKey = [left.source_file, left.protocol_id ?? "", left.role ?? "", left.reason, left.address ?? ""];
   const rightKey = [right.source_file, right.protocol_id ?? "", right.role ?? "", right.reason, right.address ?? ""];
   for (let index = 0; index < leftKey.length; index += 1) {
-    if (leftKey[index] < rightKey[index]) return -1;
-    if (leftKey[index] > rightKey[index]) return 1;
+    const diff = compareCodePoints(leftKey[index], rightKey[index]);
+    if (diff !== 0) return diff;
   }
   return 0;
 }
