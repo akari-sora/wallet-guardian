@@ -14,7 +14,7 @@ A subcommand path the catalog does not list is class D. Do not run it. A flag th
 
 Top-level `guardian --help` and `guardian --version`, and `guardian <subcommand> --help`, are class A. They exit while arguments are parsed, before the command runs, and they do not open a database or a socket. This does not relax any class D rule. Do not call `--help` under `relations` or any other class D path. `relations` is class D in every form. `guardian --version` prints only the version and exits 0.
 
-An owner's agreement covers the one run the owner answered; it is not standing consent. Agreement to any class B or class C command covers that one execution only. It is not standing consent.
+Agreement to any class B or class C command covers that one execution only. It is not standing consent for later runs, other commands, or other classes.
 
 - `A_read_only_offline`: no network and no local writes. Commands that open a database are not in this class.
 - `B_network_requires_owner_ok`: contacts a configured host. Run it only after the owner agrees to that read. Some of these commands also write local files.

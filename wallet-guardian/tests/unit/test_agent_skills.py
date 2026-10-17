@@ -57,8 +57,17 @@ _PASTED_SECRET = (
     "do not use it, repeat it, store it, or pass it to a command. Tell the owner that it is now exposed. "
     "API keys belong in the owner's own environment, set by the owner."
 )
-_ONE_RUN_CONSENT = (
+_SAFETY_ONE_RUN_CONSENT = (
     "Agreement to any class B or class C command covers that one execution only. It is not standing consent."
+)
+_ONE_RUN_CONSENT = (
+    "Agreement to any class B or class C command covers that one execution only. "
+    "It is not standing consent for later runs, other commands, or other classes."
+)
+_DO_NOT_GUESS = "Do not guess a command. Do not install or upgrade. Wait for the next release."
+_RC4_WHEEL_STOPS = (
+    "The rc.4 wheel on the release page does not include `capabilities`. "
+    "Wait for the next release. On rc.4 the bot stops at the first step."
 )
 _NEUTRAL_FLAG_EXAMPLE = re.compile(r"`(--[A-Za-z0-9-]+)` on `([a-z0-9-]+)`")
 _CLASSES = {
@@ -604,6 +613,37 @@ def _synthetic_skill(body: str) -> str:
     )
 
 
+_GROK_HOST = (
+    "This file inlines the reference pages because a Grok Bot skill upload keeps only this text. "
+    "The cloud computer for that account must already have the `guardian` command installed. "
+    "Bots on the same account share that computer and its data. "
+    "This host integration was not exercised (未實測)."
+)
+
+
+def _expected_synthetic(body: list[str]) -> str:
+    return (
+        "\n".join(
+            [
+                "---",
+                "name: wallet-guardian",
+                'description: "synthetic"',
+                "license: AGPL-3.0-only",
+                'compatibility: "synthetic"',
+                "metadata:",
+                '  version: "0.4.0rc4"',
+                "---",
+                "",
+                *body,
+                "## Grok Bot host",
+                "",
+                _GROK_HOST,
+            ]
+        )
+        + "\n"
+    )
+
+
 def test_render_grok_rejects_headings_that_would_swallow_later_text() -> None:
     tool = _load("build_agent_skills_swallow", ROOT / "tools" / "build_agent_skills.py")
     swallowing = _synthetic_skill(
@@ -727,6 +767,143 @@ def test_render_grok_keeps_frontmatter_indentation_and_fence_headings() -> None:
         ]
     ) + "\n"
     assert rendered == expected
+
+
+def test_render_grok_keeps_tilde_lines_inside_a_backtick_fence() -> None:
+    tool = _load("build_agent_skills_backtick_tilde", ROOT / "tools" / "build_agent_skills.py")
+    skill = _synthetic_skill(
+        "# Doc\n"
+        "\n"
+        "## Section\n"
+        "\n"
+        "```\n"
+        "~~~\n"
+        "# Fake\n"
+        "~~~\n"
+        "```\n"
+        "\n"
+        "See [Safety rules](references/safety.md).\n"
+    )
+    rendered = tool.render_grok(skill, {"references/safety.md": "# Safety\n\nKept.\n"}, "0.4.0rc4")
+    assert rendered == _expected_synthetic(
+        [
+            "# Doc",
+            "",
+            "## Section",
+            "",
+            "```",
+            "~~~",
+            "# Fake",
+            "~~~",
+            "```",
+            "",
+            "See Safety rules.",
+            "",
+            "### Safety",
+            "",
+            "Kept.",
+            "",
+        ]
+    )
+
+
+def test_render_grok_keeps_short_backticks_inside_a_longer_fence() -> None:
+    tool = _load("build_agent_skills_backtick_len", ROOT / "tools" / "build_agent_skills.py")
+    skill = _synthetic_skill(
+        "# Doc\n"
+        "\n"
+        "````\n"
+        "```\n"
+        "## X\n"
+        "````\n"
+        "\n"
+        "See [Safety rules](references/safety.md).\n"
+    )
+    rendered = tool.render_grok(skill, {"references/safety.md": "# Safety\n\nKept.\n"}, "0.4.0rc4")
+    assert rendered == _expected_synthetic(
+        [
+            "# Doc",
+            "",
+            "````",
+            "```",
+            "## X",
+            "````",
+            "",
+            "See Safety rules.",
+            "",
+            "## Safety",
+            "",
+            "Kept.",
+            "",
+        ]
+    )
+
+
+def test_render_grok_does_not_open_a_backtick_fence_whose_info_has_a_backtick() -> None:
+    tool = _load("build_agent_skills_backtick_info", ROOT / "tools" / "build_agent_skills.py")
+    skill = _synthetic_skill(
+        "# Doc\n"
+        "\n"
+        "``` ```\n"
+        "\n"
+        "## Section\n"
+        "\n"
+        "See [Safety rules](references/safety.md).\n"
+    )
+    rendered = tool.render_grok(skill, {"references/safety.md": "# Safety\n\nKept.\n"}, "0.4.0rc4")
+    assert rendered == _expected_synthetic(
+        [
+            "# Doc",
+            "",
+            "``` ```",
+            "",
+            "## Section",
+            "",
+            "See Safety rules.",
+            "",
+            "### Safety",
+            "",
+            "Kept.",
+            "",
+        ]
+    )
+
+
+def test_render_grok_rejects_a_single_dash_setext_underline() -> None:
+    tool = _load("build_agent_skills_setext_dash", ROOT / "tools" / "build_agent_skills.py")
+    skill = _synthetic_skill("# Doc\n\n## Section\n\nSee [Safety rules](references/safety.md).\n")
+    with pytest.raises(ValueError, match="fence or an indented heading"):
+        tool.render_grok(skill, {"references/safety.md": "Title\n-\n"}, "0.4.0rc4")
+
+
+def test_render_grok_rejects_outer_setext_and_allows_it_inside_a_fence() -> None:
+    tool = _load("build_agent_skills_outer_setext", ROOT / "tools" / "build_agent_skills.py")
+    bare = _synthetic_skill("# Doc\n\nTitle\n---\n\n## Section\n\nSee [Safety rules](references/safety.md).\n")
+    with pytest.raises(ValueError, match="setext underline"):
+        tool.render_grok(bare, {"references/safety.md": "# Safety\n\nBody.\n"}, "0.4.0rc4")
+    fenced = _synthetic_skill(
+        "# Doc\n\n~~~\nTitle\n---\n~~~\n\n## Section\n\nSee [Safety rules](references/safety.md).\n"
+    )
+    rendered = tool.render_grok(fenced, {"references/safety.md": "# Safety\n\nBody.\n"}, "0.4.0rc4")
+    assert rendered == _expected_synthetic(
+        [
+            "# Doc",
+            "",
+            "~~~",
+            "Title",
+            "---",
+            "~~~",
+            "",
+            "## Section",
+            "",
+            "See Safety rules.",
+            "",
+            "### Safety",
+            "",
+            "Body.",
+            "",
+        ]
+    )
 
 
 def test_render_grok_keeps_one_trailing_punctuation() -> None:
@@ -918,7 +1095,7 @@ def test_skill_scopes_consent_and_refuses_pasted_secrets() -> None:
     assert _NO_D_RELAX in safety
     operating = safety.split("## Operating the installed command\n", 1)[1].split("\n## ", 1)[0]
     assert _PASTED_SECRET in operating
-    assert _ONE_RUN_CONSENT in operating
+    assert _SAFETY_ONE_RUN_CONSENT in operating
     assert "describe how the installed CLI loads keys." in safety
     assert "does not open a file that holds one." in safety
     guide = (ROOT / "docs" / "guide-agents.md").read_text(encoding="utf-8")
@@ -966,6 +1143,16 @@ def test_grok_paste_block_forbids_relations() -> None:
     assert "Run `guardian capabilities` first." in block
     assert "invalid choice" in block
     assert "If the `guardian` command does not exist, stop." in block
+    assert block.count(_DO_NOT_GUESS) == 2
+
+
+def test_grok_guide_says_rc4_wheel_stops_before_a_later_command() -> None:
+    text = (ROOT / "docs" / "guide-grok-bot.md").read_text(encoding="utf-8")
+    start = text.index("```text\n")
+    end = text.index("\n```", start)
+    outside = text[:start] + text[end:]
+    assert _RC4_WHEEL_STOPS in outside
+    assert _RC4_WHEEL_STOPS not in text[start:end]
 
 
 def test_agent_guide_installs_from_a_checkout_without_uv_run() -> None:

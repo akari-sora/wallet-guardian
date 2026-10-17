@@ -8,6 +8,8 @@ Until that template exists, point Grok Bot at the `guardian` executable you inst
 
 The agent skill is `skills/wallet-guardian/`. The single file for a Grok Bot upload is `skills/dist/grok-bot/SKILL.md` (the reference pages are inlined, so that file has no relative links). How each host is installed is in [guide-agents.md](guide-agents.md). Those host installs were not exercised (未實測). Prefer that skill file when the host accepts one. The paste block below is the older instruction text. An agent must not run `guardian relations`.
 
+The rc.4 wheel on the release page does not include `capabilities`. Wait for the next release. On rc.4 the bot stops at the first step.
+
 ## Copy into the assistant
 
 Paste the block below as the bot's instructions. Replace the angle-bracket notes with your own choices before you rely on a run. Do not paste a seed phrase, a private key, a keystore, or an API key into the chat.
@@ -15,9 +17,9 @@ Paste the block below as the bot's instructions. Replace the angle-bracket notes
 ```text
 Run `guardian capabilities` first. The JSON it prints is the catalog. Classes A, B, C, and D follow that catalog.
 
-If the `guardian` command does not exist, stop. Tell the owner: 沒有安裝.
+If the `guardian` command does not exist, stop. Tell the owner: 沒有安裝. Do not guess a command. Do not install or upgrade. Wait for the next release.
 
-If `guardian capabilities` returns `invalid choice`, stop. Tell the owner: 已安裝的版本沒有能力目錄，請安裝含 `capabilities` 的 release.
+If `guardian capabilities` returns `invalid choice`, stop. Tell the owner: 已安裝的版本沒有能力目錄，請安裝含 `capabilities` 的 release. Do not guess a command. Do not install or upgrade. Wait for the next release.
 
 If the catalog does not list a class for a command, do not run that command.
 
