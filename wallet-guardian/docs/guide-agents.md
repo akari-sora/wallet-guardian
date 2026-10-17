@@ -2,7 +2,7 @@
 
 This page says how an agent should call the installed `guardian` command. The package in this tree is `wallet-guardian-monitor` `0.4.0rc6`. The skill text is `skills/wallet-guardian/`. Host installs below were not exercised (未實測).
 
-see `## Hard limits` in `skills/wallet-guardian/SKILL.md`.
+See `## Hard limits` in `skills/wallet-guardian/SKILL.md`.
 
 ## Before any other command
 
@@ -10,7 +10,7 @@ Run `guardian capabilities`. It prints the package version, a class for every su
 
 `guardian --version` does not show whether `capabilities` is present. Use the result of `guardian capabilities`.
 
-see `## Classes` in `skills/wallet-guardian/SKILL.md`.
+See `## Classes` in `skills/wallet-guardian/SKILL.md`.
 
 There is no MCP server in this tree.
 
@@ -48,7 +48,7 @@ Do not add a separate `grok` destination. That would copy the same skill twice. 
 
 Grok Bot uploads one `SKILL.md`. The flattened file is `skills/dist/grok-bot/SKILL.md`. It inlines the command catalog and the safety page, so it has no relative links. Add it with the host's skill command, or paste the file. The cloud computer for that account must already have `guardian` installed. Bots on the same account share that computer and its data. This host path was not exercised (未實測).
 
-The older paste block is still in [guide-grok-bot.md](guide-grok-bot.md). Prefer the skill file when the host accepts one.
+The paste block in [guide-grok-bot.md](guide-grok-bot.md) has rules generated from the same skill. Prefer the skill file when the host accepts one.
 
 ## What was not exercised
 

@@ -10,6 +10,10 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 
 ## [Unreleased]
 
+### Fixed
+
+- AG-6 (docs and skill generator only): bind owner agreement to the configured platform user ID; display names, handles, quotes, and relayed messages do not establish ownership, and missing sender or owner IDs fail closed. Configure the owner before the first `guardian capabilities` call in the skill, flattened Grok skill, and paste block. Require renewed agreement when a class A intent path or file name changes, and use a different directory named by the owner. Make generator `--check` compare bytes (including rejecting CRLF), reject unproduced files anywhere under `skills/dist`, and check setup quote lines exactly inside the paste block. Describe the paste block as generated and capitalize safety-reference sentences. Add regression tests for these rules and drift cases; monitoring code is unchanged.
+
 ## [0.4.0rc6] - 2026-10-17
 
 Preview channel. No package-index upload is performed. The monitor is read-only: it does not sign, build a transaction, or broadcast. Wheel: `wallet_guardian_monitor-0.4.0rc6-py3-none-any.whl`.
