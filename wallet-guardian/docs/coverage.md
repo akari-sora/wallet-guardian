@@ -1,6 +1,6 @@
 # 覆蓋範圍
 
-> 歷史紀錄。下面「2026-10-07」一節描述的是套件 `0.3.0` 當天的 Lista／BSC 路徑，以及那天記下來的離線測試數字。現況的套件版本是 `0.4.0rc5`（`pyproject.toml`）。rc.5 的覆蓋以 `docs/coverage-matrix.md` 為準。DeBank、Zerion，以及模擬用的 `TENDERLY_ACCESS_KEY`，沒有會被 `run-once` 呼叫的 adapter，設了 key 也不會呼叫。`examples/monitor.json` 的 Base 日誌路由仍會走 `tenderly_base`（`TENDERLY_BASE_URL`）。Alchemy 只出現在 `examples/monitor.json` 的 Base 路由，`guardian init` 不會加。
+> 歷史紀錄。下面「2026-10-07」一節描述的是套件 `0.3.0` 當天的 Lista／BSC 路徑，以及那天記下來的離線測試數字。現況的套件版本是 `0.4.0rc6`（`pyproject.toml`）。rc.6 的覆蓋以 `docs/coverage-matrix.md` 為準。DeBank、Zerion，以及模擬用的 `TENDERLY_ACCESS_KEY`，沒有會被 `run-once` 呼叫的 adapter，設了 key 也不會呼叫。`examples/monitor.json` 的 Base 日誌路由仍會走 `tenderly_base`（`TENDERLY_BASE_URL`）。Alchemy 只出現在 `examples/monitor.json` 的 Base 路由，`guardian init` 不會加。
 
 更新時間：2026-10-07。離線測試，加上先前一次唯讀 `doctor` / `run-once`（約 13:28 Asia/Taipei）。這次沒有重跑鏈上讀取，也沒有帶 Etherscan key，所以沒有新的 chainlist LIVE_PASS。私人餘額只留在 gitignore 的 `evidence/`。套件版本是 0.3.0。客戶端建置 `action-client@0.3.0` 已通過 `npm run build`。
 

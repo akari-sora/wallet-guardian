@@ -2,7 +2,7 @@
 
 This note is the threat model for the read-only monitor as a single-operator, self-hosted program. It is not a pentest report and it is not a promise that every provider is honest. 授權：AGPL-3.0-only（見 `LICENSE`）。
 
-The installable distribution is `wallet-guardian-monitor`. The import package and the CLI stay `guardian`. The wheel file name is `wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl`. Whether git tag `v0.4.0-rc.5` is published, see GitLab releases.
+The installable distribution is `wallet-guardian-monitor`. The import package and the CLI stay `guardian`. The wheel file name is `wallet_guardian_monitor-0.4.0rc6-py3-none-any.whl`. Whether git tag `v0.4.0-rc.6` is published, see GitLab releases.
 
 <a id="monitor-does-not-sign"></a>
 

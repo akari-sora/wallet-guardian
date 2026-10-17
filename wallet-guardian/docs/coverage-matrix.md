@@ -2,7 +2,7 @@
 
 Date of this preview: 2026-10-09. License: AGPL-3.0-only (see `LICENSE`).
 
-The installable distribution is `wallet-guardian-monitor` (wheel `wallet_guardian_monitor-0.4.0rc5-py3-none-any.whl`). Whether git tag `v0.4.0-rc.5` is published, see GitLab releases. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`). `--no-send` forbids sends. The canary is NOT_RUN. How the monitor differs from the optional Action Client is stated once in `docs/threat-model.md`.
+The installable distribution is `wallet-guardian-monitor` (wheel `wallet_guardian_monitor-0.4.0rc6-py3-none-any.whl`). Whether git tag `v0.4.0-rc.6` is published, see GitLab releases. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`). `--no-send` forbids sends. The canary is NOT_RUN. How the monitor differs from the optional Action Client is stated once in `docs/threat-model.md`.
 
 This matrix is the preview claim for chain × capability. It is derived from `config/source-capabilities/*.json`, `config/chains`, `examples/monitor.json`, `src/guardian/sources/`, `src/guardian/protocols/`, `docs/api-keys.md`, `docs/mcm-01/network-tiers.plan.json`, and `docs/coverage.md`. The live probes below are recorded facts. This document does not re-run them. No monitored address, API key, or keyed URL appears here.
 
@@ -146,7 +146,7 @@ Not added: Bitcoin Core `rss.xml` (593 KB) is refused by the parser's item cap. 
 | configured-evm | positions.uxlink | UXLINK balanceOf over the public asset file and evm_rpc | not_verified | no keyed UXLINK source | not_verified | not_verified |
 | solana-mainnet | positions.stake | solana_stake plugin over Solana RPC | not_verified | no keyed stake source | not_verified | not_verified |
 | * | prices.usd | CoinGecko public tier when COINGECKO_API_KEY is absent | not_verified | optional COINGECKO_API_KEY demo tier | not_verified | not_verified |
-| * | address_risk | GoPlus without GOPLUS_API_KEY | credential_missing | not called by run-once in rc.5 | credential_missing | blocked |
+| * | address_risk | GoPlus without GOPLUS_API_KEY | credential_missing | not called by run-once in rc.6 | credential_missing | blocked |
 | * | sanctions | public OFAC feed named by OFAC_SLS_FEED; no API key | not_verified | no keyed OFAC source | not_verified | not_verified |
 | * | address_risk | not enabled in examples/monitor.json | not_verified | Chainabuse would need an operator key this package does not configure | not_verified | not_verified |
 | * | positions | not enabled in examples/monitor.json | not_verified | DeBank is not a configured keyed source | not_verified | not_verified |
@@ -972,7 +972,7 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "capability": "address_risk",
       "no_key_path": "GoPlus without GOPLUS_API_KEY",
       "no_key_status": "credential_missing",
-      "keyed_path": "not called by run-once in rc.5",
+      "keyed_path": "not called by run-once in rc.6",
       "keyed_status": "credential_missing",
       "status": "blocked",
       "capability_files": [

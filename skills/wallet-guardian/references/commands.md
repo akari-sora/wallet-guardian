@@ -2,7 +2,7 @@
 
 Generated from wallet-guardian/src/guardian/_resources/agent-capabilities.json. Do not edit by hand.
 
-Package version in this catalog: `0.4.0rc5`.
+Package version in this catalog: `0.4.0rc6`.
 
 Run `guardian capabilities` to print this catalog from the installed command. An agent must not treat a gap as safe, as zero, or as complete.
 

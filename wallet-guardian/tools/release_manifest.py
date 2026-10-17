@@ -5,7 +5,7 @@ one sdist, ``constraints.txt``, and optional ``SHA256SUMS``. This tool hashes
 those files, records the runtime content hash, and writes ``published: false``
 and ``tag: null``. It does not upload, tag, or open a socket.
 
-PEP 440 ``0.4.0rc5`` maps to ``v0.4.0-rc.5``. This tool does not create that
+PEP 440 ``0.4.0rc6`` maps to ``v0.4.0-rc.6``. This tool does not create that
 tag. A request to publish, a URL argument, or a set credential variable
 refuses the run.
 """
@@ -60,7 +60,7 @@ def repo_root() -> Path:
 
 
 def tag_name_for_pep440(version: str) -> str | None:
-    """Map ``0.4.0rc5`` to ``v0.4.0-rc.5``. Other versions return None."""
+    """Map ``0.4.0rc6`` to ``v0.4.0-rc.6``. Other versions return None."""
     match = _RC.fullmatch(version)
     if match is None:
         return None
