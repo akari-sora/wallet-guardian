@@ -257,9 +257,58 @@ def _demote_headings(text: str, shift: int) -> str:
     return "\n".join(lines)
 
 
+def _literal_spans(text: str) -> list[tuple[int, int]]:
+    """Spans of fenced blocks and indented code lines after any frontmatter."""
+    spans: list[tuple[int, int]] = []
+    open_fence: tuple[str, int] | None = None
+    fence_start: int | None = None
+    offset = _frontmatter_body_start(text)
+    for line in text[offset:].splitlines(keepends=True):
+        raw = line.removesuffix("\n").removesuffix("\r")
+        if open_fence is not None:
+            if _step_fence(raw, open_fence) is None:
+                spans.append((fence_start if fence_start is not None else offset, offset + len(line)))
+                open_fence = None
+                fence_start = None
+            offset += len(line)
+            continue
+        if _is_indented_code(raw):
+            spans.append((offset, offset + len(line)))
+            offset += len(line)
+            continue
+        opened = _step_fence(raw, None)
+        if opened is not None:
+            open_fence = opened
+            fence_start = offset
+        offset += len(line)
+    if open_fence is not None and fence_start is not None:
+        spans.append((fence_start, offset))
+    return spans
+
+
+def _span_covers(index: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start <= index < end for start, end in spans)
+
+
+def _outside_literals(text: str) -> str:
+    parts: list[str] = []
+    cursor = 0
+    for start, end in _literal_spans(text):
+        parts.append(text[cursor:start])
+        cursor = end
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
 def _validate_reference_links(skill: str) -> None:
-    """A reference link ends its line, with at most one punctuation mark."""
+    """A reference link ends its line, with at most one punctuation mark.
+
+    A link inside a fence or an indented code line is an example, not an include.
+    """
+    spans = _literal_spans(skill)
     for match in _REF_LINK.finditer(skill):
+        if _span_covers(match.start(), spans):
+            continue
         newline = skill.find("\n", match.end())
         tail = skill[match.end():] if newline < 0 else skill[match.end():newline]
         tail = tail.removesuffix("\r")
@@ -269,7 +318,11 @@ def _validate_reference_links(skill: str) -> None:
 
 
 def _reject_unhandled_reference(text: str, target: str) -> None:
-    """Fences, indented code, empty ATX headings, and setext underlines are rejected."""
+    """Fences, indented code, empty ATX headings, setext underlines, and HTML comments are rejected."""
+    if "<!--" in text:
+        raise ValueError(
+            f"{target} has an HTML comment, which can hide text such as a heading from the inlined skill"
+        )
     for line in text.splitlines():
         if (
             _is_fence_line(line)
@@ -331,13 +384,16 @@ def _outer_content_follows(skill: str, match_end: int, parent_level: int) -> boo
 
 
 def render_grok(skill: str, references: dict[str, str], catalog_version: str) -> str:
-    """Inline reference pages. The result has no relative links."""
+    """Inline reference pages. Links in a fence or an indented code line stay literal."""
     if _frontmatter_version(skill) != catalog_version:
         raise ValueError("skill metadata.version does not match the catalog")
     _validate_reference_links(skill)
     _reject_outer_setext(skill)
+    literal_spans = _literal_spans(skill)
 
     def replace(match: re.Match[str]) -> str:
+        if _span_covers(match.start(), literal_spans):
+            return match.group(0)
         label = match.group(1)
         target = match.group(2)
         punct = match.group(3) or ""
@@ -360,9 +416,10 @@ def render_grok(skill: str, references: dict[str, str], catalog_version: str) ->
         return f"{label}{punct}\n\n{body}\n"
 
     flattened = _LINK.sub(replace, skill).rstrip() + "\n\n" + _GROK_NOTE.strip() + "\n"
-    if "](" in flattened:
+    visible = _outside_literals(flattened)
+    if "](" in visible:
         raise ValueError("grok skill still has a markdown link")
-    if "references/" in flattened:
+    if "references/" in visible:
         raise ValueError("grok skill still names a references path")
     for line in flattened.splitlines():
         if line.strip() and set(line.strip()) <= _ORPHAN_PUNCT:

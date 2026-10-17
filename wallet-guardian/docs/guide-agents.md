@@ -10,7 +10,7 @@ If the owner pastes a seed phrase, private key, keystore, or API key into the ch
 
 Run `guardian capabilities`. It prints the package version, a class for every subcommand, and the exit-code map. It does not open a socket and it does not write a file. If this page and that JSON disagree, trust the command. The catalog is the source.
 
-A subcommand path the catalog does not list is class D. Do not run it. A flag that appears in any variant id of a subcommand must occur only in a combination that matches one listed variant exactly. Any other combination is class D. Do not run it. A flag that does not appear in any variant id of that subcommand does not change the class, for example `--db` on `snapshot`, `--tenant` on `init`, and `--news-input` on `run-once`.
+A subcommand path the catalog does not list is class D. Do not run it. A flag that appears in any variant id of a subcommand must occur only in a combination that matches one listed variant exactly. Any other combination is class D. Do not run it. A flag that does not appear in any variant id of that subcommand does not change the class, for example `--db` on `snapshot`, `--tenant` on `init`, and `--news-input` on `run-once`. A flag must match the spelling that --help lists exactly. Treat any abbreviated flag as class D.
 
 Top-level `guardian --help` and `guardian --version`, and `guardian <subcommand> --help`, are class A. They exit while arguments are parsed, before the command runs, and they do not open a database or a socket. This does not relax any class D rule. Do not call `--help` under `relations` or any other class D path. `relations` is class D in every form. `guardian --version` prints only the version and exits 0.
 
