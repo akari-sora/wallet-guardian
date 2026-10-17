@@ -2,7 +2,7 @@
 
 This page says how an agent should call the installed `guardian` command. The package in this tree is `wallet-guardian-monitor` `0.4.0rc5`. The skill text is `skills/wallet-guardian/`. Host installs below were not exercised (未實測).
 
-見 Hard limits.
+see `## Hard limits` in `skills/wallet-guardian/SKILL.md`.
 
 ## Before any other command
 
@@ -10,7 +10,7 @@ Run `guardian capabilities`. It prints the package version, a class for every su
 
 `guardian --version` does not show whether `capabilities` is present. Use the result of `guardian capabilities`.
 
-見 Classes.
+see `## Classes` in `skills/wallet-guardian/SKILL.md`.
 
 There is no MCP server in this tree.
 

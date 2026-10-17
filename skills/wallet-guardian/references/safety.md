@@ -47,7 +47,7 @@ Do not claim that the 72-hour shadow validation is finished, that CI passed, or 
 
 ## Local database
 
-見 Classes.
+see `## Classes` in `skills/wallet-guardian/SKILL.md`.
 
 ## relations
 
@@ -55,9 +55,9 @@ An agent must never call `guardian relations`, including inbound, expand, and dr
 
 ## Operating the installed command
 
-The lines `Load API keys from the environment or gitignored .env.local` and `The installed CLI reads them only from environment variables, the gitignored .env.local, or the secret profile JSON file whose path an environment variable gives` describe how the installed CLI loads keys. 見 Hard limits.
+The lines `Load API keys from the environment or gitignored .env.local` and `The installed CLI reads them only from environment variables, the gitignored .env.local, or the secret profile JSON file whose path an environment variable gives` describe how the installed CLI loads keys. see `## Hard limits` in `skills/wallet-guardian/SKILL.md`.
 
-見 Classes.
+see `## Classes` in `skills/wallet-guardian/SKILL.md`.
 
 - A task link is not execution authorization. It carries an opaque `ref_` and no other user's private state. Do not issue a public link without a fixed HTTPS origin. `fixed_https_origin` stays false until a real origin policy exists.
 - A Lista re-read uses the client-trusted RPC, proxy, and ABI. Passing that re-read does not write `preflight_ok`, does not mark an incomplete simulation as pass, and does not open send. Lock screen is not lock chain.

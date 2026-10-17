@@ -15,4 +15,5 @@ wallet-guardian/action-client/dist-mode-a/
 .env
 .env.*
 *.env
+.omc/
 wallet-guardian/action-client/.wrangler/

@@ -17,3 +17,4 @@ action-client/dist-mode-a/
 .env
 .env.*
 *.env
+.omc/
