@@ -16,7 +16,7 @@ This repository is a read-only monitor plus an unsigned action planner.
 - Load API keys from the environment or gitignored `.env.local`. Do not commit them. Etherscan V2 uses one `ETHERSCAN_API_KEY`.
 - A new smart account cannot operate a position that still sits on the original address.
 - A transaction hash is not completion. Waiting periods can be tracked and cannot be skipped.
-- Do not print API keys. Read them only from environment variables, the gitignored `.env.local`, or the secret profile JSON file whose path an environment variable gives (`MONITOR_SECRET_PROFILE` by default).
+- Do not read, print, or hand over API keys. The installed CLI reads them only from environment variables, the gitignored `.env.local`, or the secret profile JSON file whose path an environment variable gives (`MONITOR_SECRET_PROFILE` by default).
 - Limited execution credentials are secrets. Do not place them in this shared workspace.
 - Do not buy API plans, open a public port, or publish a webhook.
 
@@ -55,7 +55,7 @@ An agent must never call `guardian relations`, including inbound, expand, and dr
 
 ## Operating the installed command
 
-The lines `Load API keys from the environment or gitignored .env.local` and `Read them only from environment variables, the gitignored .env.local, or the secret profile JSON file whose path an environment variable gives` describe how the installed CLI loads keys. The agent does not read, print, edit, or hand over an API key, and does not open a file that holds one. The owner sets API keys in the environment.
+The lines `Load API keys from the environment or gitignored .env.local` and `The installed CLI reads them only from environment variables, the gitignored .env.local, or the secret profile JSON file whose path an environment variable gives` describe how the installed CLI loads keys. The agent does not read, print, edit, or hand over an API key, and does not open a file that holds one. The owner sets API keys in the environment.
 
 If the owner pastes a seed phrase, private key, keystore, or API key into the chat, do not use it, repeat it, store it, or pass it to a command. Tell the owner that it is now exposed. API keys belong in the owner's own environment, set by the owner.
 
