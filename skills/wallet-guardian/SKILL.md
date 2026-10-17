@@ -15,6 +15,8 @@ Use the installed `guardian` command. Do not reimplement the monitor and do not 
 
 Install only a wheel file whose SHA256 you have checked. The release page named in the project README is `https://gitlab.com/aa22396584/wallet-guardian/-/releases/v0.4.0-rc.4`. Download `SHA256SUMS` and every file it lists, including `constraints.txt`, into one directory, and check the hashes before install. The wheel for this tree is `wallet_guardian_monitor-0.4.0rc4-py3-none-any.whl`.
 
+The rc.4 wheel currently on that release page is older than this skill and does not include `capabilities`. Wait for the next release.
+
 Do not install `guardian` or `wallet-guardian-monitor` by name from any index (pip, uv, or pipx). A package in an index with one of those names is not this project.
 
 ```bash
@@ -25,18 +27,24 @@ uv tool install --constraints constraints.txt ./wallet_guardian_monitor-0.4.0rc4
 
 Run `guardian capabilities` before any other command. It prints the package version, every subcommand class, and the exit-code map. It does not open a socket and it does not write a file. Then run `guardian --version` if you need the version alone.
 
+If the `guardian` command does not exist, stop. Tell the owner: 沒有安裝. Do not guess a command. Do not install or upgrade. Wait for the next release.
+
+If `guardian` is installed and `guardian capabilities` returns `invalid choice`, stop. `v0.4.0-rc.4` and earlier releases do not include `capabilities`. Tell the owner: 已安裝的版本沒有能力目錄，請安裝含 `capabilities` 的 release. Do not guess a command. Do not install or upgrade. Wait for the next release.
+
 ## Classes
 
 - `A_read_only_offline`: no network and no local writes. An agent may run these when the owner asked for a local inspection. This includes `capabilities`, `alerts test` with the dry-run flag, `action plan`, `rescue`, `operation-coverage`, `workbench`, and `coverage` without a monitor profile. It does not include commands that open a database.
 - `B_network_requires_owner_ok`: contacts a configured host. Run only after the owner agrees to that read. This includes `doctor` with the live flag, `explain` with the refresh flag, `sources probe`, `providers` and `providers verify`, `egress-doctor`, `balance-probe` with the no-send flag, and `run-once` with a monitor profile and the no-send flag. `doctor` with the live flag, `providers`, and `providers verify` also write the doctor report files. `egress-doctor` exits 4 for any non-OK verdict, such as BLOCKED_EGRESS.
-- `C_writes_local_state_owner_decides`: writes local files or rows, or prints an install plan. Run only after the owner decides. Most view commands are in this class because opening the local monitor database can create it or apply additive migrations. Run those only with the owner's agreement, or after the owner has already agreed to local database maintenance. Offline `doctor` writes three report files in the state directory and is class C. `init` writes nothing until consent (the yes flag, or typing yes) and otherwise exits 2. `outbox pending` and `outbox ack` open the database. `outbox ack` records a local receipt and does not send. `self-check` creates a local database. `watchdog` with the no-send flag does not open a socket; it writes local health and alerts, so it is class C. `install-service` without apply prints a plan and exits 1 because nothing was installed. The output flag on that dry-run writes rendered units and still exits 1. That 1 is not a reason to pass apply. Passing apply together with dry-run is still forbidden.
+- `C_writes_local_state_owner_decides`: writes local files or rows, or prints an install plan. Run only after the owner decides. Most view commands are in this class because opening the local monitor database can create it or apply additive migrations. Run those only after the owner agrees to that run. Offline `doctor` writes three report files in the state directory and is class C. `init` writes nothing until consent (the yes flag, or typing yes) and otherwise exits 2. `outbox pending` and `outbox ack` open the database. `outbox ack` records a local receipt and does not send. `self-check` creates a local database. `watchdog` with the no-send flag does not open a socket; it writes local health and alerts, so it is class C. `install-service` without apply prints a plan and exits 1 because nothing was installed. The output flag on that dry-run writes rendered units and still exits 1. That 1 is not a reason to pass apply. Passing apply together with dry-run is still forbidden.
 - `D_never_from_agent`: do not run these. That includes every form of `relations` (including dry-run), `install-service` with apply (including apply together with dry-run), `run-once` or `watchdog` without the no-send flag, and the legacy paths `run-once` with the legacy config flag, `wallets discover`, `legacy-capture`, `compare-legacy`, and `replay`.
 
-If this summary and `guardian capabilities` disagree, trust the command. The catalog is the source.
+If this summary and `guardian capabilities` disagree, trust the command. The catalog is the source. A subcommand path the catalog does not list is class D. Do not run it. A flag that appears in any variant id of a subcommand must occur only in a combination that matches one listed variant exactly. Any other combination is class D. Do not run it. A flag that does not appear in any variant id of that subcommand does not change the class, for example `--db` on `snapshot`, `--tenant` on `init`, and `--news-input` on `run-once`.
+
+Top-level `guardian --help` and `guardian --version`, and `guardian <subcommand> --help`, are class A. They exit while arguments are parsed, before the command runs, and they do not open a database or a socket. This does not relax any class D rule. Do not call `--help` under `relations` or any other class D path. `relations` is class D in every form.
+
+An owner's agreement covers the one run the owner answered. It is not standing consent for later runs, other commands, or other classes. Ask again each time.
 
 ## Hard limits
-
-The longer list is [Safety rules](references/safety.md).
 
 - Do not ask for, store, or log a seed phrase, private key, keystore, or API key.
 - Do not sign, approve, revoke, claim, or broadcast. Do not call eth_sendTransaction, eth_sendRawTransaction, wallet_sendCalls, eth_sign, personal_sign, or eth_signTypedData.
@@ -46,10 +54,11 @@ The longer list is [Safety rules](references/safety.md).
 - Do not enable GoPlus or Chainabuse.
 - Do not claim that the 72-hour shadow validation is finished, that CI passed, or that this package was published on PyPI.
 - Call only flags that the installed CLI actually has.
+- If the owner pastes a seed phrase, private key, keystore, or API key into the chat, do not use it, repeat it, store it, or pass it to a command. Tell the owner that it is now exposed. API keys belong in the owner's own environment, set by the owner.
+- Do not read, print, or edit API keys or the files that hold them. The installed CLI reads them itself.
+- An agent must never call `guardian relations`, including inbound, expand, and dry-run. Only the owner may run it, by hand, in their own terminal.
 
-## relations
-
-An agent must never call `guardian relations`, including inbound, expand, and dry-run. Only the owner may run it, by hand, in their own terminal.
+The longer list is [Safety rules](references/safety.md).
 
 ## Catalog
 
