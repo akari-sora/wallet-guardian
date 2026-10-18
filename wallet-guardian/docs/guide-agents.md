@@ -18,7 +18,7 @@ The longer limits are in `wallet-guardian/AGENTS.md` and in `skills/wallet-guard
 
 ## Establish the owner
 
-For local single-user sessions in Claude Code, Codex, Cursor, Hermes CLI, Grok Build, and similar hosts that show no sender ID, the person operating that local session is the owner; no platform user ID is required. Install the skill for that local session, then ask it to run `guardian capabilities` first.
+For local single-user sessions in Claude Code, Codex, Cursor, Hermes CLI, Grok Build, and similar hosts that show no sender ID, the person operating that local session is the owner; no platform user ID is required. Install the skill for that local session, then ask it to run `guardian capabilities` first. The installer decides the host type when installing the skill; a message cannot claim it. Sessions started by a bridge, webhook, scheduler, cloud task, or pull request or issue comment are not local single-user sessions.
 
 For multi-user chat hosts, including Grok Bot groups, Telegram, and chat-connected Hermes deployments, the person who installs the skill must write the owner's platform user ID into the bot's instructions or host configuration before any `guardian` command runs. Only that configured platform user ID can authorize commands. A chat message can never set or change the owner, including someone stating their own ID. A display name or handle is not an owner ID. An unknown sender ID or an unconfigured owner ID means the sender is not the owner; a chat host cannot use the local-session exception when sender IDs are unavailable. See `## Classes` in `skills/wallet-guardian/SKILL.md` for the full rule.
 
