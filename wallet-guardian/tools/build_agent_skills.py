@@ -626,6 +626,16 @@ def splice_grok_paste_rules(guide: str, rules: str) -> str:
     return f"{head}\n{rules.strip()}\n{tail}"
 
 
+def _require_no_symlink(path: Path, top: Path) -> None:
+    """Reject a generated path when it, or any directory between top and it, is a symlink."""
+    for part in (path, *path.parents):
+        if part == top:
+            return
+        if part.is_symlink():
+            raise ValueError(f"generated path is a symlink: {part}")
+    raise ValueError(f"generated path is outside the repository: {path}")
+
+
 def generated_files(root: Path | None = None) -> dict[Path, str]:
     base = project_root() if root is None else Path(root)
     skill_root = base.parent / "skills" / "wallet-guardian"
@@ -634,8 +644,7 @@ def generated_files(root: Path | None = None) -> dict[Path, str]:
     guide_path = base / "docs" / "guide-grok-bot.md"
     # The guide is also an input: reject output symlinks before reading any of them.
     for path in (commands_output, grok_output, guide_path):
-        if path.is_symlink():
-            raise ValueError(f"generated path is a symlink: {path}")
+        _require_no_symlink(path, base.parent)
     catalog = load_catalog(base / "src" / "guardian" / "_resources" / "agent-capabilities.json")
     skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
     safety = (skill_root / "references" / "safety.md").read_text(encoding="utf-8")

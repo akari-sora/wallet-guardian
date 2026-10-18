@@ -12,6 +12,7 @@ import io
 import json
 import os
 import re
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -2470,6 +2471,41 @@ def test_generator_rejects_generated_symlinks_without_reading_targets(
         assert not target.exists()
     else:
         assert target.read_bytes() == original
+
+
+@pytest.mark.parametrize("directory", [
+    "skills/dist/grok-bot",
+    "skills/dist",
+    "skills/wallet-guardian/references",
+    "wallet-guardian/docs",
+])
+@pytest.mark.parametrize("check", [True, False])
+def test_generator_rejects_symlinked_parent_directories_without_reading_targets(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+    directory: str, check: bool,
+) -> None:
+    tool = _load("build_agent_skills_parent_symlinks", ROOT / "tools" / "build_agent_skills.py")
+    project, _, _ = _copy_generator_tree(tmp_path)
+    link = project.parent / directory
+    outside = tmp_path / "outside"
+    shutil.copytree(link, outside)
+    before = {path: path.read_bytes() for path in outside.rglob("*") if path.is_file()}
+    shutil.rmtree(link)
+    link.symlink_to(outside, target_is_directory=True)
+    original_open = Path.open
+
+    def guarded_open(self: Path, *args, **kwargs):
+        assert outside not in self.parents and link not in self.parents, "generator followed a symlinked directory"
+        return original_open(self, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", guarded_open)
+        assert tool.main((["--check"] if check else []) + ["--root", str(project)]) == 1
+    error = capsys.readouterr().err
+    assert "symlink" in error
+    assert str(link) in error
+    assert link.is_symlink()
+    assert {path: path.read_bytes() for path in outside.rglob("*") if path.is_file()} == before
 
 
 @pytest.mark.parametrize("quote", ["answers", "init"])
