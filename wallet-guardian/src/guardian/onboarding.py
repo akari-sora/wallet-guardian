@@ -614,6 +614,10 @@ def _share_source(source_id: str, source: Mapping[str, Any]) -> dict[str, Any]:
             "The machine hostname is not sent."
         )
         sends_addresses = True
+    elif adapter == "helius_parsed_events":
+        recipient = "Helius at the host named by " + endpoint_env
+        data = "This source is not called in this build, so the address is not sent, with or without a key."
+        sends_addresses = False
     elif keyed:
         recipient = _provider_name(adapter) + " at the host named by " + endpoint_env
         data = (

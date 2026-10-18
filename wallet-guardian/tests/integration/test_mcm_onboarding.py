@@ -288,6 +288,34 @@ def test_init_bitcoin_keyless_disclosure(tmp_path: Path, capsys: pytest.CaptureF
     assert "credential_missing" not in row["data"]
 
 
+@pytest.mark.parametrize("key_mode", ["none", "byo"])
+def test_init_solana_discloses_helius_uncalled(tmp_path: Path, capsys: pytest.CaptureFixture[str], key_mode: str) -> None:
+    """Init discloses RPC address reads, but Helius remains uncalled in either key mode."""
+    private = tmp_path / "private"
+    answers = _answers(key_mode=key_mode, accounts=[{
+        "address": "GvcqXpXpdjeM9VjC3YS8a4HZjCMwY7tuqmtBJ1QoWovM",
+        "family": "solana",
+        "label": "synthetic-solana",
+        "networks": ["solana-mainnet"],
+        "relationship": "watch_only",
+    }])
+    path = _write_answers(tmp_path / "answers.json", answers)
+    code, payload = _invoke(capsys, ["init", "--dir", str(private), "--from", str(path)])
+    assert code == 2
+    assert payload["status"] == "consent_required"
+    assert payload["wrote"] is False
+    assert not private.exists()
+    by_id = {row["source_id"]: row for row in payload["data_sharing"]}
+    assert by_id["rpc-solana-mainnet"]["sends_addresses"] is True
+    row = by_id["helius-parser"]
+    assert row["enabled"] is True
+    assert row["credential_env"] == "HELIUS_API_KEY"
+    assert row["sends_addresses"] is False
+    assert "not called" in row["data"]
+    assert "address is not sent" in row["data"]
+    assert "credential_missing" not in row["data"]
+
+
 def test_mcm_share_s5_03_private_perms(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """MCM-SHARE-S5-03. Private files stay owner-only, and env key values are not written."""
     monkeypatch.setenv("ETHERSCAN_API_KEY", FAKE_KEY)

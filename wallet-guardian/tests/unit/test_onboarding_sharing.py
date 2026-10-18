@@ -20,6 +20,19 @@ def test_esplora_discloses_addresses_to_configured_host(endpoint_env, credential
     assert "credential_missing" not in row["data"]
 
 
+@pytest.mark.parametrize("credential_env", [None, "HELIUS_API_KEY"])
+def test_helius_discloses_no_address_queries(credential_env):
+    source = {"adapter": "helius_parsed_events", "enabled": True, "endpoint_env": "HELIUS_URL"}
+    if credential_env is not None:
+        source["credential_env"] = credential_env
+    row = _share_source("helius-parser", source)
+    assert row["sends_addresses"] is False
+    assert row["recipient"] == "Helius at the host named by HELIUS_URL"
+    assert "not called" in row["data"]
+    assert "address is not sent" in row["data"]
+    assert "credential_missing" not in row["data"]
+
+
 @pytest.mark.parametrize("adapter,sends_addresses", [
     ("evm_rpc", True),
     ("solana_rpc", True),

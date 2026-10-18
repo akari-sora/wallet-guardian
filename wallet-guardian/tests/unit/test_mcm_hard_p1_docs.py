@@ -69,6 +69,13 @@ def test_esplora_docs_match_init_disclosure(filename: str) -> None:
     assert "summarized as not queried" not in text
 
 
+def test_cli_guide_documents_keyless_history_exceptions() -> None:
+    text = (ROOT / "docs" / "guide-cli.md").read_text(encoding="utf-8")
+    assert "no keyless history path is configured" not in text
+    assert "Bitcoin Esplora and TronGrid support keyless history reads" in text
+    assert "when their endpoint variables are set" in text
+
+
 def test_mcm_hard_p1_untrusted_text_is_data() -> None:
     """Controls are stripped, markup is escaped, and the result is truncated. Plain text is unchanged."""
     plain = "Documented Kinza pool note"
