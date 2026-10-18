@@ -3,33 +3,17 @@
  * These checks catch honest mistakes and injections that cannot change the release.
  * They do not stop an agent that can rewrite the deployed client (PLAN §3.1).
  */
-import { REGISTRY_ROLES, SELF_ROLES, UINT256_MAX } from "../model.mjs";
+import { REGISTRY_ROLES, SELF_ROLES } from "../model.mjs";
 import { decodeCall, encodeCall, leaves, parseSignature } from "./abi.mjs";
 import { loadAllowlist, REVOKED_ROLE } from "./allowlist.mjs";
 import { deniedSelectorCategory } from "./deny.mjs";
 import { refuse } from "./errors.mjs";
 import { bytesToHex, hexToBytes, isAddressHex, sameAddressHex } from "./hex.mjs";
 import { isAllowedSendMethod } from "./methods.mjs";
+import { ESCALATION_RULES } from "./rules.mjs";
 
 const TX_KEYS = new Set(["from", "to", "data", "value", "chainId"]);
 const EIP7702_KEYS = new Set(["authorizationList", "type"]);
-
-/** Escalation rules by canonical signature. ERC-721 `approve` uses ERC-20 semantics until S-4 (§3.5 L263). */
-const ESCALATION_RULES = Object.freeze({
-  "approve(address,uint256)": (values) => {
-    if (values[1] === UINT256_MAX) refuse("unlimited_approve");
-    if (values[1] !== 0n) refuse("nonzero_approve");
-  },
-  "setApprovalForAll(address,bool)": (values) => {
-    if (values[1] !== false) refuse("approval_for_all_true");
-  },
-  "approveDelegation(address,uint256)": (values) => {
-    if (values[1] !== 0n) refuse("nonzero_delegation");
-  },
-  "setAuthorization(address,bool)": (values) => {
-    if (values[1] !== false) refuse("authorization_true");
-  },
-});
 
 function deploymentKey(chainId, address) {
   return `${chainId}:${String(address).toLowerCase()}`;
