@@ -626,6 +626,26 @@ def test_avalanche_credential_refusal_names_routescan() -> None:
     assert "ETHERSCAN_API_KEY" in plain
 
 
+@pytest.mark.parametrize("source_id", ["routescan", "custom-routescan"])
+def test_walk_pages_routescan_failure_uses_adapter(source_id: str) -> None:
+    scan = SimpleNamespace(
+        deadline=None,
+        clock=lambda: 1_700_000_000.0,
+        started_at=1_700_000_000.0,
+        public_config=SimpleNamespace(document={"sources": {source_id: {"adapter": "routescan"}}}),
+    )
+    read = SimpleNamespace(blocked=False, reason="rate_limited", category="error", pagination_complete=False)
+
+    outcome = drive._walk_pages(
+        scan, [(100, 120)], 100, "wallet-1", "history.native_external", source_id,
+        True, lambda _start, _end: read, cursor=False,
+    )
+
+    assert outcome.refusal == "rate_limited"
+    assert outcome.partial is True
+    assert outcome.rows == []
+
+
 @pytest.mark.parametrize(
     ("fixture_body", "status_code", "expected_reason"),
     [
@@ -797,4 +817,3 @@ def test_recognized_success_accepts_ok_prefix_with_status_one_and_keeps_notok_or
         assert bad_read.pagination_complete is False
         assert bad_read.category != "empty"
         assert bad_read.cursor == "99"
-

@@ -284,11 +284,10 @@ def test_init_routescan_unset_base_discloses_and_contacts_default_origin(
         ["run-once", "--mcm-config", str(monitor_path), "--no-send"],
         backend=backend,
     )
-    assert code == (3 if report.get("status") == "degraded" else 0), report
+    assert code == 0, report
+    assert report["status"] == "ok"
     hosts = {(urlsplit(str(getattr(call, "url", ""))).hostname or "") for call in backend.calls}
-    assert "api.routescan.io" in hosts
-    assert "rpc-ethereum-mainnet.example.invalid" in hosts
-    assert not any("etherscan" in host or "blockscout" in host for host in hosts)
+    assert hosts == {"api.routescan.io", "rpc-ethereum-mainnet.example.invalid"}
 
 
 

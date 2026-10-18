@@ -827,7 +827,8 @@ def _walk_pages(scan, chunks, origin, wallet_id, capability, source_id, native, 
                     pending=_pending_snapshots(scan.candidates[before_candidates:]),
                 )
         leaves.append((start, end))
-    if source_id == "routescan" and capability == "history.native_external" and not leaves and hard and hard != "indexer_lag":
+    source = scan.public_config.document.get("sources", {}).get(source_id, {})
+    if source.get("adapter") == "routescan" and capability == "history.native_external" and not leaves and hard and hard != "indexer_lag":
         return _Outcome(refusal=hard, partial=True)
     if cursor:
         _finish(scan, capability, [(wallet_id, _owner_for(scan, wallet_id))], origin, int(scan.head), leaves, gaps, hard, stopped, "ok" if rows else "empty", source_id)
