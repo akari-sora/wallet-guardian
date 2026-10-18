@@ -107,13 +107,28 @@ def plan_not_supported(body: Any) -> bool:
     text = " ".join(parts)
     if "no transactions found" in text or "no records found" in text:
         return False
-    if "max rate limit reached" in text:
+    if "max rate limit reached" in text or "max calls per sec rate limit reached" in text:
         return False
     if "chain not supported" in text:
         return True
     if "not support" in text and ("free" in text or "plan" in text):
         return True
     return False
+
+
+def _recognized_success(body: Any) -> bool:
+    """Etherscan success page: status ``1``, message ``OK``, and a non-empty result list.
+
+    An empty list is complete only through the status ``0`` / ``No transactions found``
+    envelope. Any other shape stays a gap and must not move the cursor.
+    """
+    if not isinstance(body, dict) or str(body.get("status")) != "1":
+        return False
+    message = body.get("message")
+    if not isinstance(message, str) or message.strip().casefold() != "ok":
+        return False
+    result = body.get("result")
+    return isinstance(result, list) and len(result) > 0
 
 
 class _Counter:
@@ -317,7 +332,7 @@ class EtherscanClient:
                 state.detail = detail
                 raise _Stop()
             body = result.body
-            if not isinstance(body, dict) or not isinstance(body.get("result"), list):
+            if not _recognized_success(body):
                 state.failed = True
                 state.reason = "malformed"
                 state.detail = detail

@@ -1096,6 +1096,9 @@ def main(
     notification_resolve: Any = None,
     service_runner: Any = None,
 ) -> int:
+    from guardian.sources.transport import quiet_http_client_logs
+
+    quiet_http_client_logs()
     load_local_env()
     parser = build_parser()
     args = argparse.Namespace()

@@ -150,7 +150,9 @@ def _etherscan_rate_limit(body: Any) -> bool:
 
 
 def _contains_rate_limit(value: Any) -> bool:
-    return isinstance(value, str) and "Max rate limit reached" in value
+    if not isinstance(value, str):
+        return False
+    return "Max rate limit reached" in value or "Max calls per sec rate limit reached" in value
 
 
 def _etherscan_empty(body: Any) -> bool:

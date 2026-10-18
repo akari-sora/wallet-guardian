@@ -1312,6 +1312,9 @@ def _record_indexer(scan, source_id: str, adapter: str) -> None:
 
 def _refuse_history(scan, wallet_id, refusal, adapter: str | None = None, credential_env: str | None = None) -> None:
     reason = refusal or "unsupported_source"
+    if reason == "credential_missing" and _routescan_history_enabled(scan):
+        # Etherscan's free plan does not cover Avalanche. Name the keyless fallback.
+        credential_env = "ROUTESCAN_API_KEY"
     hint = credential_hint(credential_env) if reason == "credential_missing" and credential_env else ""
     if reason == "credential_missing" and adapter == "blockscout":
         scan.observations[(wallet_id, scan.network, "history.native_external")] = CoverageObservation(
@@ -1369,6 +1372,25 @@ def _blocked(reason: str, hint: str = "") -> CoverageObservation:
         price_quality="unknown",
         credential_hint=hint,
     )
+
+
+def _routescan_history_enabled(scan) -> bool:
+    if getattr(scan, "network", None) != "avalanche-c":
+        return False
+    document = getattr(getattr(scan, "public_config", None), "document", None)
+    if not isinstance(document, dict):
+        return False
+    sources = document.get("sources") if isinstance(document.get("sources"), dict) else {}
+    for route in document.get("routing") or []:
+        if not isinstance(route, dict):
+            continue
+        if route.get("network") != "avalanche-c" or route.get("capability") != "history.native_external":
+            continue
+        for source_id in route.get("source_ids") or []:
+            source = sources.get(source_id, {})
+            if isinstance(source, dict) and source.get("adapter") == "routescan" and source.get("enabled") is True:
+                return True
+    return False
 
 
 def _endpoint_ready(scan, source_id: str) -> bool:

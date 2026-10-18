@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,8 +12,10 @@ import pytest
 
 from guardian.errors import SecurityError
 from guardian.configuration import _source_status, load_public_config
+from guardian.onboarding import _build
 from guardian.pipeline import _indexer_ready, probe_sources
 from guardian.scan import drive
+from guardian.security.transport_policy import assert_operation_allowed
 from guardian.sources.budget import BudgetBook
 from guardian.sources.capabilities import load_source_capabilities
 from guardian.sources.etherscan import EtherscanClient
@@ -31,7 +34,13 @@ def _payload(name: str) -> dict[str, object]:
     return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
 
 
-def _world(*, credential: str = "") -> tuple[ReadOnlyTransport, EtherscanClient]:
+def _world(
+    *,
+    credential: str = "",
+    daily: int = 10_000,
+    retry_attempts: int = 0,
+    endpoint: str | None = ENDPOINT,
+) -> tuple[ReadOnlyTransport, EtherscanClient]:
     source = {
         "adapter": "routescan",
         "budget_group": "routescan-account",
@@ -41,12 +50,14 @@ def _world(*, credential: str = "") -> tuple[ReadOnlyTransport, EtherscanClient]
     budgets = {
         "routescan-account": {
             "max_concurrency": 1,
-            "max_requests_per_day": 10_000,
+            "max_requests_per_day": daily,
             "max_rps": 100,
-            "retry_attempts": 0,
+            "retry_attempts": retry_attempts,
         }
     }
-    secrets = {"ROUTESCAN_API_BASE": ENDPOINT}
+    secrets = {}
+    if endpoint is not None:
+        secrets["ROUTESCAN_API_BASE"] = endpoint
     if credential:
         secrets["ROUTESCAN_API_KEY"] = credential
     endpoints = build_endpoint_registry(
@@ -192,10 +203,25 @@ def test_genuine_empty_advances_but_malformed_response_does_not() -> None:
 def test_transport_policy_allows_only_the_two_declared_routescan_chain_paths() -> None:
     transport, client = _world()
     for chain_id in (1, 43114):
-        transport.encode("routescan", _operation(client, chain_id, 1))
+        operation = _operation(client, chain_id, 1)
+        assert_operation_allowed(operation)
+        _install(transport, operation, "empty.json")
+        result = transport.request("routescan", operation)
+        assert result.status == 200
     for chain_id in (10, 56, 8453, 42161, 137):
-        with pytest.raises(SecurityError):
+        with pytest.raises(SecurityError) as denied:
             transport.request("routescan", _operation(client, chain_id, 1))
+        assert denied.value.reason == "rest_denied"
+    assert len(transport.backend.calls) == 2
+
+
+def test_routescan_path_and_chainid_mismatch_is_refused_before_send() -> None:
+    transport, client = _world()
+    operation = _operation(client, 1, 1)
+    mismatched = replace(operation, query={**dict(operation.query or {}), "chainid": "43114"})
+    with pytest.raises(SecurityError) as denied:
+        transport.request("routescan", mismatched)
+    assert denied.value.reason == "rest_denied"
     assert transport.backend.calls == []
 
 
@@ -345,3 +371,256 @@ def test_source_probe_does_not_report_optional_routescan_key_as_required(monkeyp
     assert source["credential_present"] is False
     assert "credential_hint" not in source
     assert source["identity"]["status"] == "not_probed"
+
+
+def _history(client: EtherscanClient, chain_id: int = 1):
+    return client.account_history(
+        chain_id=chain_id,
+        action="txlist",
+        address=ADDRESS,
+        start_block=100,
+        end_block=600,
+        offset=2,
+        previous_cursor="99",
+    )
+
+
+def _install_json(transport: ReadOnlyTransport, operation: object, body: object, status: int = 200) -> None:
+    call = transport.encode("routescan", operation)
+    raw = RawResponse(status, {}, json.dumps(body).encode("utf-8"))
+    transport.backend.mapping[request_key(call.method, call.url, call.body)] = raw
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"message": "NOTOK", "result": []},
+        {"status": "2", "message": "OK", "result": []},
+        {"status": "1", "message": "NOTOK", "result": []},
+        {"status": "1", "message": "No transactions found", "result": []},
+        {"status": "1", "message": "OK", "result": []},
+        {"status": "0", "message": "NOTOK", "result": []},
+        {"status": "0", "message": "OK", "result": []},
+        {"message": "OK", "result": [{"hash": "0x" + "11" * 32}]},
+    ],
+)
+def test_unrecognized_scan_envelope_does_not_complete_or_advance(body: dict) -> None:
+    transport, client = _world()
+    _install_json(transport, _operation(client, 1, 1), body)
+    read = _history(client)
+    assert read.pagination_complete is False
+    assert read.category != "empty"
+    assert read.cursor == "99"
+
+
+def test_routescan_429_does_not_advance_the_cursor() -> None:
+    transport, client = _world()
+    _install_json(transport, _operation(client, 1, 1), {"message": "NOTOK", "result": "rate limit"}, 429)
+    read = _history(client)
+    assert read.category == "error"
+    assert read.reason == "rate_limited"
+    assert read.pagination_complete is False
+    assert read.cursor == "99"
+
+
+def test_routescan_notok_string_is_not_empty_history() -> None:
+    transport, client = _world()
+    _install_json(
+        transport,
+        _operation(client, 43114, 1),
+        {"status": "0", "message": "NOTOK", "result": "Max calls per sec rate limit reached"},
+    )
+    read = _history(client, 43114)
+    assert read.category != "empty"
+    assert read.pagination_complete is False
+    assert read.cursor == "99"
+
+
+def test_per_sec_limit_is_retried_then_empty_can_advance() -> None:
+    transport, client = _world(retry_attempts=1)
+    operation = _operation(client, 1, 1)
+    call = transport.encode("routescan", operation)
+    limited = {"status": "0", "message": "NOTOK", "result": "Max calls per sec rate limit reached"}
+    empty = {"status": "0", "message": "No transactions found", "result": []}
+    transport.backend.mapping[request_key(call.method, call.url, call.body)] = [
+        RawResponse(200, {}, json.dumps(limited).encode("utf-8")),
+        RawResponse(200, {}, json.dumps(empty).encode("utf-8")),
+    ]
+    read = _history(client)
+    assert read.category == "empty"
+    assert read.cursor == "600"
+    assert len(transport.backend.calls) == 2
+
+
+def test_request_cap_does_not_advance_the_cursor() -> None:
+    transport, client = _world()
+    _install(transport, _operation(client, 1, 1), "ethereum-page-1.json")
+    read = client.account_history(
+        chain_id=1,
+        action="txlist",
+        address=ADDRESS,
+        start_block=100,
+        end_block=600,
+        offset=2,
+        previous_cursor="99",
+        request_cap=1,
+    )
+    assert read.pagination_complete is False
+    assert read.cursor == "99"
+    assert read.reason == "request_cap"
+
+
+def test_page_cap_does_not_advance_the_cursor() -> None:
+    transport, client = _world()
+    _install(transport, _operation(client, 1, 1), "ethereum-page-1.json")
+    read = client.account_history(
+        chain_id=1,
+        action="txlist",
+        address=ADDRESS,
+        start_block=100,
+        end_block=600,
+        offset=2,
+        previous_cursor="99",
+        page_cap=1,
+    )
+    assert read.pagination_complete is False
+    assert read.cursor == "99"
+    assert read.reason == "page_cap"
+
+
+def test_budget_exhaustion_does_not_advance_the_cursor() -> None:
+    transport, client = _world(daily=1)
+    _install(transport, _operation(client, 1, 1), "ethereum-page-1.json")
+    read = _history(client)
+    assert read.pagination_complete is False
+    assert read.cursor == "99"
+    assert read.reason == "budget"
+
+
+def test_routescan_uses_the_public_default_base_when_unset() -> None:
+    endpoints = build_endpoint_registry(
+        {"sources": {"routescan": {
+            "adapter": "routescan",
+            "budget_group": "routescan-account",
+            "credential_env": "ROUTESCAN_API_KEY",
+            "endpoint_env": "ROUTESCAN_API_BASE",
+        }}},
+        secrets={},
+        environ={},
+    )
+    source = endpoints.get("routescan")
+    assert source.endpoint == "https://api.routescan.io"
+    assert source.endpoint_provenance["selected_from"] == "default"
+    assert source.endpoint_provenance["present"] is True
+    assert "api.routescan.io" not in json.dumps(source.endpoint_provenance)
+    explicit = build_endpoint_registry(
+        {"sources": {"routescan": {
+            "adapter": "routescan",
+            "budget_group": "routescan-account",
+            "credential_env": "ROUTESCAN_API_KEY",
+            "endpoint_env": "ROUTESCAN_API_BASE",
+        }}},
+        secrets={"ROUTESCAN_API_BASE": "https://routescan.example.invalid"},
+    )
+    assert explicit.get("routescan").endpoint == "https://routescan.example.invalid"
+
+
+def _init_answers(networks: list[str]) -> dict:
+    return {
+        "accounts": [{
+            "address": ADDRESS,
+            "family": "evm",
+            "label": "synthetic-desk",
+            "networks": networks,
+            "relationship": "watch_only",
+        }],
+        "consent": True,
+        "credential_envs": {},
+        "key_mode": "none",
+        "plugins": [],
+        "tenant_id": "local",
+    }
+
+
+def _history_route(monitor: dict, network: str) -> dict:
+    return next(
+        row for row in monitor["routing"]
+        if row["network"] == network and row["capability"] == "history.native_external"
+    )
+
+
+def test_init_adds_keyless_routescan_and_base_alchemy() -> None:
+    eth = _build(_init_answers(["ethereum-mainnet"]), recorded_at="2026-10-18T00:00:00Z")
+    eth_route = _history_route(eth["monitor"], "ethereum-mainnet")
+    assert eth_route["source_ids"][:2] == ["etherscan", "routescan"]
+    routescan = eth["monitor"]["sources"]["routescan"]
+    assert routescan["adapter"] == "routescan"
+    assert routescan["credential_env"] == "ROUTESCAN_API_KEY"
+    assert routescan["endpoint_env"] == "ROUTESCAN_API_BASE"
+    assert routescan["enabled"] is True
+    shared = next(row for row in eth["sharing"] if row["source_id"] == "routescan")
+    assert shared["sends_addresses"] is True
+    assert "keyless" in shared["data"]
+    assert "credential_missing" not in shared["data"]
+
+    avalanche = _build(_init_answers(["avalanche-c"]), recorded_at="2026-10-18T00:00:00Z")
+    avalanche_route = _history_route(avalanche["monitor"], "avalanche-c")
+    assert avalanche_route["source_ids"][:2] == ["etherscan", "routescan"]
+
+    base = _build(_init_answers(["base-mainnet"]), recorded_at="2026-10-18T00:00:00Z")
+    base_route = _history_route(base["monitor"], "base-mainnet")
+    assert base_route["source_ids"][0] == "alchemy-base"
+    alchemy = base["monitor"]["sources"]["alchemy-base"]
+    assert alchemy["adapter"] == "alchemy_transfers"
+    assert alchemy["credential_env"] == "ALCHEMY_API_KEY"
+    assert alchemy["endpoint_env"] == "ALCHEMY_TRANSFERS_URL"
+    status = _source_status(base["monitor"], {}, {})
+    assert status["alchemy-base"].blocked_reason == "credential_missing"
+    assert status["alchemy-base"].availability == "missing"
+
+    other = _build(_init_answers(["polygon-pos"]), recorded_at="2026-10-18T00:00:00Z")
+    assert "routescan" not in other["monitor"]["sources"]
+    assert "alchemy-base" not in other["monitor"]["sources"]
+
+
+def test_avalanche_credential_refusal_names_routescan() -> None:
+    observations: dict = {}
+
+    def hold(book, wallet, network, capability):
+        book.add((wallet, network, capability))
+
+    scan = SimpleNamespace(
+        network="avalanche-c",
+        observations=observations,
+        held_cursors=set(),
+        hold=hold,
+        public_config=SimpleNamespace(document={
+            "routing": [{
+                "capability": "history.native_external",
+                "network": "avalanche-c",
+                "source_ids": ["etherscan", "routescan"],
+            }],
+            "sources": {
+                "etherscan": {
+                    "adapter": "etherscan_v2",
+                    "credential_env": "ETHERSCAN_API_KEY",
+                    "enabled": True,
+                },
+                "routescan": {
+                    "adapter": "routescan",
+                    "credential_env": "ROUTESCAN_API_KEY",
+                    "enabled": True,
+                },
+            },
+        }),
+    )
+    drive._refuse_history(scan, "wallet-1", "credential_missing", "etherscan_v2", "ETHERSCAN_API_KEY")
+    hint = observations[("wallet-1", "avalanche-c", "history.native_external")].credential_hint
+    assert "ROUTESCAN_API_KEY" in hint
+    assert "ETHERSCAN_API_KEY" not in hint
+
+    observations.clear()
+    scan.public_config.document["sources"]["routescan"]["enabled"] = False
+    drive._refuse_history(scan, "wallet-1", "credential_missing", "etherscan_v2", "ETHERSCAN_API_KEY")
+    plain = observations[("wallet-1", "avalanche-c", "history.native_external")].credential_hint
+    assert "ETHERSCAN_API_KEY" in plain

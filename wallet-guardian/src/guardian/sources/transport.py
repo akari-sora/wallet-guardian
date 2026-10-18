@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import base64
 import ipaddress
+import logging
 import os
+import re
 import socket
+from contextlib import contextmanager
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -20,7 +23,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 from guardian.configuration import MaskedSecret
 from guardian.credentials import CredentialResolution, resolve_named
 from guardian.errors import ConfigError, GuardianError, SecurityError
-from guardian.security.redact import redact
+from guardian.security.redact import redact, register_extra_secret
 from guardian.security.ssrf import validate_url
 from guardian.sources.resolver import (
     BENCHMARK_MESSAGE,
@@ -38,6 +41,9 @@ _MAX_HOPS = 3
 _URL_KEYS = frozenset({"endpoint", "endpoint_url", "rpc", "rpc_url", "url"})
 _METADATA_HOSTS = frozenset({"metadata", "metadata.google.internal"})
 _METADATA_IP = ipaddress.ip_address("169.254.169.254")
+_HTTP_LOGGERS = ("httpx", "httpcore")
+_ALCHEMY_KEY = re.compile(r"^[A-Za-z0-9_-]{8,}$")
+_ROUTESCAN_DEFAULT_BASE = "https://api.routescan.io"
 _SSRF_REASON = {
     "dns answer points at a blocked address": "private_endpoint",
     BENCHMARK_MESSAGE: "benchmark_address",
@@ -102,6 +108,44 @@ class TransportResult:
         return Classification(self.category, self.quality, self.retryable, self.blocked, self.reason)
 
 
+class _CredentialLogFilter(logging.Filter):
+    """Redact any URL that still reaches an HTTP client logger."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            rendered = record.getMessage()
+        except Exception:
+            return False
+        record.msg = redact(rendered)
+        record.args = ()
+        return True
+
+
+def quiet_http_client_logs() -> None:
+    """Stop httpx and httpcore from emitting request URLs at INFO or DEBUG."""
+    for name in _HTTP_LOGGERS:
+        logger = logging.getLogger(name)
+        logger.setLevel(logging.WARNING)
+        if not any(isinstance(item, _CredentialLogFilter) for item in logger.filters):
+            logger.addFilter(_CredentialLogFilter())
+
+
+@contextmanager
+def _quiet_http_loggers():
+    saved: list[tuple[logging.Logger, int]] = []
+    for name in _HTTP_LOGGERS:
+        logger = logging.getLogger(name)
+        saved.append((logger, logger.level))
+        logger.setLevel(logging.WARNING)
+        if not any(isinstance(item, _CredentialLogFilter) for item in logger.filters):
+            logger.addFilter(_CredentialLogFilter())
+    try:
+        yield
+    finally:
+        for logger, level in saved:
+            logger.setLevel(level)
+
+
 class HttpxBackend:
     """Production backend. Redirects stay off. gRPC is not spoken here.
 
@@ -132,29 +176,35 @@ class HttpxBackend:
         client = self._client or httpx.Client(**direct_client_kwargs(timeout=limit))
         url, headers, extensions = pinned_request(call)
         try:
-            with client.stream(
-                call.method,
-                url,
-                content=call.body or None,
-                headers=headers,
-                extensions=extensions,
-                timeout=limit,
-            ) as response:
-                buf = bytearray()
-                for chunk in response.iter_bytes():
-                    buf.extend(chunk)
-                    if len(buf) > self.max_response_bytes:
-                        raise TransportError("response_too_large")
-                return RawResponse(response.status_code, {key: value for key, value in response.headers.items()}, bytes(buf))
+            with _quiet_http_loggers():
+                try:
+                    with client.stream(
+                        call.method,
+                        url,
+                        content=call.body or None,
+                        headers=headers,
+                        extensions=extensions,
+                        timeout=limit,
+                    ) as response:
+                        buf = bytearray()
+                        for chunk in response.iter_bytes():
+                            buf.extend(chunk)
+                            if len(buf) > self.max_response_bytes:
+                                raise TransportError("response_too_large")
+                        return RawResponse(
+                            response.status_code,
+                            {key: value for key, value in response.headers.items()},
+                            bytes(buf),
+                        )
+                finally:
+                    if owns:
+                        client.close()
         except TransportError:
             raise
         except httpx.TimeoutException:
             raise TransportError("timeout", retryable=True) from None
         except httpx.HTTPError:
             raise TransportError("connection_error", retryable=True) from None
-        finally:
-            if owns:
-                client.close()
 
 
 def pinned_request(call: PreparedCall) -> tuple[str, dict[str, str], dict[str, str]]:
@@ -446,10 +496,16 @@ def resolve_source_endpoint(
     if not endpoint.present and source.get("adapter") == "alchemy_transfers" and env_name == "ALCHEMY_TRANSFERS_URL":
         key = resolve_named("ALCHEMY_API_KEY", secrets, environ)
         if key.present:
+            revealed = key.reveal()
+            register_extra_secret(revealed)
+            if _ALCHEMY_KEY.fullmatch(revealed) is None:
+                return CredentialResolution(env_name, "absent", False, False, "")
             return CredentialResolution(
                 env_name, "derived_from_ALCHEMY_API_KEY", True, key.shadowed,
-                "https://base-mainnet.g.alchemy.com/v2/" + key.reveal(),
+                "https://base-mainnet.g.alchemy.com/v2/" + revealed,
             )
+    if not endpoint.present and source.get("adapter") == "routescan" and env_name == "ROUTESCAN_API_BASE":
+        return CredentialResolution(env_name, "default", True, False, _ROUTESCAN_DEFAULT_BASE)
     return endpoint
 
 

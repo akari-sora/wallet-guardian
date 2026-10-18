@@ -222,6 +222,9 @@ class _Desk:
 def _desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Desk:
     document = json.loads(EXAMPLE.read_text(encoding="utf-8"))
     document["plugins"] = []
+    # Recovery starts with unavailable history; a keyless fallback would bypass
+    # the missing Etherscan key and invalidate that precondition.
+    document["sources"]["routescan"]["enabled"] = False
     config = tmp_path / "monitor.json"
     config.write_text(json.dumps(document), encoding="utf-8")
     accounts = {

@@ -188,22 +188,42 @@ def test_mcm_share_s5_01_no_key_init(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert report["delivery_status"] == "no_send"
     assert report["misconfigured"] is False
     assert report["live_verified"] is False
-    assert report["indexer_disclosures"] == []
+    assert report["indexer_disclosures"] == [{
+        "adapter": "routescan",
+        "consent": "deny_until_local_consent",
+        "method": "account/txlist",
+        "purpose": "history.native_external",
+        "source_id": "routescan",
+    }]
     assert report["native_reads"]
     assert report["native_reads"][0]["raw_amount"] == "1"
     hosts = {(urlsplit(str(getattr(call, "url", ""))).hostname or "") for call in backend.calls}
     assert any(host.startswith("rpc-ethereum-mainnet.") for host in hosts)
+    assert "routescan.example.invalid" in hosts
     assert not any("etherscan" in host or "blockscout" in host for host in hosts)
     code, coverage = _invoke(capsys, ["coverage", "--mcm-config", str(monitor_path)])
     assert code == 0, coverage
     assert coverage["status"] == "ok"
+    # Init now reads Ethereum native history from keyless Routescan, so that cell
+    # is complete. config validate above still names ETHERSCAN_API_KEY and the
+    # Blockscout key. A capability that is still credential_missing must name it.
+    history = [row for row in coverage["rows"] if row["capability"] == "history.native_external"]
+    assert history
+    assert history[0]["quality"] == "complete_in_declared_scope"
+    assert history[0]["sources"] == ["routescan"]
+    assert "credential_missing" not in (history[0].get("reason_codes") or [])
+    named = [row for row in coverage["credentials"] if row.get("variable") == "ETHERSCAN_API_KEY"]
+    assert named and named[0]["present"] is False
     missing = [row for row in coverage["rows"] if "credential_missing" in (row.get("reason_codes") or [])]
-    assert missing
     for row in missing:
         assert row["credential_hint"]
         assert "docs/api-keys.md" in row["credential_hint"]
         assert row["quality"] != "error"
         assert row["quality"] != "complete_in_declared_scope"
+    risk = [row for row in coverage["rows"] if row["capability"] == "address_risk"]
+    assert risk
+    assert "third_party_denied" in risk[0]["reason_codes"]
+    assert risk[0]["quality"] != "complete_in_declared_scope"
     native = [row for row in coverage["rows"] if row["capability"] == "balances.native"]
     assert native
     assert native[0]["quality"] == "complete_in_declared_scope"

@@ -124,6 +124,24 @@ def test_derived_endpoint_reports_and_logs_are_secret_free(monkeypatch, caplog, 
     assert KEY not in blob
 
 
+@pytest.mark.parametrize("bad", ["abcd.efgh", "quote'xx", "short", "has space"])
+def test_unsafe_alchemy_key_is_not_placed_in_a_url(bad):
+    registry = build_endpoint_registry(DOCUMENT, environ={"ALCHEMY_API_KEY": bad})
+    source = registry.get("alchemy-base")
+    assert source.endpoint == ""
+    assert bad not in repr(registry)
+    assert bad not in json.dumps(source.endpoint_provenance)
+    if len(bad) >= 6:
+        assert bad not in redact(f"prefix {bad} suffix")
+
+
+def test_derived_alchemy_key_is_masked_without_the_hostname():
+    build_endpoint_registry(DOCUMENT, environ={"ALCHEMY_API_KEY": KEY})
+    pinned = f"https://1.1.1.1/v2/{KEY}"
+    assert KEY not in redact(pinned)
+    assert pinned not in redact(pinned)
+
+
 def test_derived_endpoint_keeps_transport_guards():
     registry = build_endpoint_registry(DOCUMENT, environ={"ALCHEMY_API_KEY": KEY})
     transport = ReadOnlyTransport(registry, BudgetBook.from_document({}, clock=lambda: 0.0, sleep=lambda _seconds: None), None, resolve=lambda _host: ["127.0.0.1"])

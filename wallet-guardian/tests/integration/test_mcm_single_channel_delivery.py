@@ -604,7 +604,11 @@ class FixtureRpc:
 
 def _desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Desk:
     config = tmp_path / "monitor.json"
-    config.write_text(EXAMPLE.read_text(encoding="utf-8"), encoding="utf-8")
+    document = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    # This delivery fixture serves RPC only. Keep history unavailable instead
+    # of resolving the public keyless fallback or inventing indexer responses.
+    document["sources"]["routescan"]["enabled"] = False
+    config.write_text(json.dumps(document), encoding="utf-8")
     evm_address = to_checksum_address("0x" + ("0" * 39) + "1")
     sol_address = _b58encode(bytes([2]) * 32)
     accounts = {

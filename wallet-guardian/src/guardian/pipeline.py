@@ -2786,7 +2786,8 @@ def _required_map(enabled, rows, observations, position_summaries, public_config
 
 
 def _indexer_ready(public_config, private_inputs, network: str) -> bool:
-    # Routescan history stays required without its optional key, including on Avalanche.
+    # Keyless Routescan keeps Avalanche history required. A credential gap names
+    # ROUTESCAN_API_KEY (see scan.drive._refuse_history), not the paid Etherscan plan.
     for route in public_config.document["routing"]:
         if route.get("network") != network or route.get("capability") != "history.native_external":
             continue
