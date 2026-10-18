@@ -102,6 +102,7 @@ ADAPTER_PROTOCOL = {
     "cosmos_rest": "rest",
     "debank": "rest",
     "etherscan_v2": "rest",
+    "routescan": "rest",
     "evm_rpc": "jsonrpc",
     "esplora": "rest",
     "goplus": "rest",
@@ -171,6 +172,10 @@ _ETHERSCAN_PAIRS = frozenset({
     ("contract", "getsourcecode"),
     ("logs", "getLogs"),
 })
+_ROUTESCAN_PATHS = frozenset(
+    f"/v2/network/mainnet/evm/{chain_id}/etherscan/api" for chain_id in (1, 43114)
+)
+_ROUTESCAN_ACTIONS = frozenset({"txlist", "txlistinternal", "tokentx", "tokennfttx", "token1155tx"})
 _TRON_POST = frozenset({
     "/wallet/getaccount",
     "/wallet/getnowblock",
@@ -267,6 +272,13 @@ def operation_records(adapter: str) -> list[dict[str, Any]]:
     if protocol == "jsonrpc":
         for method in sorted(_JSONRPC_METHODS[adapter]):
             records.append({"method": method, "protocol": "jsonrpc"})
+    elif adapter == "routescan":
+        for path in sorted(_ROUTESCAN_PATHS):
+            for action in sorted(_ROUTESCAN_ACTIONS):
+                records.append({
+                    "http_method": "GET", "path": path, "protocol": "rest",
+                    "query": {"action": action, "module": "account"},
+                })
     elif adapter == "etherscan_v2":
         for module, action in sorted(_ETHERSCAN_PAIRS):
             records.append({
@@ -359,6 +371,17 @@ def _assert_rest(operation: Operation) -> None:
     if adapter == "tron_grid":
         _reject_fields(operation.body, _TRON_KEYS, "signed_payload")
         if _tron_denied(path) or not _tron_allowed(method, path):
+            _deny("rest_denied")
+        return
+    if adapter == "routescan":
+        query = operation.query
+        if (
+            path not in _ROUTESCAN_PATHS
+            or not _etherscan_allowed(method, "/v2/api", query)
+            or query.get("module") != "account"
+            or query.get("action") not in _ROUTESCAN_ACTIONS
+            or query.get("chainid") != path.split("/")[5]
+        ):
             _deny("rest_denied")
         return
     if adapter == "etherscan_v2":

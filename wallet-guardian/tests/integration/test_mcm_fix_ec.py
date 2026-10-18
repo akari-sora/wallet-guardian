@@ -267,6 +267,9 @@ def test_mcm_fix_ec_05_disabled_source_is_not_called(
     """enabled false drops the source from use. History continues on the next route."""
     def _disable(document: dict) -> None:
         document["sources"]["etherscan"]["enabled"] = False
+        # The assertion is the Blockscout host after Etherscan. Leave Routescan
+        # off so the default origin does not complete history first.
+        document["sources"]["routescan"]["enabled"] = False
 
     desk = _desk(
         tmp_path,
@@ -289,6 +292,7 @@ def test_mcm_fix_ec_05_disabled_source_is_not_called(
 def _public_host_desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     def _hosts(document: dict) -> None:
         document["sources"]["etherscan"]["enabled"] = False
+        document["sources"]["routescan"]["enabled"] = False
         document["plugins"] = []
 
     desk = _desk(

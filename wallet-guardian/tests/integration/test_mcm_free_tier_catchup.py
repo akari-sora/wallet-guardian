@@ -603,6 +603,9 @@ def test_mcm_r1_02_native_indexer_fallback(tmp_path: Path, monkeypatch: pytest.M
     def _pages(document: dict) -> None:
         document["sources"]["blockscout-base"]["page_size"] = 1
         document["sources"]["blockscout-optimism"]["page_size"] = 1
+        # This case is the paid-plan refusal with no keyless read. The default
+        # Routescan origin would otherwise answer the fixture.
+        document["sources"]["routescan"]["enabled"] = False
 
     desk = _desk(
         tmp_path / "positive",
@@ -968,10 +971,10 @@ PUBLIC_URLS = {
 KEYLESS_HOSTS = {
     "arbitrum-one": "arb-public.example.invalid",
     "base-mainnet": "base-public.example.invalid",
-    "ethereum-mainnet": "eth-public.example.invalid",
     "optimism-mainnet": "op-public.example.invalid",
     "polygon-pos": "polygon-public.example.invalid",
 }
+ROUTESCAN_HOST = "api.routescan.io"
 
 
 class _Sink:
@@ -1026,6 +1029,7 @@ def _nokeys_desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, mutate=None
     desk.backend.logs = [_transfer_log(_tx(40), 4, 1, ADDRESS_A)]
     for host in KEYLESS_HOSTS.values():
         desk.backend.rest_rows[(host, "txlist")] = [_rest_transfer(_tx(41), ADDRESS_A, OTHER, 4)]
+    desk.backend.rest_rows[(ROUTESCAN_HOST, "txlist")] = [_rest_transfer(_tx(41), ADDRESS_A, OTHER, 4)]
     return desk
 
 
@@ -1033,6 +1037,18 @@ def test_mcm_r1_08_no_key_config_runs_end_to_end_with_honest_gaps(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """MCM-R1-08. No keys: keyless history is visible, and every other keyed gap stays named."""
+    from guardian.sources.resolver import HostnameResolver
+
+    def _pin_routescan(self, host: str) -> list[str]:
+        # The default base is the public Routescan host. Pin it for the fixture.
+        # socket() and httpx stay blocked, and every other name still fails closed.
+        del self
+        name = host.lower().rstrip(".")
+        if name == ROUTESCAN_HOST or name.endswith(".invalid"):
+            return ["1.1.1.1"]
+        raise OSError("dns_failed")
+
+    monkeypatch.setattr(HostnameResolver, "resolve", _pin_routescan)
     desk = _nokeys_desk(tmp_path, monkeypatch)
     sink = _Sink()
     report = _cli(capsys, desk, sender=sink)
@@ -1044,12 +1060,20 @@ def test_mcm_r1_08_no_key_config_runs_end_to_end_with_honest_gaps(
         assert rows, network
         assert any(int(row["raw_amount"]) == LARGE for row in rows)
         assert any(item["host"] == host and item.get("action") == "txlist" for item in desk.backend.calls)
+    for network, chain_id in (("ethereum-mainnet", "1"), ("avalanche-c", "43114")):
+        rows = [row for row in _events(desk, WALLET_A, network) if row["kind"] in {"asset_in", "asset_out"}]
+        assert rows, network
+        assert any(int(row["raw_amount"]) == LARGE for row in rows)
+        assert any(
+            item["host"] == ROUTESCAN_HOST and item.get("action") == "txlist" and item.get("chainid") == chain_id
+            for item in desk.backend.calls
+        )
     bsc = _coverage(report, WALLET_A, "bsc-mainnet", "history.native_external")
     avalanche = _coverage(report, WALLET_A, "avalanche-c", "history.native_external")
     assert "credential_missing" in bsc["reason_codes"]
-    assert "credential_missing" in avalanche["reason_codes"]
+    assert avalanche["quality"] == "complete_in_declared_scope"
+    assert "credential_missing" not in avalanche["reason_codes"]
     assert bsc["quality"] != "complete_in_declared_scope"
-    assert avalanche["quality"] != "complete_in_declared_scope"
     token = [row for row in _events(desk, WALLET_A, "bsc-mainnet") if row["tx_id"] == _tx(40)]
     assert token
     risk = _coverage(report, WALLET_A, "ethereum-mainnet", "address_risk")

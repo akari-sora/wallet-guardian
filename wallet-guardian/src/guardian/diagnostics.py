@@ -63,8 +63,16 @@ def diagnostic_fields(
         resolved = [resolve_named(name, profile, environ) for name in names]
     else:
         resolved = list(resolutions)
+    from guardian.sources.transport import resolve_source_endpoint
+
+    sources = document.get("sources", {}) if isinstance(document, Mapping) else {}
     fields = {
         "credentials": [item.provenance() for item in resolved],
+        "endpoints": {
+            source_id: resolve_source_endpoint(source, profile, environ).provenance()
+            for source_id, source in sources.items()
+            if isinstance(source, Mapping) and isinstance(source.get("endpoint_env"), str)
+        },
         "resolver": resolver_view(document, environ),
         "connectivity": {"probed": False, "bounded": True, "timeout_seconds": None},
         "egress_qualification": {

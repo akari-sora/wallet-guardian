@@ -1,0 +1,268 @@
+{
+  "adapter": "routescan",
+  "allowed_operations": [
+    {
+      "http_method": "GET",
+      "path": "/v2/network/mainnet/evm/1/etherscan/api",
+      "protocol": "rest",
+      "query": {
+        "action": "token1155tx",
+        "module": "account"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/network/mainnet/evm/1/etherscan/api",
+      "protocol": "rest",
+      "query": {
+        "action": "tokennfttx",
+        "module": "account"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/network/mainnet/evm/1/etherscan/api",
+      "protocol": "rest",
+      "query": {
+        "action": "tokentx",
+        "module": "account"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/network/mainnet/evm/1/etherscan/api",
+      "protocol": "rest",
+      "query": {
+        "action": "txlist",
+        "module": "account"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/network/mainnet/evm/1/etherscan/api",
+      "protocol": "rest",
+      "query": {
+        "action": "txlistinternal",
+        "module": "account"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/network/mainnet/evm/43114/etherscan/api",
+      "protocol": "rest",
+      "query": {
+        "action": "token1155tx",
+        "module": "account"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/network/mainnet/evm/43114/etherscan/api",
+      "protocol": "rest",
+      "query": {
+        "action": "tokennfttx",
+        "module": "account"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/network/mainnet/evm/43114/etherscan/api",
+      "protocol": "rest",
+      "query": {
+        "action": "tokentx",
+        "module": "account"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/network/mainnet/evm/43114/etherscan/api",
+      "protocol": "rest",
+      "query": {
+        "action": "txlist",
+        "module": "account"
+      }
+    },
+    {
+      "http_method": "GET",
+      "path": "/v2/network/mainnet/evm/43114/etherscan/api",
+      "protocol": "rest",
+      "query": {
+        "action": "txlistinternal",
+        "module": "account"
+      }
+    }
+  ],
+  "backend": "routescan",
+  "capabilities": {
+    "address_risk": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "asset_risk": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.fungible": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.native": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "balances.nft": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "bridges": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "exposure_news": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "history.fungible": {
+      "notes": "Shared history client; offline fixtures only. Example routes read native external and fungible history.",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "history.native_external": {
+      "notes": "Shared history client; offline fixtures only. Example routes read native external and fungible history.",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "history.native_internal": {
+      "notes": "Shared history client; offline fixtures only. Example routes read native external and fungible history.",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "history.nft": {
+      "notes": "Shared history client; offline fixtures only. Example routes read native external and fungible history.",
+      "probe": "documented",
+      "support": "partial"
+    },
+    "permissions.cosmos_authz": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.cosmos_feegrant": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.erc1155_operator": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.erc20": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.erc721_operator": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.erc721_token": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permissions.move_capability": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.spl_authority": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.spl_delegate": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.ton_extensions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permissions.tron_account": {
+      "notes": "",
+      "probe": "untested",
+      "support": "not_applicable"
+    },
+    "permits.dai_variant": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permits.erc2612_observed": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permits.offchain_unused": {
+      "notes": "\u672a\u63d0\u4ea4\u7684\u96e2\u7dda\u7c3d\u540d\u4e0d\u53ef\u89c0\u5bdf\uff0c\u4e0d\u80fd\u6a19\u6210 complete\u3002",
+      "probe": "documented",
+      "support": "not_observable"
+    },
+    "permit2.allowance": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "permit2.signature_usage": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "positions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "sanctions": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    },
+    "withdrawals": {
+      "notes": "",
+      "probe": "untested",
+      "support": "unsupported"
+    }
+  },
+  "families": [
+    "evm"
+  ],
+  "limits": [
+    {
+      "name": "keyless",
+      "notes": "Checked 2026-10-18 in supplied research: about 2 RPS and 10,000 calls/day keyless; optional free key 5 RPS and 100,000 calls/day. Examples share a 1 RPS budget. Check current terms.",
+      "retrieved": "2026-10-18",
+      "source_url": "https://routescan.io",
+      "max_rps": 2,
+      "max_requests_per_day": 10000
+    }
+  ],
+  "networks": [
+    "ethereum-mainnet",
+    "avalanche-c"
+  ],
+  "notes": "Etherscan-compatible history with an optional ROUTESCAN_API_KEY; checked 2026-10-18 in supplied research. Offline fixtures only; check current terms.",
+  "probe": "untested",
+  "protocol": "rest"
+}

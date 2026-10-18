@@ -10,7 +10,9 @@ Resolver mode is not a key. `GUARDIAN_RESOLVER_MODE`, `GUARDIAN_DOH_ENDPOINTS`, 
 
 A missing key is never printed. `credential_missing` rows, `guardian config validate`, and `guardian sources probe` name the variable and point here, for example `ETHERSCAN_API_KEY see docs/api-keys.md#etherscan`.
 
-Limits below are the provider's published free tier at the time this note was written. Check current terms before you rely on a number. This project does not buy a plan or turn on automatic upgrades.
+The facts below combine provider documentation with the supplied 2026-10-18 request observations. Observed behavior is labeled as such and can change independently of published limits. Check current terms before relying on a number or endpoint. This project does not buy a plan or turn on automatic upgrades.
+
+For a short end-user setup guide, including Grok Bot secret-card handling, see [free-keys.md](free-keys.md).
 
 `examples/monitor.json` is the keyed profile: each provider is configured, and a missing key falls through to the keyless path when one exists. `examples/monitor.nokeys.json` is the same routes with Helius enabled (so a missing key is visible) and CoinGecko on the public tier (no `credential_env`).
 
@@ -24,7 +26,9 @@ Signup: <https://etherscan.io/apis>. One key covers the V2 multichain API.
 
 What it unlocks: `history.native_external` on Ethereum, Arbitrum, and Polygon (transaction list). Token history on those chains still prefers public RPC logs.
 
-Free tier, check current terms: about 5 calls/second and 100,000 calls/day. The free plan does not include every chain. A chain the plan refuses is `plan_not_supported`. That result is cached, with a TTL, for the source and network. Later wallets, `tokentx`, and the next round skip straight to the approved fallback. An indexer source with `enabled: false` is not called. An `ofac_sls` source is the exception in the OFAC section: `run-once` still fetches it when the endpoint is set.
+Free tier: about 3 calls/second (a free key received `Max calls per sec rate limit reached (3/sec)` on 2026-10-18) and 100,000 calls/day; check current terms.
+
+Free tier, checked 2026-10-18; check current terms: Ethereum, Arbitrum, Polygon, Linea, Sonic, Unichain, HyperEVM, Mantle, Celo, Berachain, Monad, Sei, and Plasma are included. BSC, Base, Optimism, Avalanche, and Gnosis are paid-only except for source-code and ABI calls. Since 2026-07-01 the free tier returns at most 1,000 records per request. Arbitrum moves to a shared free pool on 2026-11-01. A chain the plan refuses is `plan_not_supported`. That result is cached, with a TTL, for the source and network. Later wallets, `tokentx`, and the next round skip straight to the approved fallback. An indexer source with `enabled: false` is not called. An `ofac_sls` source is the exception in the OFAC section: `run-once` still fetches it when the endpoint is set.
 
 A fresh database does not walk from genesis. With no cursor and no `polling.bootstrap_origin`, the origin is `max(0, head - ceil(bootstrap_lookback_days * 86400 / seconds_per_block))`. Built-in block times are ethereum 12s, bsc 0.75s, arbitrum 0.25s, base 2s, optimism 2s, polygon 2.1s, avalanche 2s, and 12s otherwise. `polling.seconds_per_block` can override one network. Coverage is `complete_in_declared_scope` for that window only. `polling.bootstrap_request_cap` (2000 in the example) is the per-source, per-round budget for bootstrap and catch-up, counting every indexer page, every bisect, and every `eth_getLogs` (a batch counts as its log methods). When `round_deadline_seconds` is omitted, the EVM log and history scan stops after 180 seconds and can record `partial`. That default does not bound every step of `run-once`. Hitting the cap or the deadline records partial with `bootstrap_request_cap` or `deadline`, plus `historical_backfill_pending` while older blocks are still unread. The next round resumes at that checkpoint plus one, minus the overlap of 2. At the default cap, an Arbitrum 30-day log backfill (10,368,000 blocks, about 20,728 log reads) is 12 rounds if the deadline does not stop a round first. Successful DNS answers are cached in-process for min(record TTL, 300 seconds). A private address is rejected and not cached.
 
@@ -33,7 +37,22 @@ Environment:
 - `ETHERSCAN_API_KEY`
 - `ETHERSCAN_API_BASE` (the API origin; the client calls `/v2/api`)
 
-Without the key: in `examples/monitor.json`, native history falls back to a keyless Blockscout instance (Ethereum, Arbitrum, Polygon, Base, Optimism) when that instance's URL variable is set. A profile written by `guardian init` does not include keyless or PRO Blockscout. It adds Etherscan (except BSC) ahead of a per-chain Blockscout source that needs its own key. Avalanche is included (`blockscout-avalanchec`). `plan_not_supported` comes from the Etherscan response for that chain, not from a fixed list of chain names. When Etherscan has no key, or that response says the plan refuses the chain, and the per-chain Blockscout key is also missing, `history.native_external` stays `credential_missing` or `plan_not_supported`. An Etherscan key whose plan accepts the chain can fill that cell without the Blockscout key. Token history uses public RPC `eth_getLogs` with the configured chunk size. BSC does not use Etherscan.
+Without the key: in the example profiles, and on a `guardian init` profile for Ethereum and Avalanche, native history tries keyless Routescan after Etherscan. Other configured fallbacks then run in their documented order. The per-chain Arbitrum and Polygon Blockscout hosts received a Cloudflare challenge in the 2026-10-18 observations, so they are not reliable keyless history paths; a challenge is `blocked`, never an empty history. A profile written by `guardian init` includes keyless Routescan for Ethereum and Avalanche, and an Alchemy Base source when Base is enabled. It does not include Blockscout PRO or a keyless Blockscout host. It adds Etherscan (except BSC) ahead of a per-chain Blockscout source that needs its own key. Avalanche is included (`blockscout-avalanchec`). `plan_not_supported` comes from the Etherscan response for that chain, not from a fixed list of chain names. When no approved fallback succeeds, `history.native_external` stays `credential_missing`, `plan_not_supported`, or another explicit gap. On Avalanche that credential gap names `ROUTESCAN_API_KEY`, because the Etherscan free plan does not cover that chain. Token history uses public RPC `eth_getLogs` with the configured chunk size. BSC does not use Etherscan. You must set `ETHERSCAN_API_BASE` or the Etherscan source is skipped. There is no built-in Etherscan origin.
+
+<a id="routescan"></a>
+
+## Routescan
+
+Routescan exposes an Etherscan-compatible API at `https://api.routescan.io/v2/network/mainnet/evm/<chainId>/etherscan/api`. The example profiles and a `guardian init` profile use that API as a fallback after Etherscan for `history.native_external` on Ethereum (chain id 1) and Avalanche C-Chain (chain id 43114). It works without a key. An optional key uses `ROUTESCAN_API_KEY`.
+
+Limits checked 2026-10-18; check current terms: keyless access is about 2 requests/second and 10,000 calls/day. An optional free key raises that to 5 requests/second and 100,000 calls/day. The examples use a conservative `max_rps` of 1. Init uses the same budget defaults as its other sources (`max_rps` 1). Chains other than 1 and 43114 are refused locally, before a request is sent, as `rest_denied`. That is not `plan_not_supported`. The supplied research recorded `chain not supported` for chains 10, 56, 8453, 42161, and 137; this client does not send those chain ids. A `chain not supported` body on an allowed chain is still `plan_not_supported`, never an empty history.
+
+Environment:
+
+- `ROUTESCAN_API_KEY` (optional; omitted for keyless access)
+- `ROUTESCAN_API_BASE` (optional override; when unset, the client uses `https://api.routescan.io` and still builds the chain-specific path)
+
+Without the key: Ethereum and Avalanche history still use the configured Routescan fallback. A failed, limited, or unsupported read remains a coverage gap.
 
 <a id="nodereal"></a>
 
@@ -64,28 +83,31 @@ Without the key: BSC native history in `run-once` is `credential_missing`. There
 
 ## Blockscout PRO
 
-Signup: <https://dev.blockscout.com>. The free PRO plan is a key, not a paid subscription.
+Signup: <https://dev.blockscout.com>. Since 2026-07-01, calls to `api.blockscout.com` require a PRO key. That limit is the PRO host, not every Blockscout deployment. The free PRO plan is a key, not a paid subscription. Checked 2026-10-18; check current terms. Per-chain hosts below are separate and some answered without a key.
 
-What it unlocks: Etherscan-compatible account history (`txlist`, `tokentx`, and logs when the plan allows them) for chains the free plan includes. Optimism (chain id 10) is on that plan. Base (chain id 8453) is a featured chain and the free PRO plan answers HTTP 402; that is `plan_not_supported`, then the keyless Base instance. The refusal is cached. It is not an empty history.
+What it unlocks: Etherscan-compatible account history (`txlist`, `tokentx`, and logs when the plan allows them) for chains the free plan includes. In the 2026-10-18 checks, the free key answered HTTP 402 for featured chains Base (chain id 8453) and Polygon (chain id 137), and HTTP 404 for BSC. Those results are gaps such as `plan_not_supported`, never empty history. The refusal is cached.
 
-Free tier, check current terms: 100,000 credits/day, 5 requests/second, about 20 credits for a basic call. 100,000 credits is not 100,000 requests.
+Free tier, checked 2026-10-18; check current terms: 100,000 credits/day, 5 requests/second, about 20 credits for a basic call. 100,000 credits is not 100,000 requests.
 
 The key is sent only as `Authorization: Bearer`. It is never placed in the URL or the query string, and it is never written into logs or evidence.
 
 Environment:
 
 - `BLOCKSCOUT_API_KEY`
-- `BLOCKSCOUT_PRO_API_BASE` (default `https://api.blockscout.com`; the client calls `/v2/api?chain_id=<id>`)
+- `BLOCKSCOUT_PRO_API_BASE` (required endpoint setting; suggested value `https://api.blockscout.com`; there is no built-in default, and the client calls `/v2/api?chain_id=<id>`)
 
-Without the key, in `examples/monitor.json`, the PRO route still calls the host in `BLOCKSCOUT_PRO_API_BASE` once and can return HTTP 402 (`Proceed with API key or make a X402 payment`). The watch address is on that request. That 402 is `credential_missing`, and that example profile continues to the keyless instance. A body that says the chain is outside the plan is `plan_not_supported` instead. A profile written by `guardian init` has no PRO source and no keyless Blockscout source. On an init profile, when Etherscan has no key, or the plan refuses that chain, and the per-chain Blockscout key is also missing, the history cell stays `credential_missing` or `plan_not_supported`. An Etherscan key whose plan accepts the chain can fill the cell without the Blockscout key. That outcome is not limited to a fixed list of chain names.
+Without the key, when `BLOCKSCOUT_PRO_API_BASE` is set, the PRO route in `examples/monitor.json` still calls that host once and can return HTTP 402 (`Proceed with API key or make a X402 payment`). The watch address is on that request. That 402 is `credential_missing`, and that example profile continues to the next configured source. If the endpoint variable is unset, the source is skipped. A body that says the chain is outside the plan is `plan_not_supported` instead. A profile written by `guardian init` has no PRO source and no keyless Blockscout source. On an init profile, Ethereum and Avalanche can still be filled by keyless Routescan, and Base can be filled by Alchemy when `ALCHEMY_API_KEY` is set. When those are missing too, and Etherscan has no key or the plan refuses that chain, and the per-chain Blockscout key is also missing, the history cell stays `credential_missing` or `plan_not_supported`. An Etherscan key whose plan accepts the chain can fill the cell without the Blockscout key. That outcome is not limited to a fixed list of chain names.
 
-Keyless instances (no key, shared rate limit about 5–10 requests/second, check current terms). Set the origin; the client calls `/api`:
+Legacy per-chain hosts were checked 2026-10-18 and may stop working without a key at any time. Set the origin; the client calls `/api`:
 
-- Ethereum: `BLOCKSCOUT_ETH_URL` default `https://eth.blockscout.com`
-- Base: `BLOCKSCOUT_BASE_PUBLIC_URL` default `https://base.blockscout.com`
-- Optimism: `BLOCKSCOUT_OPTIMISM_PUBLIC_URL` default `https://explorer.optimism.io` (`https://optimism.blockscout.com` answers HTTP 301 to it since at least 2026-10-09; set the final origin, a cross-host redirect is refused as redirect_host). `guardian relations` reads `https://explorer.optimism.io` when that variable is unset or still names `optimism.blockscout.com`. It does not follow the redirect. `run-once` still uses the endpoint the profile resolved.
-- Arbitrum: `BLOCKSCOUT_ARBITRUM_URL` default `https://arbitrum.blockscout.com`
-- Polygon: `BLOCKSCOUT_POLYGON_URL` default `https://polygon.blockscout.com`
+- Ethereum: suggested `BLOCKSCOUT_ETH_URL=https://eth.blockscout.com`; it answered keyless.
+- Base: suggested `BLOCKSCOUT_BASE_PUBLIC_URL=https://base.blockscout.com`; scripts received a Cloudflare HTTP 403 challenge.
+- Optimism: suggested `BLOCKSCOUT_OPTIMISM_PUBLIC_URL=https://explorer.optimism.io`; it answered keyless. (`https://optimism.blockscout.com` redirects to it; set the final origin because a cross-host redirect is refused as `redirect_host`.) `guardian relations` reads `https://explorer.optimism.io` when that variable is unset or still names `optimism.blockscout.com`. It does not follow the redirect. `run-once` uses only the endpoint resolved from its profile.
+- Arbitrum: suggested `BLOCKSCOUT_ARBITRUM_URL=https://arbitrum.blockscout.com`; scripts received a Cloudflare HTTP 403 challenge.
+- Polygon: suggested `BLOCKSCOUT_POLYGON_URL=https://polygon.blockscout.com`; scripts received a Cloudflare HTTP 403 challenge.
+- Gnosis: its per-chain host answered keyless in the supplied research, but the example profiles do not currently name a Gnosis Blockscout URL.
+
+These suggested values are not built-in `run-once` defaults. If an endpoint variable is unset, that source is skipped. The `guardian relations` Optimism behavior described above is a separate exception.
 
 A Cloudflare HTTP 403 HTML page that says `Just a moment...` is `blocked` with reason `bot_challenge`. It is not parsed as an empty wallet.
 
@@ -97,22 +119,23 @@ In `examples/monitor.json`, the order for Base and Optimism is PRO when the key 
 
 ## Alchemy
 
-Alchemy Transfers is the preferred Base source for external and token transfers in `examples/monitor.json`, when you set both env names below. `guardian init` does not add Alchemy, Blockscout PRO, or a keyless Blockscout source. On an init profile, when Etherscan has no key, or the plan refuses that chain, and the per-chain Blockscout key is also missing, the history cell stays `credential_missing` or `plan_not_supported`. An Etherscan key whose plan accepts the chain can fill the cell without the Blockscout key. Alchemy does not replace Approval or `ApprovalForAll` logs. Those stay on the Base log route (`tenderly_base`, then `base-1rpc` only when that source is enabled and the remaining budget can catch up).
+Alchemy Transfers is the preferred Base source for external and token transfers in `examples/monitor.json` and on a `guardian init` profile that includes Base, when you set `ALCHEMY_API_KEY`. Only that key is needed for Base; `ALCHEMY_TRANSFERS_URL` is an optional override. A missing key is `credential_missing` and the run continues. `guardian init` does not add Blockscout PRO or a keyless Blockscout source. On an init profile, when Alchemy and Etherscan have no key, or the plan refuses that chain, and the per-chain Blockscout key is also missing, the history cell stays `credential_missing` or `plan_not_supported`. An Etherscan key whose plan accepts the chain can fill the cell without the Blockscout key. Alchemy does not replace Approval or `ApprovalForAll` logs. Those stay on the Base log route in the example profile (`tenderly_base`, then `base-1rpc` only when that source is enabled and the remaining budget can catch up). Init does not add those log hosts.
 
-A missing key does not crash the run. In `examples/monitor.json` the monitor records `credential_missing` with a pointer to this section, then continues with Blockscout PRO and the keyless Base instance. Those Blockscout gaps stay `plan_not_supported` or `blocked` / `bot_challenge`. They are not an empty wallet. Base stays a required network. An init profile has neither of those fallback sources.
+A missing key does not crash the run. In `examples/monitor.json` the monitor records `credential_missing` with a pointer to this section, then continues with Blockscout PRO and the keyless Base instance. Those Blockscout gaps stay `plan_not_supported` or `blocked` / `bot_challenge`. They are not an empty wallet. Base stays a required network. An init profile has Alchemy, and it does not have those Blockscout fallback sources.
 
 Signup:
 
 1. Create an account at <https://www.alchemy.com>.
 2. Open the dashboard and create an app.
 3. Select Base Mainnet.
-4. Copy the HTTPS URL the dashboard shows for that app. It already contains the key in the path (`/v2/<key>`).
-5. Put that URL in the private secret profile as `ALCHEMY_TRANSFERS_URL`.
-6. Put the same key in `ALCHEMY_API_KEY`. The monitor uses the name as the gate. It does not append the key again.
+4. Put the app key in `ALCHEMY_API_KEY` in the private secret profile or process environment.
+5. Optionally set `ALCHEMY_TRANSFERS_URL` to the keyed HTTPS URL from the dashboard to override the endpoint.
+
+When `ALCHEMY_TRANSFERS_URL` is unset or blank, this Base-only adapter derives `https://base-mainnet.g.alchemy.com/v2/<key>` from `ALCHEMY_API_KEY`. An explicit endpoint wins. Doctor, coverage, and provider provenance identify the derived endpoint as `derived_from_ALCHEMY_API_KEY` without its value.
 
 Do not commit the URL or the key. The public config only names `ALCHEMY_TRANSFERS_URL` and `ALCHEMY_API_KEY`. Logs and reports redact an Alchemy `/v2/` key.
 
-Free tier, checked against Alchemy's published tables on 2026-10-09 (an estimate, not a live quota read):
+Free tier, checked against Alchemy's published tables on 2026-10-18 (an estimate, not a live quota read); check current terms:
 
 - About 30,000,000 compute units per month and 300 compute units per second.
 - `alchemy_getAssetTransfers` is 120 compute units per call. The run report records that under `budget.providers` with `credits_basis` `estimate`.
@@ -131,11 +154,28 @@ Base log endpoints, if you set them yourself:
 
 These sources do not take an API key. The public config names the environment variable. It does not contain a URL, and it does not contain a key. A missing variable skips that source. A read that fails stays a gap. It is not an empty wallet and it is not complete. Wallet addresses travel in `eth_getLogs` topics, so the first call records an `indexer_disclosures` row. `privacy.third_party_wallet_queries` stays `deny_until_local_consent` until you set `operator_approved_sources_only`.
 
-The numbers below are the 2026-10-14 review appendix. This package did not call the network. Live Mac probes are NOT_RUN.
+The observations below were checked 2026-10-18 in the supplied research. Check current terms and endpoint behavior before relying on them. This package did not repeat those network calls.
 
-- `RPC_BSC_LOGS_URL` is `bsc-logs-48club`, `range_limit` 1000. The monitor has no default endpoint. There are no docs and no SLA. The operator is an MEV builder. The review recorded HTTP 200 at 100 blocks and at 1000 blocks. That is not a finished history. `guardian relations` uses `https://rpc-bsc.48.club` for its own keyless ERC-20 read when this variable is unset, and does not copy that URL into the profile. A rate limit or a failed chunk stays `gap` or `partial`. BSC dataseed (`-32005`) and publicnode (`-32701`) are not topic-only log sources. The privacy page cited by the review is <https://docs.48.club/privacy-rpc.md>.
-- `RPC_OPTIMISM_LOGS_URL` is `op-logs-public`, `range_limit` 2000. The review recorded `https://mainnet.optimism.io` accepting 1000 and 5000 blocks, and HTTP 413 at 20000 ("limited to a 10,000 range"). publicnode returned `-32701` and is not this route. Optimism documents the public endpoint as not suitable for production: <https://docs.optimism.io/app-developers/reference/rpc-providers>.
-- `RPC_BASE_DRPC_URL` is `base-logs-drpc`, `range_limit` 100, disabled in the examples. The review recorded 100 blocks accepted and 1000 rejected with "ranges over". The public citation is <https://blog.drpc.org/upcoming-changes-to-drpcs-free-plan-effective-june-1-2025/>.
+- `RPC_BSC_LOGS_URL` is `bsc-logs-48club`, `range_limit` 1000. The monitor has no default endpoint. There are no docs and no SLA. The operator is an MEV builder. Earlier review evidence recorded HTTP 200 at 100 and 1000 blocks; that is not a finished history. `guardian relations` uses `https://rpc-bsc.48.club` for its own keyless ERC-20 read when this variable is unset, and does not copy that URL into the profile. A rate limit or a failed chunk stays `gap` or `partial`. On 2026-10-18, BSC dataseed returned `limit exceeded` at 10 blocks, and PublicNode refused topic-only `eth_getLogs` because it requires an address. Neither is a topic-only log source. The 48club privacy page cited by the earlier review is <https://docs.48.club/privacy-rpc.md>.
+- `RPC_OPTIMISM_LOGS_URL` is `op-logs-public`, `range_limit` 2000. `https://mainnet.optimism.io` accepted topic-only 10,000-block scans. Optimism documents the public endpoint as not suitable for production: <https://docs.optimism.io/app-developers/reference/rpc-providers>.
+- Arbitrum's `https://arb1.arbitrum.io` accepted topic-only 10,000-block scans. This observation does not add an endpoint to the public config.
+- dRPC free endpoints accepted 100 blocks and rejected 150 even though the returned error text said 10,000. `RPC_BASE_DRPC_URL` remains `range_limit` 100 and disabled in the examples.
+- `https://mainnet.base.org` returned HTTP 429 even at 10 blocks.
+- `https://api.avax.network` accepted at most 100 blocks per `eth_getLogs` request.
+
+<a id="service-changes"></a>
+
+## Services that changed in 2025-2026
+
+Checked 2026-10-18; check current terms. Items marked third-party research were supplied by the research summary and were not verified by this repository or integrated into its runtime.
+
+- Sim by Dune shut down on 2026-08-01. Moralis ended its free Data API on 2026-09-01. Alchemy deprecated `alchemy_simulate*` on 2026-09-30. Tenderly Free has no API. These affect simulation or data-source choices; they are third-party research facts.
+- Pyth Hermes has required a key since 2026-08-26. This is a third-party research fact; Wallet Guardian does not currently use Hermes.
+- Chainalysis deprecated its on-chain sanctions oracle, last updated 2026-03-18. Do not use it as the only sanctions check. This is a third-party research fact; this repo uses a supplied OFAC list instead.
+- Tronscan requires a key. This is a third-party research fact; the current Tron reader uses optional `TRON_PRO_API_KEY` for TronGrid, not Tronscan.
+- Sui Foundation full nodes removed JSON-RPC; use GraphQL for current Sui integrations. This is a third-party research fact; the current family reader is not implemented.
+- LINE Notify ended on 2025-03-31. This is a third-party research fact; Wallet Guardian does not provide a LINE sender.
+- `api.binance.com` may answer HTTP 451. `data-api.binance.vision` is Binance's public market-data host. This is a third-party research fact; the current price adapters do not use Binance.
 
 <a id="goplus"></a>
 

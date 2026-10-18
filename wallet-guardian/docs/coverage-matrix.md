@@ -18,7 +18,7 @@ Allowed statuses, and only these:
 | partial | A recorded probe or a fixture covers part of the path: one host, one block window, one category, or one of the two paths. |
 | blocked | A recorded refusal: HTTP 403, HTTP 429, JSON-RPC -32701, or a free-plan `plan_not_supported` cached as a capability failure. A refusal is not an empty wallet. |
 | credential_missing | The path needs a key or there is no keyless source, and the product records that gap. |
-| expansion_pending | The monitor keeps the cell for a later source. Avalanche deep native history is the case the code names. |
+| expansion_pending | The monitor keeps the cell for a later source. Avalanche history without a usable indexer is the case the code names. |
 | not_verified | Code or an offline fixture may exist, and this preview does not claim a live probe. |
 
 The table columns are the no-key path, the keyed path, and one row status. Path statuses sit in their own columns so a keyed probe cannot hide a no-key gap. The row status matches the two path statuses when they agree. When they differ, the row status is partial. A row is ok only when both paths are ok. This preview has no such row: every ok path sits next to a gap, so the row stays partial. Evidence for each ok path is in the fenced JSON block `mcm-share-s8-coverage-evidence`.
@@ -33,12 +33,13 @@ These are the facts this matrix is allowed to treat as live probes. They were no
 - Native balance deltas have offline CLI fixtures (`tests/integration/test_balance_deltas.py`). There is no live balance probe, so the BSC balance cells stay not_verified.
 - Lista inflow explanation of a BSC native increase has offline fixtures (`tests/integration/test_inflow_explainer.py`). The shipped manifest has no approved deployment intervals and cannot currently produce the strongest operational verdict. There is no live probe, so this path is not_verified. An explanation does not change alert severity and does not mark funds safe. Labels stay unverified. See `docs/inflow-explainer.md`.
 - Etherscan V2 free plan: history works for Ethereum, Arbitrum, and Polygon. Base, Optimism, BSC, and Avalanche on that free plan return plan_not_supported, cached as a capability failure.
+- Routescan: keyless and optional-key history clients have offline fixtures for Ethereum and Avalanche. No live Routescan probe is recorded in this preview, so both paths stay not_verified. The local capability catalog does not support Routescan on other chains.
 - Blockscout PRO free key: Optimism HTTP 200 (about 5 requests/second, about 20 credits a call). Base HTTP 402 plan_not_supported. Keyless optimism.blockscout.com HTTP 200 from the Linux host. Keyless base.blockscout.com HTTP 403 Cloudflare challenge from the Linux host, HTTP 200 from the operator Windows PC. Those Base results are host-specific.
 - Public RPC `eth_getLogs` without an address: publicnode Ethereum, Avalanche, and Polygon return -32701 for any range; publicnode Arbitrum returns 403; arb1.arbitrum.io, api.avax.network, polygon.gateway.tenderly.co, and NodeReal Ethereum and Optimism accept 2000 blocks; Base Tenderly caps at 1000, 1rpc at 50, and mainnet.base.org returns 429.
 - 2026-10-14 review appendix A (not re-run for this file): BSC dataseed and public `bsc.nodereal.io` returned -32005 on topic-only getLogs; BSC publicnode returned -32701; 48club accepted 100 and 1000 blocks; `mainnet.optimism.io` accepted 1000 and 5000 and returned 413 at 20000; Base dRPC accepted 100 and rejected 1000 with ranges over. dataseed and publicnode are not topic-only log sources. 48club has no docs, no SLA, and the operator is an MEV builder. The example names `RPC_BSC_LOGS_URL` only. Keyed NodeReal getLogs was not live-probed. Live Mac probes for this package are NOT_RUN.
 - Alchemy Transfers for Base: `src/guardian/sources/alchemy.py` implements the client. Offline fixtures cover it. No live probe is recorded, so the keyed cell is not_verified. A missing key is credential_missing, then Blockscout.
 - Kinza on BSC runs from offline CLI fixtures. No live verification is claimed. ERC-4626 with no configured vaults is unknown / vaults_not_configured and is not required. Solana is offline fixtures only.
-- Avalanche deep native history is expansion_pending.
+- Avalanche deep native history through the Etherscan-only path is expansion_pending. The separate keyless Routescan fallback has offline fixtures and stays not_verified.
 - Hyperliquid info and the earlier Lista read are described in `docs/coverage.md`. This preview did not re-run them.
 - A formal shadow of 24 successive windows has not been run. The DNS-over-HTTPS resolver is implemented. On the reviewed SNI-proxy host, formal qualification is BLOCKED_EGRESS and the preview verdict may be OK; that preview verdict is not a coverage status. See `docs/host-network.md`. The Telegram sender exists and is opt-in. Delivery defaults to off (`outbox_only`). The canary is NOT_RUN. `--no-send` forbids sends.
 
@@ -100,6 +101,7 @@ Not added: Bitcoin Core `rss.xml` (593 KB) is refused by the parser's item cap. 
 | ethereum-mainnet | history.token | public RPC eth_getLogs; publicnode rejects any range with -32701; NodeReal eth accepts 2000 blocks | partial | no keyed log source on this route | not_verified | partial |
 | ethereum-mainnet | permissions.standard | Approval and ApprovalForAll logs on the same RPC route, from an explicit origin | partial | no keyed approval source on this route | not_verified | partial |
 | ethereum-mainnet | history.native_external | keyless Blockscout at BLOCKSCOUT_ETH_URL when that endpoint is set | not_verified | Etherscan V2 txlist with ETHERSCAN_API_KEY | ok | partial |
+| ethereum-mainnet | history.native_external | keyless Routescan fallback, offline fixtures only | not_verified | optional ROUTESCAN_API_KEY on the same Routescan path, offline fixtures only | not_verified | not_verified |
 | bsc-mainnet | balances.native | operator RPC named by RPC_BSC_MAINNET_URL | not_verified | no keyed balance source on this route | not_verified | not_verified |
 | bsc-mainnet | balances.native_delta | operator RPC definite-block read, offline fixtures | not_verified | no keyed balance source on this route | not_verified | not_verified |
 | bsc-mainnet | history.native_internal | no keyless BSC internal-history source | credential_missing | NodeReal nr_getAssetTransfers category internal, offline fixtures only | not_verified | partial |
@@ -130,7 +132,8 @@ Not added: Bitcoin Core `rss.xml` (593 KB) is refused by the parser's item cap. 
 | avalanche-c | balances.native | operator RPC named by RPC_AVALANCHE_C_URL | not_verified | no keyed balance source on this route | not_verified | not_verified |
 | avalanche-c | history.token | public RPC eth_getLogs; publicnode returns -32701 for any range; api.avax.network accepts 2000 blocks | partial | no keyed log source on this route | not_verified | partial |
 | avalanche-c | permissions.standard | approval logs on the Avalanche RPC route | partial | no keyed approval source on this route | not_verified | partial |
-| avalanche-c | history.native_external | no keyless deep-history source on this route | expansion_pending | Etherscan V2 free plan | expansion_pending | expansion_pending |
+| avalanche-c | history.native_external | no keyless deep-history source on the Etherscan-only path | expansion_pending | Etherscan V2 free plan | expansion_pending | expansion_pending |
+| avalanche-c | history.native_external | keyless Routescan fallback, offline fixtures only | not_verified | optional ROUTESCAN_API_KEY on the same Routescan path, offline fixtures only | not_verified | not_verified |
 | solana-mainnet | balances.native | operator Solana RPC named by RPC_SOLANA_MAINNET_URL | not_verified | no keyed balance source on this route | not_verified | not_verified |
 | solana-mainnet | balances.token_accounts | operator Solana RPC | not_verified | no keyed token-account source on this route | not_verified | not_verified |
 | solana-mainnet | history.account_set | operator Solana RPC | not_verified | no keyed history source on this route | not_verified | not_verified |
@@ -222,6 +225,7 @@ Keyless sources that the routes still name:
 | blockscout-eth-public | Keyless Ethereum instance. BLOCKSCOUT_ETH_URL defaults to the public eth.blockscout.com origin. No live probe of that host is recorded in this preview. | docs/api-keys.md#blockscout |
 | blockscout-base-public | Keyless Base instance. Linux host: HTTP 403 bot_challenge. Operator Windows PC: HTTP 200. Host-specific, so the matrix cell is partial. | docs/api-keys.md#blockscout |
 | blockscout-optimism-public | Keyless Optimism instance. The Linux host recorded HTTP 200. The matrix cell stays partial because that 200 is not a finished history. | docs/api-keys.md#blockscout |
+| routescan | Keyless Ethereum and Avalanche history fallback; an optional ROUTESCAN_API_KEY raises the service allowance. Offline fixtures exist, but no live Routescan probe is recorded. Other chains are unsupported by the local Routescan capability catalog. | docs/api-keys.md#routescan |
 | tenderly-base | No key. TENDERLY_BASE_URL, range_limit 1000. See the Base log row. The anchor documents the Base log endpoints next to Alchemy. | docs/api-keys.md#alchemy |
 | bsc-logs-48club | No key. RPC_BSC_LOGS_URL, range_limit 1000. No default URL. No docs, no SLA, operator is an MEV builder. dataseed and publicnode are not this route. | docs/api-keys.md#logs |
 | op-logs-public | No key. RPC_OPTIMISM_LOGS_URL, range_limit 2000. The 2026-10-14 review recorded mainnet.optimism.io accepting 1000 and 5000 blocks. publicnode is not this route. | docs/api-keys.md#logs |
@@ -238,7 +242,7 @@ Keyless sources that the routes still name:
 - Alchemy Transfers on Base has offline fixtures and no recorded live probe.
 - The Base keyless Blockscout result depends on the host.
 - BSC external history has no keyless source.
-- Avalanche deep native history is expansion_pending.
+- Avalanche deep native history through the Etherscan-only path is expansion_pending. The separate keyless Routescan fallback has offline fixtures and stays not_verified.
 - `guardian install-service --dry-run` prints a plan and does not install a unit. On a systemd or cron plan, `install-service --apply` without `--dry-run` installs whether or not `--output` is set, and a successful install reports `installed: true`. `--output` only changes where the rendered files are written. It does not turn `--apply` into a preview. systemd still runs `daemon-reload` and `systemctl enable` (or `systemctl --user enable`) on `guardian-mcm-shadow.timer`, `guardian-legacy-collector.timer`, and `guardian-watchdog.timer`, and does not pass `--now`, so this command does not start a timer. Those `enable` commands name the timers; they do not point at the `--output` directory. cron still runs `crontab -u <user>` on the merged file. Without `--output`, systemd system mode writes the six unit files under `/etc/systemd/system`. systemd user mode writes them under `/home/<user>/.config/systemd/user` (`--user` defaults to `guardian-monitor`). cron mode writes `guardian-unattended.cron` to `/etc/cron.d` and the current user crontab plus the managed block to `/etc/cron.d/guardian-unattended.cron.merged`, then runs `crontab -u`. With `--output`, those files are written under that directory instead, and `crontab -u` installs the merged file from there. The program does not force mode `0600` on those writes. The cron lines have no user field, so a cron that reads `/etc/cron.d` can parse them as a system crontab. The managed block in the user crontab is replaced; other lines of that crontab are kept. The generated `run-once` and `watchdog` lines include `--no-send`. `guardian-legacy-collector.service` and the second cron line run `--legacy-executable` (default `/usr/local/sbin/guardian-legacy-collector`) with no `--no-send`. That program is the operator's. `--schedule-mode launchd_agent` does not call `launchctl`. Launchd checks that each plist command includes `--no-send`. No unit has been installed on a host by this preview, and the host smoke is NOT_RUN. See `docs/box-unattended.md`.
 - Permit2 internal allowances are not tracked. A Permit2 `Permit` log is a `relay_permit` note with `not_current_allowance`. It is not an approval row and it is not an alert. The approval scan topics are `Approval(address,address,uint256)` and `ApprovalForAll(address,address,bool)`, from the bootstrap origin.
 - Tagged previews are published only as GitLab releases. Nothing is uploaded to PyPI or any package index.
@@ -318,6 +322,20 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
         "config/source-capabilities/blockscout.json"
       ],
       "note": "Keyed free-plan history for Ethereum has a recorded live probe and an offline txlist fixture. Keyless eth.blockscout.com has no recorded live probe in this preview."
+    },
+    {
+      "id": "ethereum-mainnet/history.native_external#routescan",
+      "network": "ethereum-mainnet",
+      "capability": "history.native_external",
+      "no_key_path": "keyless Routescan fallback, offline fixtures only",
+      "no_key_status": "not_verified",
+      "keyed_path": "optional ROUTESCAN_API_KEY on the same Routescan path, offline fixtures only",
+      "keyed_status": "not_verified",
+      "status": "not_verified",
+      "capability_files": [
+        "config/source-capabilities/routescan.json"
+      ],
+      "note": "Routescan is locally scoped to Ethereum and Avalanche history. Offline fixtures cover the client, but this preview records no live Routescan probe."
     },
     {
       "id": "bsc-mainnet/balances.native",
@@ -747,7 +765,7 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "id": "avalanche-c/history.native_external",
       "network": "avalanche-c",
       "capability": "history.native_external",
-      "no_key_path": "no keyless deep-history source on this route",
+      "no_key_path": "no keyless deep-history source on the Etherscan-only path",
       "no_key_status": "expansion_pending",
       "keyed_path": "Etherscan V2 free plan",
       "keyed_status": "expansion_pending",
@@ -756,7 +774,21 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
         "config/source-capabilities/etherscan_v2.json",
         "config/source-capabilities/evm_rpc.json"
       ],
-      "note": "The free plan returns plan_not_supported. The monitor records expansion_pending for that Avalanche case. Deep history is not an empty wallet. It does not block the other six configured EVM networks."
+      "note": "The Etherscan free plan returns plan_not_supported. This row describes the Etherscan-only path; the separate Routescan fallback is not_verified. A blocked history read is not an empty wallet and does not block the other six configured EVM networks."
+    },
+    {
+      "id": "avalanche-c/history.native_external#routescan",
+      "network": "avalanche-c",
+      "capability": "history.native_external",
+      "no_key_path": "keyless Routescan fallback, offline fixtures only",
+      "no_key_status": "not_verified",
+      "keyed_path": "optional ROUTESCAN_API_KEY on the same Routescan path, offline fixtures only",
+      "keyed_status": "not_verified",
+      "status": "not_verified",
+      "capability_files": [
+        "config/source-capabilities/routescan.json"
+      ],
+      "note": "Routescan is locally scoped to Ethereum and Avalanche history. Offline fixtures cover the client, but this preview records no live Routescan probe. Other chains are unsupported by this local adapter catalog."
     },
     {
       "id": "solana-mainnet/balances.native",
@@ -1550,6 +1582,13 @@ The fenced blocks are what the offline guard checks. `status`, `no_key_status`, 
       "anchor": "blockscout",
       "no_key": "Keyless Optimism instance. The Linux host recorded HTTP 200. The matrix cell stays partial because that 200 is not a finished history.",
       "capability_file": "config/source-capabilities/blockscout.json"
+    },
+    {
+      "id": "routescan",
+      "credential_env": null,
+      "anchor": "routescan",
+      "no_key": "Keyless Ethereum and Avalanche history fallback; an optional ROUTESCAN_API_KEY raises the service allowance. Offline fixtures exist, but no live Routescan probe is recorded. Other chains are unsupported by the local Routescan capability catalog.",
+      "capability_file": "config/source-capabilities/routescan.json"
     },
     {
       "id": "tenderly-base",

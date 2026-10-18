@@ -10,16 +10,20 @@ from __future__ import annotations
 
 import base64
 import ipaddress
+import logging
 import os
+import re
 import socket
+from contextlib import contextmanager
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 
 from guardian.configuration import MaskedSecret
+from guardian.credentials import CredentialResolution, resolve_named
 from guardian.errors import ConfigError, GuardianError, SecurityError
-from guardian.security.redact import redact
+from guardian.security.redact import redact, register_extra_secret
 from guardian.security.ssrf import validate_url
 from guardian.sources.resolver import (
     BENCHMARK_MESSAGE,
@@ -37,6 +41,9 @@ _MAX_HOPS = 3
 _URL_KEYS = frozenset({"endpoint", "endpoint_url", "rpc", "rpc_url", "url"})
 _METADATA_HOSTS = frozenset({"metadata", "metadata.google.internal"})
 _METADATA_IP = ipaddress.ip_address("169.254.169.254")
+_HTTP_LOGGERS = ("httpx", "httpcore")
+_ALCHEMY_KEY = re.compile(r"^[A-Za-z0-9_-]{8,}$")
+_ROUTESCAN_DEFAULT_BASE = "https://api.routescan.io"
 _SSRF_REASON = {
     "dns answer points at a blocked address": "private_endpoint",
     BENCHMARK_MESSAGE: "benchmark_address",
@@ -60,10 +67,11 @@ class TransportError(GuardianError):
 class RegisteredSource:
     source_id: str
     adapter: str
-    endpoint: str
+    endpoint: str = field(repr=False)
     budget_group: str
     allow_private_network: bool
     credential: MaskedSecret | None = None
+    endpoint_provenance: dict[str, Any] | None = None
 
 
 @dataclass
@@ -100,6 +108,46 @@ class TransportResult:
         return Classification(self.category, self.quality, self.retryable, self.blocked, self.reason)
 
 
+class _CredentialLogFilter(logging.Filter):
+    """Redact any URL that still reaches an HTTP client logger."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            rendered = record.getMessage()
+        except Exception:
+            return False
+        record.msg = redact(rendered)
+        record.args = ()
+        if isinstance(record.exc_text, str):
+            record.exc_text = redact(record.exc_text)
+        return True
+
+
+def quiet_http_client_logs() -> None:
+    """Stop httpx and httpcore from emitting request URLs at INFO or DEBUG."""
+    for name in _HTTP_LOGGERS:
+        logger = logging.getLogger(name)
+        logger.setLevel(logging.WARNING)
+        if not any(isinstance(item, _CredentialLogFilter) for item in logger.filters):
+            logger.addFilter(_CredentialLogFilter())
+
+
+@contextmanager
+def _quiet_http_loggers():
+    saved: list[tuple[logging.Logger, int]] = []
+    for name in _HTTP_LOGGERS:
+        logger = logging.getLogger(name)
+        saved.append((logger, logger.level))
+        logger.setLevel(logging.WARNING)
+        if not any(isinstance(item, _CredentialLogFilter) for item in logger.filters):
+            logger.addFilter(_CredentialLogFilter())
+    try:
+        yield
+    finally:
+        for logger, level in saved:
+            logger.setLevel(level)
+
+
 class HttpxBackend:
     """Production backend. Redirects stay off. gRPC is not spoken here.
 
@@ -130,29 +178,35 @@ class HttpxBackend:
         client = self._client or httpx.Client(**direct_client_kwargs(timeout=limit))
         url, headers, extensions = pinned_request(call)
         try:
-            with client.stream(
-                call.method,
-                url,
-                content=call.body or None,
-                headers=headers,
-                extensions=extensions,
-                timeout=limit,
-            ) as response:
-                buf = bytearray()
-                for chunk in response.iter_bytes():
-                    buf.extend(chunk)
-                    if len(buf) > self.max_response_bytes:
-                        raise TransportError("response_too_large")
-                return RawResponse(response.status_code, {key: value for key, value in response.headers.items()}, bytes(buf))
+            with _quiet_http_loggers():
+                try:
+                    with client.stream(
+                        call.method,
+                        url,
+                        content=call.body or None,
+                        headers=headers,
+                        extensions=extensions,
+                        timeout=limit,
+                    ) as response:
+                        buf = bytearray()
+                        for chunk in response.iter_bytes():
+                            buf.extend(chunk)
+                            if len(buf) > self.max_response_bytes:
+                                raise TransportError("response_too_large")
+                        return RawResponse(
+                            response.status_code,
+                            {key: value for key, value in response.headers.items()},
+                            bytes(buf),
+                        )
+                finally:
+                    if owns:
+                        client.close()
         except TransportError:
             raise
         except httpx.TimeoutException:
             raise TransportError("timeout", retryable=True) from None
         except httpx.HTTPError:
             raise TransportError("connection_error", retryable=True) from None
-        finally:
-            if owns:
-                client.close()
 
 
 def pinned_request(call: PreparedCall) -> tuple[str, dict[str, str], dict[str, str]]:
@@ -415,13 +469,15 @@ def build_endpoint_registry(
         env_name = source.get("endpoint_env")
         if not isinstance(env_name, str):
             raise ConfigError("endpoint_env must be an env var name")
+        endpoint = resolve_source_endpoint(source, secrets, environ)
         registered[source_id] = RegisteredSource(
             source_id=source_id,
             adapter=str(source.get("adapter", "")),
-            endpoint=_lookup_endpoint(env_name, secrets, environ),
+            endpoint=endpoint.reveal(),
             budget_group=str(source.get("budget_group", "")),
             allow_private_network=_private_flag(local_profiles.get(source_id)),
             credential=_lookup_credential(source.get("credential_env"), secrets, environ),
+            endpoint_provenance=endpoint.provenance(),
         )
     return EndpointRegistry(registered)
 
@@ -431,12 +487,28 @@ def assert_no_public_local_flag(document: Mapping[str, Any]) -> None:
         raise SecurityError("public_local_profile", reason="public_local_profile")
 
 
-def _lookup_endpoint(env_name: str, secrets: Mapping[str, str], environ: Mapping[str, str]) -> str:
-    for pool in (secrets, environ):
-        value = pool.get(env_name)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
+def resolve_source_endpoint(
+    source: Mapping[str, Any], secrets: Mapping[str, str], environ: Mapping[str, str],
+) -> CredentialResolution:
+    """Resolve an explicit endpoint, or the Base-only Alchemy key fallback."""
+    env_name = source.get("endpoint_env")
+    if not isinstance(env_name, str):
+        raise ConfigError("endpoint_env must be an env var name")
+    endpoint = resolve_named(env_name, secrets, environ)
+    if not endpoint.present and source.get("adapter") == "alchemy_transfers" and env_name == "ALCHEMY_TRANSFERS_URL":
+        key = resolve_named("ALCHEMY_API_KEY", secrets, environ)
+        if key.present:
+            revealed = key.reveal()
+            register_extra_secret(revealed)
+            if _ALCHEMY_KEY.fullmatch(revealed) is None:
+                return CredentialResolution(env_name, "absent", False, False, "")
+            return CredentialResolution(
+                env_name, "derived_from_ALCHEMY_API_KEY", True, key.shadowed,
+                "https://base-mainnet.g.alchemy.com/v2/" + revealed,
+            )
+    if not endpoint.present and source.get("adapter") == "routescan" and env_name == "ROUTESCAN_API_BASE":
+        return CredentialResolution(env_name, "default", True, False, _ROUTESCAN_DEFAULT_BASE)
+    return endpoint
 
 
 def _lookup_credential(env_name: Any, secrets: Mapping[str, str], environ: Mapping[str, str]) -> MaskedSecret | None:
@@ -802,4 +874,3 @@ def _contains_key(value: Any, key: str) -> bool:
     if isinstance(value, list):
         return any(_contains_key(item, key) for item in value)
     return False
-

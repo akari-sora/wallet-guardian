@@ -16,6 +16,21 @@ _BOT_TOKEN = re.compile(r"\d{5,}:[A-Za-z0-9_-]{8,}")
 _ALCHEMY_V2 = re.compile(r"(?i)(https?://[^\s\"']*alchemy[^\s\"']*?/v2/)([A-Za-z0-9_\-]{8,})")
 # NodeReal dashboard URLs keep the key in the path: https://host/v1/<key>
 _NODEREAL_V1 = re.compile(r"(?i)(https?://[^\s\"']*nodereal[^\s\"']*?/v1/)([A-Za-z0-9_\-]{8,})")
+# IP pinning drops the provider hostname. Mask the key segment only on an IP authority.
+_PINNED_PATH_KEY = re.compile(
+    r"(?i)(https?://(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:]+\])(?::\d+)?/v[12]/)([A-Za-z0-9_\-]{8,})"
+)
+_registered_secrets: list[str] = []
+
+
+def register_extra_secret(value: str) -> None:
+    """Remember a credential so later ``redact`` calls mask it without a hostname."""
+    if not isinstance(value, str):
+        return
+    secret = value.strip()
+    if len(secret) < 6 or secret in _registered_secrets:
+        return
+    _registered_secrets.append(secret)
 
 
 def redact(text: str, extra_secrets: list[str] | None = None) -> str:
@@ -27,7 +42,11 @@ def redact(text: str, extra_secrets: list[str] | None = None) -> str:
     masked = _BOT_TOKEN.sub("***", masked)
     masked = _ALCHEMY_V2.sub(r"\1***", masked)
     masked = _NODEREAL_V1.sub(r"\1***", masked)
-    for secret in extra_secrets or []:
+    masked = _PINNED_PATH_KEY.sub(r"\1***", masked)
+    secrets = list(_registered_secrets)
+    if extra_secrets:
+        secrets.extend(extra_secrets)
+    for secret in secrets:
         if secret and len(secret) >= 6:
             masked = masked.replace(secret, "***")
     return masked

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
@@ -74,6 +74,16 @@ class FixtureRpc:
         self.calls: list[str] = []
 
     def send(self, call: object) -> RawResponse:
+        url = urlsplit(str(getattr(call, "url", "")))
+        query = parse_qs(url.query)
+        if (
+            getattr(call, "source_id", None) == "routescan"
+            and getattr(call, "method", None) == "GET"
+            and url.path == "/v2/network/mainnet/evm/1/etherscan/api"
+            and query.get("module") == ["account"]
+            and query.get("action") == ["txlist"]
+        ):
+            return RawResponse(200, {}, json.dumps({"status": "0", "message": "No transactions found", "result": []}).encode())
         body = getattr(call, "body", b"") or b""
         payload = json.loads(body.decode("utf-8")) if body else {}
         method = payload.get("method") if isinstance(payload, dict) else None
@@ -143,9 +153,10 @@ def test_mcm_w9_01_first_run_no_code_edit(tmp_path: Path, monkeypatch: pytest.Mo
     assert history["quality"] == "complete_in_declared_scope"
     assert "incremental_window_complete" in history["reason_codes"]
     assert "not_queried" not in history["reason_codes"]
-    assert external["quality"] == "error"
-    assert "credential_missing" in external["reason_codes"]
-    assert "blocked" in external["reason_codes"]
+    assert external["quality"] == "complete_in_declared_scope"
+    assert external["sources"] == ["routescan"]
+    assert "credential_missing" not in external["reason_codes"]
+    assert "blocked" not in external["reason_codes"]
     assert permits["support"] == "not_observable"
     assert permits["quality"] == "unknown"
     assert "not_observable" in permits["reason_codes"]
@@ -449,6 +460,7 @@ def _desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Desk:
         "GOPLUS_API_BASE": "https://goplus.example.invalid/api",
         "HELIUS_PARSED_EVENTS_URL": "https://helius.example.invalid/events",
         "OFAC_SLS_FEED": "https://ofac.example.invalid/feed",
+        "ROUTESCAN_API_BASE": "https://routescan.example.invalid",
         "RPC_ARBITRUM_ONE_URL": "https://arbitrum.example.invalid/rpc",
         "RPC_AVALANCHE_C_URL": "https://avalanche.example.invalid/rpc",
         "RPC_BASE_MAINNET_URL": "https://base.example.invalid/rpc",

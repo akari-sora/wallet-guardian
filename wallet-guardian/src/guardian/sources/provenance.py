@@ -56,6 +56,9 @@ class CallLedger:
             "rate_headers": {},
             "remaining_quota": None,
         })
+        endpoint = getattr(source, "endpoint_provenance", None)
+        if endpoint is not None:
+            entry["endpoint"] = endpoint
         methods = _methods(operation)
         entry["http_calls"] += 1
         entry["logical_methods"] += len(methods)
@@ -102,6 +105,8 @@ class CallLedger:
                 "rate_headers": headers,
                 "remaining_quota": None if remaining is None else redact(str(remaining)),
             }
+            if "endpoint" in entry:
+                providers[source_id]["endpoint"] = dict(entry["endpoint"])
         return {
             "backoff": list(self.backoff),
             "egress": dict(self.egress),

@@ -6,6 +6,8 @@ The shareable Wallet Guardian bot template is coming. There is no template link.
 
 Until that template exists, point Grok Bot at the `guardian` executable you installed and at this repository's docs, especially [cli-reference.md](cli-reference.md), [coverage-matrix.md](coverage-matrix.md), and [security-privacy.md](security-privacy.md). The bot should call the installed command. It should not reimplement the monitor, and it should not invent flags that `--help` does not list.
 
+For personal free-key choices and the Grok Bot secure secret-card workflow, see [free-keys.md](free-keys.md); never paste a key into chat.
+
 The agent skill is `skills/wallet-guardian/`. The single file for a Grok Bot upload is `skills/dist/grok-bot/SKILL.md` (the reference pages are inlined, so that file has no relative links). How each host is installed is in [guide-agents.md](guide-agents.md). Those host installs were not exercised (未實測). Prefer that skill file when the host accepts one. The paste block below is for a host that takes only pasted text. Its rules part is generated from the same skill. See `## Classes` in `skills/wallet-guardian/SKILL.md`. See `## Hard limits` in `skills/wallet-guardian/SKILL.md`.
 
 The rc.6 wheel on the release page includes `capabilities`. `v0.4.0-rc.4` and earlier wheels do not. On rc.4 or earlier the bot stops at the first step.

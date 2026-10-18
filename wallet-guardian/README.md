@@ -173,7 +173,7 @@ guardian coverage --mcm-config "${XDG_CONFIG_HOME:-$HOME/.config}/guardian/monit
 - Agent、排程與這台共用電腦不能簽名或廣播。
 - 主網測試交易未授權（`mainnet_test_transactions_authorized=false`）。
 - 沒有 trace／fork／真錢包端到端，所以 Lista 領取的模擬是 `INCOMPLETE`，寫入覆蓋是 `DRAFT` / `BLOCKED`。
-- DeBank、Zerion，以及模擬用的 `TENDERLY_ACCESS_KEY`，在這個版本沒有會被呼叫的 adapter。設了這些 key 也不會呼叫它們，也不會解鎖全鏈 discovery 或模擬；doctor 會回「key configured; this provider adapter is not implemented」。`examples/monitor.json` 的 `tenderly_base` 是另一條 Base 日誌 RPC，見上面的限制。GoPlus 也不會被自動呼叫。Alchemy 只出現在 `examples/monitor.json` 的 Base 路由，`init` 不會加。
+- DeBank、Zerion，以及模擬用的 `TENDERLY_ACCESS_KEY`，在這個版本沒有會被呼叫的 adapter。設了這些 key 也不會呼叫它們，也不會解鎖全鏈 discovery 或模擬；doctor 會回「key configured; this provider adapter is not implemented」。`examples/monitor.json` 的 `tenderly_base` 是另一條 Base 日誌 RPC，見上面的限制。GoPlus 也不會被自動呼叫。選了 Base 時，`init` 與 `examples/monitor.json` 都會在 Base 歷史路由加上 `alchemy-base`（只需 `ALCHEMY_API_KEY`，未設 `ALCHEMY_TRANSFERS_URL` 時自動推導 Base 端點）；選了 Ethereum 或 Avalanche 時，`init` 也會加上免 key 的 `routescan` 歷史來源（未設 `ROUTESCAN_API_BASE` 時預設連 `https://api.routescan.io`）。
 - 官方 BSC dataseed 停用 `eth_getLogs`，沒有 Etherscan key 就無法回補歷史領取。
 - 沒有公開 webhook、沒有付費套餐、沒有持續監控。`monitoring_active` 是 false。
 - Cloudflare Pages 已有公開來源，見 `docs/deploy.md`。程式常數 `fixed_https_origin` 仍是 false，所以這個套件不會發行公開任務連結。localhost 不是手機上的 localhost。網址回 200 不是執行授權。
@@ -234,7 +234,7 @@ Etherscan V2 只用一把 `ETHERSCAN_API_KEY`，涵蓋 chainlist 以及之後的
 | `GOPLUS_API_KEY` | 地址／授權風險補充 | `LIMITED_DISCOVERY`，不會假裝已篩過 | 否 |
 | `DEBANK_ACCESS_KEY` | 舊文件寫 DeFi discovery | 沒有 adapter，不是「有 key 就解鎖」 | 否（未實作） |
 | `ZERION_API_KEY` | 舊文件寫替代 discovery | 沒有 adapter；本建置也不開放 webhook | 否（未實作） |
-| `ALCHEMY_API_KEY` | Portfolio token | 沒有這把 key 時，範例 Base 路由不會連上 | 只在 `examples/monitor.json` 的 Base 路由；`init` 不會加 |
+| `ALCHEMY_API_KEY` | Base `alchemy_getAssetTransfers` 歷史讀取 | 沒有這把 key 時，Base 的 `alchemy-base` 來源維持 `credential_missing` 且不會連上 | 會（`examples/monitor.json` 與選了 Base 的 `init` 設定檔都會加 `alchemy-base`；未設 `ALCHEMY_TRANSFERS_URL` 時由這把 key 推導 Base 端點） |
 | `TENDERLY_ACCESS_KEY` | 舊文件寫可選模擬 | 沒有 adapter，設了 key 也不保證模擬 | 否（未實作） |
 | `GUARDIAN_MAINNET_SEND` | 使用者錢包的主網送出開關，預設 `false` | 確認鈕即使可按也不會呼叫錢包 | 監控程式不會簽名或廣播 |
 

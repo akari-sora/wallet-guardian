@@ -77,7 +77,7 @@ Clock = Callable[[], float]
 _APPLICABLE = frozenset({"implemented", "partial"})
 _CURSOR_OVERLAP = 2
 _INCLUSION_LAG = 12
-_INDEXER_ADAPTERS = frozenset({"alchemy_transfers", "etherscan_v2", "nodereal_transfers", "blockscout"})
+_INDEXER_ADAPTERS = frozenset({"alchemy_transfers", "etherscan_v2", "routescan", "nodereal_transfers", "blockscout"})
 _FALLBACK_INDEXERS = {
     "base-mainnet": "blockscout",
     "bsc-mainnet": "nodereal_transfers",
@@ -658,7 +658,7 @@ def probe_sources(
     for name in sorted(public_config.document["sources"]):
         source = public_config.document["sources"][name]
         status = private_inputs.source_status.get(name)
-        credential_required = isinstance(source.get("credential_env"), str)
+        credential_required = isinstance(source.get("credential_env"), str) and source.get("adapter") != "routescan"
         present = bool(status and status.credential_present)
         identity: dict[str, Any] = {"probe": "untested", "status": "not_probed"}
         enabled = source.get("enabled") is True
@@ -2786,6 +2786,15 @@ def _required_map(enabled, rows, observations, position_summaries, public_config
 
 
 def _indexer_ready(public_config, private_inputs, network: str) -> bool:
+    # Keyless Routescan keeps Avalanche history required. A credential gap names
+    # ROUTESCAN_API_KEY (see scan.drive._refuse_history), not the paid Etherscan plan.
+    for route in public_config.document["routing"]:
+        if route.get("network") != network or route.get("capability") != "history.native_external":
+            continue
+        for source_id in route.get("source_ids") or []:
+            source = public_config.document["sources"].get(source_id, {})
+            if source.get("adapter") == "routescan" and source.get("enabled") is True:
+                return True
     if network == "avalanche-c":
         return False
     # Base stays required while any enabled indexer is on the route. A missing

@@ -36,7 +36,7 @@ from guardian.sources.nodereal import NodeRealClient
 # Used when polling.round_deadline_seconds is omitted. See docs/mcm-live-01r.md.
 DEFAULT_ROUND_DEADLINE_SECONDS = 180
 
-_INDEXERS = frozenset({"alchemy_transfers", "blockscout", "etherscan_v2", "nodereal_transfers"})
+_INDEXERS = frozenset({"alchemy_transfers", "blockscout", "etherscan_v2", "routescan", "nodereal_transfers"})
 _SOURCE_REFUSALS = frozenset({
     "alchemy_chain_not_supported",
     "bot_challenge",
@@ -50,6 +50,7 @@ _INDEXER_METHOD = {
     "alchemy_transfers": "alchemy_getAssetTransfers",
     "blockscout": "account/txlist",
     "etherscan_v2": "account/txlist",
+    "routescan": "account/txlist",
     "nodereal_transfers": "nr_getAssetTransfers",
 }
 _LOG_CAPABILITIES = ("history.token", "permissions.standard")
@@ -417,8 +418,8 @@ def history_external(scan: ScanContext, private_inputs: Any, wallet_id: str, add
         # PRO without a key still calls once so a 402 payment response becomes credential_missing,
         # then the keyless instance is next. Other keyed sources do not call.
         pro_without_key = missing_key and adapter == "blockscout" and credential_name == "BLOCKSCOUT_API_KEY"
-        if missing_key and not pro_without_key:
-            if refusal not in {"bot_challenge", "plan_not_supported"}:
+        if missing_key and not pro_without_key and adapter != "routescan":
+            if refusal in {None, "credential_missing"}:
                 refusal = "credential_missing"
                 refusal_adapter = str(adapter)
                 refusal_env = credential_name
@@ -434,8 +435,7 @@ def history_external(scan: ScanContext, private_inputs: Any, wallet_id: str, add
         if outcome.refusal:
             refusal = outcome.refusal
             refusal_adapter = str(adapter)
-            if outcome.refusal == "credential_missing":
-                refusal_env = credential_name
+            refusal_env = credential_name if outcome.refusal == "credential_missing" else None
             continue
         _note_bsc_internal(scan, wallet_id, private_inputs)
         return outcome.rows
@@ -579,7 +579,7 @@ def _run_indexer(scan, source_id, source, adapter, wallet_id, address, stored, p
     page_size = _source_int(scan, "page_size", 1000, source_id=source_id)
     chunks, origin = _indexer_chunks(scan, source, stored)
     limited = _LimitedTransport(scan.transport, scan, source_id)
-    if adapter == "etherscan_v2":
+    if adapter in {"etherscan_v2", "routescan"}:
         client = _etherscan(scan, source_id, source, limited)
         native = _walk_pages(scan, chunks, origin, wallet_id, "history.native_external", source_id, True, lambda start, end: _safe_history(client, scan.chain_id, "txlist", address, start, end, stored))
         _remember_plan(plan_cache, source_id, scan.network, native.refusal)
@@ -827,6 +827,9 @@ def _walk_pages(scan, chunks, origin, wallet_id, capability, source_id, native, 
                     pending=_pending_snapshots(scan.candidates[before_candidates:]),
                 )
         leaves.append((start, end))
+    source = scan.public_config.document.get("sources", {}).get(source_id, {})
+    if source.get("adapter") == "routescan" and capability == "history.native_external" and not leaves and hard and hard != "indexer_lag":
+        return _Outcome(refusal=hard, partial=True)
     if cursor:
         _finish(scan, capability, [(wallet_id, _owner_for(scan, wallet_id))], origin, int(scan.head), leaves, gaps, hard, stopped, "ok" if rows else "empty", source_id)
     return _Outcome(rows=rows, partial=bool(hard or gaps or stopped), stopped=stopped)
@@ -1075,10 +1078,12 @@ def _blockscout_pro(source) -> bool:
 
 
 def _etherscan(scan, source_id, source, transport=None) -> EtherscanClient:
-    name = source.get("credential_env") if isinstance(source.get("credential_env"), str) else "ETHERSCAN_API_KEY"
+    default_name = "ROUTESCAN_API_KEY" if source.get("adapter") == "routescan" else "ETHERSCAN_API_KEY"
+    name = source.get("credential_env") if isinstance(source.get("credential_env"), str) else default_name
     secret = _secret(scan, name)
     return EtherscanClient(
         transport or scan.transport, source_id, credential=secret, credential_env=name, clock=scan.clock, sleep=_sleep(scan, source_id),
+        adapter=source.get("adapter", "etherscan_v2"),
     )
 
 
@@ -1309,6 +1314,9 @@ def _record_indexer(scan, source_id: str, adapter: str) -> None:
 
 def _refuse_history(scan, wallet_id, refusal, adapter: str | None = None, credential_env: str | None = None) -> None:
     reason = refusal or "unsupported_source"
+    if reason == "credential_missing" and _routescan_history_enabled(scan):
+        # Etherscan's free plan does not cover Avalanche. Name the keyless fallback.
+        credential_env = "ROUTESCAN_API_KEY"
     hint = credential_hint(credential_env) if reason == "credential_missing" and credential_env else ""
     if reason == "credential_missing" and adapter == "blockscout":
         scan.observations[(wallet_id, scan.network, "history.native_external")] = CoverageObservation(
@@ -1366,6 +1374,25 @@ def _blocked(reason: str, hint: str = "") -> CoverageObservation:
         price_quality="unknown",
         credential_hint=hint,
     )
+
+
+def _routescan_history_enabled(scan) -> bool:
+    if getattr(scan, "network", None) != "avalanche-c":
+        return False
+    document = getattr(getattr(scan, "public_config", None), "document", None)
+    if not isinstance(document, dict):
+        return False
+    sources = document.get("sources") if isinstance(document.get("sources"), dict) else {}
+    for route in document.get("routing") or []:
+        if not isinstance(route, dict):
+            continue
+        if route.get("network") != "avalanche-c" or route.get("capability") != "history.native_external":
+            continue
+        for source_id in route.get("source_ids") or []:
+            source = sources.get(source_id, {})
+            if isinstance(source, dict) and source.get("adapter") == "routescan" and source.get("enabled") is True:
+                return True
+    return False
 
 
 def _endpoint_ready(scan, source_id: str) -> bool:

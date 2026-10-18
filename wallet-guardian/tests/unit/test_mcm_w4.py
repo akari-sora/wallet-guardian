@@ -911,3 +911,8 @@ def test_mcm_w4_03_etherscan_real_empty_shape_is_empty_not_partial():
     assert not_empty.category == "partial"
     limited = classify_response(200, {"status": "0", "message": "NOTOK", "result": "Max rate limit reached"})
     assert limited.category == "rate_limited" and limited.retryable
+    per_second = classify_response(
+        200,
+        {"status": "0", "message": "NOTOK", "result": "Max calls per sec rate limit reached"},
+    )
+    assert per_second.category == "rate_limited" and per_second.retryable

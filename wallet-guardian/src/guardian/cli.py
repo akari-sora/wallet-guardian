@@ -867,6 +867,7 @@ def _mcm_coverage(args: argparse.Namespace) -> tuple[dict, int]:
         "rows": rows,
         "status": "ok",
         "credentials": fields["credentials"],
+        "endpoints": fields["endpoints"],
         "resolver": fields["resolver"],
         "connectivity": fields["connectivity"],
         "egress_qualification": fields["egress_qualification"],
@@ -1095,6 +1096,9 @@ def main(
     notification_resolve: Any = None,
     service_runner: Any = None,
 ) -> int:
+    from guardian.sources.transport import quiet_http_client_logs
+
+    quiet_http_client_logs()
     load_local_env()
     parser = build_parser()
     args = argparse.Namespace()

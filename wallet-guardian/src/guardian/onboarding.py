@@ -456,6 +456,12 @@ def _add_evm(network: str, sources: dict[str, Any], budgets: dict[str, Any], rou
     if network != "bsc-mainnet":
         _put_etherscan(sources, budgets)
         history.append("etherscan")
+    if network in {"ethereum-mainnet", "avalanche-c"}:
+        _put_routescan(sources, budgets)
+        history.append("routescan")
+    if network == "base-mainnet":
+        _put_alchemy(sources, budgets)
+        history.insert(0, "alchemy-base")
     if network == "bsc-mainnet":
         _put_source(sources, budgets, "nodereal-bsc", {
             "adapter": "nodereal_transfers",
@@ -470,6 +476,27 @@ def _add_evm(network: str, sources: dict[str, Any], budgets: dict[str, Any], rou
         _put_source(sources, budgets, blockscout_id, _blockscout_source(network, blockscout_id))
         history.append(blockscout_id)
     routing.append({"capability": "history.native_external", "network": network, "source_ids": history})
+
+
+def _put_routescan(sources: dict[str, Any], budgets: dict[str, Any]) -> None:
+    _put_source(sources, budgets, "routescan", {
+        "adapter": "routescan",
+        "budget_group": "routescan-account",
+        "credential_env": "ROUTESCAN_API_KEY",
+        "enabled": True,
+        "endpoint_env": "ROUTESCAN_API_BASE",
+    })
+
+
+def _put_alchemy(sources: dict[str, Any], budgets: dict[str, Any]) -> None:
+    _put_source(sources, budgets, "alchemy-base", {
+        "adapter": "alchemy_transfers",
+        "budget_group": "alchemy-base",
+        "credential_env": "ALCHEMY_API_KEY",
+        "enabled": True,
+        "endpoint_env": "ALCHEMY_TRANSFERS_URL",
+        "method_credits": 120,
+    })
 
 
 def _put_etherscan(sources: dict[str, Any], budgets: dict[str, Any]) -> None:
@@ -614,6 +641,24 @@ def _share_source(source_id: str, source: Mapping[str, Any]) -> dict[str, Any]:
             "The machine hostname is not sent."
         )
         sends_addresses = True
+    elif adapter == "routescan":
+        recipient = (
+            "Routescan at https://api.routescan.io when "
+            + endpoint_env
+            + " is unset, or the host named by "
+            + endpoint_env
+            + " when set"
+        )
+        data = (
+            "Wallet address is sent to https://api.routescan.io by default (or the host named by "
+            + endpoint_env
+            + " when set) on keyless and keyed history reads for Ethereum and Avalanche. "
+            "Leaving "
+            + endpoint_env
+            + " and the optional key unset does not skip the read. "
+            "The optional key, when set, is a query parameter."
+        )
+        sends_addresses = True
     elif adapter == "helius_parsed_events":
         recipient = "Helius at the host named by " + endpoint_env
         data = "This source is not called in this build, so the address is not sent, with or without a key."
@@ -652,7 +697,9 @@ def _provider_name(adapter: str) -> str:
         "blockscout": "Blockscout",
         "cosmos_rest": "the Cosmos REST host",
         "esplora": "the Esplora host",
+        "alchemy_transfers": "Alchemy",
         "etherscan_v2": "Etherscan",
+        "routescan": "Routescan",
         "helius_parsed_events": "Helius",
         "nodereal_transfers": "NodeReal",
         "sui_graphql": "the Sui GraphQL host",
