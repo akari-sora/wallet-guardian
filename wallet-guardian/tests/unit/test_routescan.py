@@ -624,3 +624,177 @@ def test_avalanche_credential_refusal_names_routescan() -> None:
     drive._refuse_history(scan, "wallet-1", "credential_missing", "etherscan_v2", "ETHERSCAN_API_KEY")
     plain = observations[("wallet-1", "avalanche-c", "history.native_external")].credential_hint
     assert "ETHERSCAN_API_KEY" in plain
+
+
+@pytest.mark.parametrize(
+    ("fixture_body", "status_code", "expected_reason"),
+    [
+        ({"message": "NOTOK", "result": "rate limit"}, 429, "rate_limited"),
+        ({"status": "1", "message": "OK", "result": "unexpected response"}, 200, "malformed"),
+    ],
+)
+def test_routescan_failure_is_not_hidden_behind_next_source_credential_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    fixture_body: dict[str, object],
+    status_code: int,
+    expected_reason: str,
+) -> None:
+    transport, client = _world(retry_attempts=0)
+    operation = client.operation(
+        chain_id=43114,
+        module="account",
+        action="txlist",
+        address=ADDRESS,
+        start_block=100,
+        end_block=120,
+        page=1,
+        offset=1000,
+    )
+    _install_json(transport, operation, fixture_body, status_code)
+
+    document = {
+        "private_inputs": {"secret_profile_file_env": "MONITOR_SECRET_PROFILE"},
+        "sources": {
+            "etherscan": {
+                "adapter": "etherscan_v2",
+                "credential_env": "ETHERSCAN_API_KEY",
+                "enabled": True,
+                "endpoint_env": "ETHERSCAN_API_BASE",
+            },
+            "routescan": {
+                "adapter": "routescan",
+                "credential_env": "ROUTESCAN_API_KEY",
+                "enabled": True,
+                "endpoint_env": "ROUTESCAN_API_BASE",
+            },
+            "blockscout-avalanchec": {
+                "adapter": "blockscout",
+                "credential_env": "BLOCKSCOUT_AVALANCHE_C_API_KEY",
+                "enabled": True,
+                "endpoint_env": "BLOCKSCOUT_AVALANCHE_C_URL",
+            },
+        },
+        "routing": [
+            {
+                "network": "avalanche-c",
+                "capability": "history.native_external",
+                "source_ids": ["etherscan", "routescan", "blockscout-avalanchec"],
+            }
+        ],
+    }
+    observations: dict = {}
+    held_cursors: set = set()
+    scan = SimpleNamespace(
+        public_config=SimpleNamespace(document=document),
+        transport=transport,
+        database=SimpleNamespace(capability_cursors_for=lambda *_args, **_kwargs: []),
+        tenant="local",
+        clock=lambda: 1_700_000_000.0,
+        started_at=1_700_000_000.0,
+        source_id="routescan",
+        network="avalanche-c",
+        chain_id=43114,
+        native_asset="AVAX",
+        head=120,
+        checkpoint={"height": 120, "hash": "0x" + "aa" * 32},
+        bootstrap_origin=100,
+        deadline=None,
+        events=[],
+        seen_transfers=set(),
+        candidates=[],
+        observations=observations,
+        seen=set(),
+        baseline=[],
+        explicit_cursors=[],
+        held_cursors=held_cursors,
+        started="2026-10-18T00:00:00Z",
+        log_evidence=[],
+        peers=[("wallet-1", ADDRESS)],
+        emit=lambda *_args, **_kwargs: None,
+        baseline_cb=lambda *_args, **_kwargs: None,
+        advance=lambda *_args, **_kwargs: None,
+        hold=lambda book, wallet, network, capability: book.add((wallet, network, capability)),
+        movement_rows=lambda *_args, **_kwargs: [],
+        indexer_rows=lambda *_args, **_kwargs: [],
+        remember_approval=lambda *_args, **_kwargs: None,
+        overlap=0,
+        plan_cache=None,
+    )
+    private = SimpleNamespace(
+        source_status={
+            "etherscan": SimpleNamespace(credential_present=False),
+            "routescan": SimpleNamespace(credential_present=False),
+            "blockscout-avalanchec": SimpleNamespace(credential_present=False),
+        }
+    )
+    monkeypatch.setattr(drive, "_endpoint_ready", lambda _scan, _source_id: True)
+    monkeypatch.setattr(drive, "_secret", lambda _scan, _name: "")
+    monkeypatch.setattr(drive, "_note_bsc_internal", lambda *_args: None)
+
+    rows = drive.history_external(scan, private, "wallet-1", ADDRESS, 99, None)
+    assert rows == []
+    obs = observations[("wallet-1", "avalanche-c", "history.native_external")]
+    assert expected_reason in obs.reason_codes
+    assert "credential_missing" not in obs.reason_codes
+    assert obs.credential_hint == ""
+    assert ("wallet-1", "avalanche-c", "history.native_external") in held_cursors
+    assert len(transport.backend.calls) == 1
+
+    observations.clear()
+    held_cursors.clear()
+    monkeypatch.setattr(
+        drive,
+        "_run_indexer",
+        lambda *_args: drive._Outcome(refusal=expected_reason, partial=True),
+    )
+    rows = drive.history_external(scan, private, "wallet-1", ADDRESS, 99, None)
+    assert rows == []
+    obs = observations[("wallet-1", "avalanche-c", "history.native_external")]
+    assert expected_reason in obs.reason_codes
+    assert "credential_missing" not in obs.reason_codes
+    assert obs.credential_hint == ""
+    assert ("wallet-1", "avalanche-c", "history.native_external") in held_cursors
+
+
+def test_recognized_success_accepts_ok_prefix_with_status_one_and_keeps_notok_or_missing_status_as_gaps() -> None:
+    transport, client = _world()
+    ok_variant = {
+        "status": "1",
+        "message": "OK-Missing/Invalid API Key, rate limit of 1/5sec applied",
+        "result": [{"hash": "0x" + "11" * 32, "blockNumber": "101"}],
+    }
+    _install_json(transport, _operation(client, 1, 1), ok_variant)
+    read = _history(client, 1)
+    assert read.category == "ok"
+    assert read.pagination_complete is True
+    assert read.cursor == "600"
+    assert [item["hash"] for item in read.items] == ["0x" + "11" * 32]
+
+    for invalid_body in (
+        {
+            "status": "1",
+            "message": "OK-Missing/Invalid API Key, rate limit of 1/5sec applied",
+            "result": [],
+        },
+        {
+            "message": "OK-Missing/Invalid API Key, rate limit of 1/5sec applied",
+            "result": [{"hash": "0x" + "11" * 32}],
+        },
+        {
+            "status": "0",
+            "message": "OK-Missing/Invalid API Key, rate limit of 1/5sec applied",
+            "result": [{"hash": "0x" + "11" * 32}],
+        },
+        {
+            "status": "1",
+            "message": "NOTOK-Missing/Invalid API Key",
+            "result": [{"hash": "0x" + "11" * 32}],
+        },
+    ):
+        bad_transport, bad_client = _world()
+        _install_json(bad_transport, _operation(bad_client, 1, 1), invalid_body)
+        bad_read = _history(bad_client, 1)
+        assert bad_read.pagination_complete is False
+        assert bad_read.category != "empty"
+        assert bad_read.cursor == "99"
+

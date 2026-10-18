@@ -118,6 +118,8 @@ class _CredentialLogFilter(logging.Filter):
             return False
         record.msg = redact(rendered)
         record.args = ()
+        if isinstance(record.exc_text, str):
+            record.exc_text = redact(record.exc_text)
         return True
 
 

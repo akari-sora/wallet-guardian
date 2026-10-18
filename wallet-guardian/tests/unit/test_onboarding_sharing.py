@@ -55,3 +55,19 @@ def test_other_keyless_init_sources_match_read_support(adapter, sends_addresses)
     else:
         assert "address is not sent" in row["data"]
         assert "unsupported" in row["data"]
+
+
+def test_routescan_discloses_default_origin_and_override():
+    row = _share_source("routescan", {
+        "adapter": "routescan",
+        "credential_env": "ROUTESCAN_API_KEY",
+        "enabled": True,
+        "endpoint_env": "ROUTESCAN_API_BASE",
+    })
+    assert row["sends_addresses"] is True
+    assert "https://api.routescan.io" in row["recipient"]
+    assert "ROUTESCAN_API_BASE" in row["recipient"]
+    assert "https://api.routescan.io" in row["data"]
+    assert "ROUTESCAN_API_BASE" in row["data"]
+    assert "credential_missing" not in row["data"]
+

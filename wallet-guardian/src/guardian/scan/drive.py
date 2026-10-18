@@ -419,7 +419,7 @@ def history_external(scan: ScanContext, private_inputs: Any, wallet_id: str, add
         # then the keyless instance is next. Other keyed sources do not call.
         pro_without_key = missing_key and adapter == "blockscout" and credential_name == "BLOCKSCOUT_API_KEY"
         if missing_key and not pro_without_key and adapter != "routescan":
-            if refusal not in {"bot_challenge", "plan_not_supported"}:
+            if refusal in {None, "credential_missing"}:
                 refusal = "credential_missing"
                 refusal_adapter = str(adapter)
                 refusal_env = credential_name
@@ -435,8 +435,7 @@ def history_external(scan: ScanContext, private_inputs: Any, wallet_id: str, add
         if outcome.refusal:
             refusal = outcome.refusal
             refusal_adapter = str(adapter)
-            if outcome.refusal == "credential_missing":
-                refusal_env = credential_name
+            refusal_env = credential_name if outcome.refusal == "credential_missing" else None
             continue
         _note_bsc_internal(scan, wallet_id, private_inputs)
         return outcome.rows
@@ -828,6 +827,8 @@ def _walk_pages(scan, chunks, origin, wallet_id, capability, source_id, native, 
                     pending=_pending_snapshots(scan.candidates[before_candidates:]),
                 )
         leaves.append((start, end))
+    if source_id == "routescan" and capability == "history.native_external" and not leaves and hard and hard != "indexer_lag":
+        return _Outcome(refusal=hard, partial=True)
     if cursor:
         _finish(scan, capability, [(wallet_id, _owner_for(scan, wallet_id))], origin, int(scan.head), leaves, gaps, hard, stopped, "ok" if rows else "empty", source_id)
     return _Outcome(rows=rows, partial=bool(hard or gaps or stopped), stopped=stopped)

@@ -117,7 +117,7 @@ def plan_not_supported(body: Any) -> bool:
 
 
 def _recognized_success(body: Any) -> bool:
-    """Etherscan success page: status ``1``, message ``OK``, and a non-empty result list.
+    """Etherscan success page: status ``1``, message starting with ``OK``, and a non-empty result list.
 
     An empty list is complete only through the status ``0`` / ``No transactions found``
     envelope. Any other shape stays a gap and must not move the cursor.
@@ -125,7 +125,7 @@ def _recognized_success(body: Any) -> bool:
     if not isinstance(body, dict) or str(body.get("status")) != "1":
         return False
     message = body.get("message")
-    if not isinstance(message, str) or message.strip().casefold() != "ok":
+    if not isinstance(message, str) or not message.strip().casefold().startswith("ok"):
         return False
     result = body.get("result")
     return isinstance(result, list) and len(result) > 0

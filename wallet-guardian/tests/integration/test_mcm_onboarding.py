@@ -47,18 +47,19 @@ class _OfflineBackend:
         if not body:
             payload = {"message": "No transactions found", "result": [], "status": "0"}
             return RawResponse(200, {}, json.dumps(payload).encode())
+        url = str(getattr(call, "url", ""))
         request = json.loads(body)
         if isinstance(request, list):
-            encoded = [_rpc_result(item) for item in request]
+            encoded = [_rpc_result(item, url=url) for item in request]
         else:
-            encoded = _rpc_result(request)
+            encoded = _rpc_result(request, url=url)
         return RawResponse(200, {}, json.dumps(encoded).encode())
 
 
-def _rpc_result(request: dict) -> dict:
+def _rpc_result(request: dict, *, url: str = "") -> dict:
     method = str(request.get("method") or "")
     if method == "eth_chainId":
-        result: object = "0x1"
+        result: object = "0x2105" if "base-mainnet" in url else "0x1"
     elif method == "eth_blockNumber":
         result = "0x10"
     elif method == "eth_getBalance":
@@ -155,7 +156,16 @@ def _readme_commands() -> list[list[str]]:
 def test_mcm_share_s5_01_no_key_init(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """MCM-SHARE-S5-01. No-key init validates, and run-once --no-send stays offline."""
     private = tmp_path / "private"
-    answers = _write_answers(tmp_path / "answers.json", _answers())
+    answers = _write_answers(
+        tmp_path / "answers.json",
+        _answers(accounts=[{
+            "address": ADDRESS,
+            "family": "evm",
+            "label": "synthetic-desk",
+            "networks": ["ethereum-mainnet", "base-mainnet"],
+            "relationship": "watch_only",
+        }]),
+    )
     code, payload = _invoke(capsys, ["init", "--dir", str(private), "--from", str(answers), "--yes"])
     assert code == 0, payload
     assert payload["status"] == "ok"
@@ -175,6 +185,7 @@ def test_mcm_share_s5_01_no_key_init(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert hinted_sources
     assert all("docs/api-keys.md" in row["credential_hint"] for row in hinted_sources)
     assert any("ETHERSCAN_API_KEY" in row["credential_hint"] for row in hinted_sources)
+    assert any("ALCHEMY_API_KEY" in row["credential_hint"] for row in hinted_sources)
     backend = _OfflineBackend()
     code, report = _invoke(
         capsys,
@@ -199,15 +210,19 @@ def test_mcm_share_s5_01_no_key_init(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert report["native_reads"][0]["raw_amount"] == "1"
     hosts = {(urlsplit(str(getattr(call, "url", ""))).hostname or "") for call in backend.calls}
     assert any(host.startswith("rpc-ethereum-mainnet.") for host in hosts)
+    assert any(host.startswith("rpc-base-mainnet.") for host in hosts)
     assert "routescan.example.invalid" in hosts
-    assert not any("etherscan" in host or "blockscout" in host for host in hosts)
+    assert not any("etherscan" in host or "blockscout" in host or "alchemy" in host for host in hosts)
     code, coverage = _invoke(capsys, ["coverage", "--mcm-config", str(monitor_path)])
     assert code == 0, coverage
     assert coverage["status"] == "ok"
     # Init now reads Ethereum native history from keyless Routescan, so that cell
-    # is complete. config validate above still names ETHERSCAN_API_KEY and the
-    # Blockscout key. A capability that is still credential_missing must name it.
-    history = [row for row in coverage["rows"] if row["capability"] == "history.native_external"]
+    # is complete. Base still lacks ALCHEMY_API_KEY / ETHERSCAN_API_KEY / BLOCKSCOUT_BASE_API_KEY,
+    # so its history.native_external row is credential_missing and exercises the hint loop.
+    history = [
+        row for row in coverage["rows"]
+        if row["network"] == "ethereum-mainnet" and row["capability"] == "history.native_external"
+    ]
     assert history
     assert history[0]["quality"] == "complete_in_declared_scope"
     assert history[0]["sources"] == ["routescan"]
@@ -215,6 +230,8 @@ def test_mcm_share_s5_01_no_key_init(tmp_path: Path, monkeypatch: pytest.MonkeyP
     named = [row for row in coverage["credentials"] if row.get("variable") == "ETHERSCAN_API_KEY"]
     assert named and named[0]["present"] is False
     missing = [row for row in coverage["rows"] if "credential_missing" in (row.get("reason_codes") or [])]
+    assert missing
+    assert {(row["network"], row["capability"]) for row in missing} == {("base-mainnet", "history.native_external")}
     for row in missing:
         assert row["credential_hint"]
         assert "docs/api-keys.md" in row["credential_hint"]
@@ -227,6 +244,52 @@ def test_mcm_share_s5_01_no_key_init(tmp_path: Path, monkeypatch: pytest.MonkeyP
     native = [row for row in coverage["rows"] if row["capability"] == "balances.native"]
     assert native
     assert native[0]["quality"] == "complete_in_declared_scope"
+
+
+def test_init_routescan_unset_base_discloses_and_contacts_default_origin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """When ROUTESCAN_API_BASE is unset, init discloses https://api.routescan.io and run-once contacts api.routescan.io."""
+    from guardian.sources.resolver import HostnameResolver
+
+    def _pin_routescan(self, host: str) -> list[str]:
+        del self
+        name = host.lower().rstrip(".")
+        if name == "api.routescan.io" or name.endswith(".invalid"):
+            return ["1.1.1.1"]
+        raise OSError("dns_failed")
+
+    monkeypatch.setattr(HostnameResolver, "resolve", _pin_routescan)
+    monkeypatch.delenv("ROUTESCAN_API_BASE", raising=False)
+    private = tmp_path / "private"
+    answers = _write_answers(tmp_path / "answers.json", _answers())
+    code, payload = _invoke(capsys, ["init", "--dir", str(private), "--from", str(answers), "--yes"])
+    assert code == 0, payload
+    routescan_share = next(row for row in payload["data_sharing"] if row["source_id"] == "routescan")
+    assert routescan_share["sends_addresses"] is True
+    assert "https://api.routescan.io" in routescan_share["recipient"]
+    assert "ROUTESCAN_API_BASE" in routescan_share["recipient"]
+    assert "https://api.routescan.io" in routescan_share["data"]
+
+    monitor_path = private / "monitor.json"
+    config = json.loads(monitor_path.read_text(encoding="utf-8"))
+    _apply_private_env(monkeypatch, payload)
+    _drop_credentials(monkeypatch, config)
+    monkeypatch.setenv("RPC_ETHEREUM_MAINNET_URL", "https://rpc-ethereum-mainnet.example.invalid/rpc")
+    monkeypatch.delenv("ROUTESCAN_API_BASE", raising=False)
+
+    backend = _OfflineBackend()
+    code, report = _invoke(
+        capsys,
+        ["run-once", "--mcm-config", str(monitor_path), "--no-send"],
+        backend=backend,
+    )
+    assert code == (3 if report.get("status") == "degraded" else 0), report
+    hosts = {(urlsplit(str(getattr(call, "url", ""))).hostname or "") for call in backend.calls}
+    assert "api.routescan.io" in hosts
+    assert "rpc-ethereum-mainnet.example.invalid" in hosts
+    assert not any("etherscan" in host or "blockscout" in host for host in hosts)
+
 
 
 def test_mcm_share_s5_02_explicit_data_sharing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

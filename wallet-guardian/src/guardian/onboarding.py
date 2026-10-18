@@ -642,10 +642,20 @@ def _share_source(source_id: str, source: Mapping[str, Any]) -> dict[str, Any]:
         )
         sends_addresses = True
     elif adapter == "routescan":
-        recipient = "Routescan at the host named by " + endpoint_env
+        recipient = (
+            "Routescan at https://api.routescan.io when "
+            + endpoint_env
+            + " is unset, or the host named by "
+            + endpoint_env
+            + " when set"
+        )
         data = (
-            "Wallet address is sent on keyless and keyed history reads for Ethereum and Avalanche. "
-            "A missing optional key does not skip the read. "
+            "Wallet address is sent to https://api.routescan.io by default (or the host named by "
+            + endpoint_env
+            + " when set) on keyless and keyed history reads for Ethereum and Avalanche. "
+            "Leaving "
+            + endpoint_env
+            + " and the optional key unset does not skip the read. "
             "The optional key, when set, is a query parameter."
         )
         sends_addresses = True
