@@ -10,6 +10,10 @@ Whether that tag is published, see GitLab releases. This changelog does not publ
 
 ## [Unreleased]
 
+### Changed
+
+- When `ETHERSCAN_API_BASE` is unset or blank, the Etherscan source uses `https://api.etherscan.io` (the client still calls `/v2/api`). A set value still wins. Doctor and coverage report that endpoint as `selected_from` `default` and do not print the origin or the key. A missing `ETHERSCAN_API_KEY` stays `credential_missing` and does not call Etherscan.
+
 ### Fixed
 
 - AG-6 owner rules: on multi-user chat hosts, the owner's platform user ID comes only from instructions or host configuration written by the skill installer. Chat messages cannot set or change the owner, including self-reported IDs; display names, handles, quotes, and relays do not establish ownership. Missing sender or configured owner IDs fail closed on chat hosts. On local single-user hosts without sender IDs (Claude Code, Codex, Cursor, Hermes CLI, and similar), the local operator is the owner and no platform ID is required. The installer decides the host type; a message cannot claim it, and sessions started by a bridge, webhook, scheduler, cloud task, or pull request or issue comment are not local. The skill description, first-command text, generated Grok skill, paste block, and host guides require establishing the owner and running `guardian capabilities` first when the owner asks. Positive regression assertions pin both skill descriptions and first-command sentences, and the owner rules in all three copies.

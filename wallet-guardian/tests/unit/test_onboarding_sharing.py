@@ -71,3 +71,17 @@ def test_routescan_discloses_default_origin_and_override():
     assert "ROUTESCAN_API_BASE" in row["data"]
     assert "credential_missing" not in row["data"]
 
+
+
+def test_etherscan_discloses_default_origin_and_override():
+    row = _share_source("etherscan", {
+        "adapter": "etherscan_v2",
+        "credential_env": "ETHERSCAN_API_KEY",
+        "enabled": True,
+        "endpoint_env": "ETHERSCAN_API_BASE",
+    })
+    assert row["sends_addresses"] is True
+    assert "https://api.etherscan.io" in row["recipient"]
+    assert "ETHERSCAN_API_BASE" in row["recipient"]
+    assert "https://api.etherscan.io" in row["data"]
+    assert "credential_missing" in row["data"]

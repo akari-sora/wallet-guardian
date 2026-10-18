@@ -659,6 +659,22 @@ def _share_source(source_id: str, source: Mapping[str, Any]) -> dict[str, Any]:
             "The optional key, when set, is a query parameter."
         )
         sends_addresses = True
+    elif adapter == "etherscan_v2" and keyed:
+        recipient = (
+            "Etherscan at https://api.etherscan.io when "
+            + endpoint_env
+            + " is unset, or the host named by "
+            + endpoint_env
+            + " when set"
+        )
+        data = (
+            "Wallet address is included when this source is called, sent to https://api.etherscan.io by default "
+            "(or the host named by "
+            + endpoint_env
+            + " when set). "
+            "With no key, the address is not sent and coverage stays credential_missing."
+        )
+        sends_addresses = True
     elif adapter == "helius_parsed_events":
         recipient = "Helius at the host named by " + endpoint_env
         data = "This source is not called in this build, so the address is not sent, with or without a key."
