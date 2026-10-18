@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from guardian.news.health import detect_feed_type
+from guardian.onboarding import _share_source
 from guardian.security.untrusted import sanitize_untrusted
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -49,6 +52,21 @@ def test_mcm_hard_p1_feed_type_json_status() -> None:
     assert detect_feed_type(b'<feed xmlns="http://www.w3.org/2005/Atom"></feed>') == "atom"
     assert detect_feed_type(None) == "none"
     assert detect_feed_type(b"") == "none"
+
+
+@pytest.mark.parametrize("filename", [
+    "guide-cli.md", "security-privacy.md", "security-model.md", "threat-model.md",
+])
+def test_esplora_docs_match_init_disclosure(filename: str) -> None:
+    row = _share_source("read-bitcoin-mainnet", {
+        "adapter": "esplora", "enabled": True, "endpoint_env": "BITCOIN_MAINNET_URL",
+    })
+    text = (ROOT / "docs" / filename).read_text(encoding="utf-8")
+    assert row["sends_addresses"] is True
+    assert row["data"] in text
+    assert row["endpoint_env"] in text
+    assert "summary currently says this address is not sent" not in text
+    assert "summarized as not queried" not in text
 
 
 def test_mcm_hard_p1_untrusted_text_is_data() -> None:

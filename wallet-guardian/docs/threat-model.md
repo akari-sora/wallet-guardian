@@ -36,7 +36,7 @@ The monitor never signs, never builds a transaction, and never broadcasts. The o
 
 ## Data flows
 
-Init prints a data-sharing summary before it writes. That summary is not a complete match for the table below. A keyless Esplora source has no `credential_env` (that is how init writes Bitcoin). The summary then says the family is not queried and sets `sends_addresses` false. `run-once` still sends the Bitcoin address when the endpoint is set. The table is the read behavior.
+Init prints a data-sharing summary before it writes. Bitcoin addresses are sent to the configured Esplora host on keyless and keyed reads. Xpubs are never sent; only the configured address set is queried. The Esplora summary sets `sends_addresses` true and names the configured endpoint variable; init itself does not query the source. The table is the read behavior.
 
 | Source | What can leave | When it does not leave |
 |---|---|---|
@@ -45,7 +45,7 @@ Init prints a data-sharing summary before it writes. That summary is not a compl
 | Blockscout | Watch address. The key, when present, is a bearer header, not a query secret. | The key is missing. Init does not use the Blockscout PRO key name that would probe once without a key. |
 | NodeReal | Watch address, when that source is called. | The key is missing, so the call is not made. |
 | Helius | Nothing from `run-once` in this preview. Init can write an enabled `helius-parser` source and list `HELIUS_API_KEY`. The adapter is not called, with or without the key. | The call is not made. |
-| Esplora (Bitcoin) | The watch address, on `/address/{address}`, `/address/{address}/txs/chain`, and `/address/{address}/txs/mempool`, to the base URL in that source's endpoint variable. Init writes `BITCOIN_MAINNET_URL` for `bitcoin-mainnet`. `examples/monitor.json` uses `ESPLORA_API_URL`. The init summary currently says this address is not sent. | The endpoint variable is unset, or no Bitcoin account is configured. |
+| Esplora (Bitcoin) | The watch address, on `/address/{address}`, `/address/{address}/txs/chain`, and `/address/{address}/txs/mempool`, to the base URL in that source's endpoint variable. Init writes `BITCOIN_MAINNET_URL` for `bitcoin-mainnet`. `examples/monitor.json` uses `ESPLORA_API_URL`. The init summary discloses that the addresses are sent to the configured host. | The endpoint variable is unset, or no Bitcoin account is configured. |
 | Tenderly Base gateway (example file) | The watch address inside Base `eth_getLogs` for `history.token` and `permissions.standard`, to the host in `TENDERLY_BASE_URL`. `examples/monitor.json` enables `tenderly_base` (`adapter` `evm_rpc`) on those routes. Init does not add it. `TENDERLY_ACCESS_KEY` is not used by this path and is not called. | The URL is unset, the source is disabled, or the profile is not that example route. |
 | Alchemy Transfers (example file) | The watch address as `fromAddress` or `toAddress` on `alchemy_getAssetTransfers`, to the host in `ALCHEMY_TRANSFERS_URL`. `examples/monitor.json` enables `alchemy-base`. Init does not add it. | The key or URL is unset, so the call is not made. |
 | TON Center, Sui, Aptos, Cosmos REST | Nothing in this build. Init can write a source for these families. `run-once` marks them `unsupported_family` and does not query them. | Coverage stays unsupported. A missing row is not a zero balance. |

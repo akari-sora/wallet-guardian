@@ -592,7 +592,14 @@ def _share_source(source_id: str, source: Mapping[str, Any]) -> dict[str, Any]:
     credential = source.get("credential_env")
     keyed = isinstance(credential, str)
     endpoint_env = str(source.get("endpoint_env"))
-    if adapter == "tron_grid":
+    if adapter == "esplora":
+        recipient = "the Esplora host named by " + endpoint_env
+        data = (
+            "Bitcoin addresses are sent to the configured Esplora host on keyless and keyed reads. "
+            "Xpubs are never sent; only the configured address set is queried."
+        )
+        sends_addresses = True
+    elif adapter == "tron_grid":
         recipient = "TronGrid at the host named by " + endpoint_env
         data = (
             "Wallet address is sent on keyless and keyed reads. "
