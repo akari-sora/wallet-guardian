@@ -43,6 +43,7 @@ _METADATA_HOSTS = frozenset({"metadata", "metadata.google.internal"})
 _METADATA_IP = ipaddress.ip_address("169.254.169.254")
 _HTTP_LOGGERS = ("httpx", "httpcore")
 _ALCHEMY_KEY = re.compile(r"^[A-Za-z0-9_-]{8,}$")
+_ETHERSCAN_DEFAULT_BASE = "https://api.etherscan.io"
 _ROUTESCAN_DEFAULT_BASE = "https://api.routescan.io"
 _SSRF_REASON = {
     "dns answer points at a blocked address": "private_endpoint",
@@ -506,6 +507,8 @@ def resolve_source_endpoint(
                 env_name, "derived_from_ALCHEMY_API_KEY", True, key.shadowed,
                 "https://base-mainnet.g.alchemy.com/v2/" + revealed,
             )
+    if not endpoint.present and source.get("adapter") == "etherscan_v2" and env_name == "ETHERSCAN_API_BASE":
+        return CredentialResolution(env_name, "default", True, False, _ETHERSCAN_DEFAULT_BASE)
     if not endpoint.present and source.get("adapter") == "routescan" and env_name == "ROUTESCAN_API_BASE":
         return CredentialResolution(env_name, "default", True, False, _ROUTESCAN_DEFAULT_BASE)
     return endpoint
