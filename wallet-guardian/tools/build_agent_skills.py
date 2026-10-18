@@ -6,7 +6,8 @@ The paste block in ``docs/guide-grok-bot.md`` copies ``## Classes`` and ``## Har
 from the skill, between fixed markers. ``--check`` fails if that copy differs.
 A relative ``references/`` link in that copy is rewritten to plain text, because a
 pasted block cannot follow it. The setup steps in the same block quote a few skill
-sentences outside the markers; ``--check`` fails if the skill or the guide loses one.
+sentences outside the markers; ``--check`` requires exact setup lines in the paste
+block. Generated files are compared as bytes, and unproduced dist files fail check.
 This tool does not install anything and does not open a network connection.
 """
 
@@ -56,10 +57,12 @@ _GROK_RULES_BEGIN = "<!-- grok-rules:begin -->"
 _GROK_RULES_END = "<!-- grok-rules:end -->"
 # Skill sentences that the Grok guide's setup steps quote outside the markers.
 # A change to either copy must change both, or ``--check`` fails.
-_GUIDE_SKILL_QUOTES = (
-    "The answers file is written only at the path the owner gave.",
-    "`guardian init --yes` may run only after the owner has seen the data-sharing summary and agreed. Being on the list is not enough.",
-)
+_GUIDE_SKILL_QUOTES = {
+    "The answers file is written only at the path the owner gave.":
+        "- Start from examples/answers.example.json (synthetic address). The answers file is written only at the path the owner gave.",
+    "`guardian init --yes` may run only after the owner has seen the data-sharing summary and agreed. Being on the list is not enough.":
+        "- `guardian init --yes` may run only after the owner has seen the data-sharing summary and agreed. Being on the list is not enough.",
+}
 _GROK_NOTE = """## Grok Bot host
 
 This file inlines the reference pages because a Grok Bot skill upload keeps only this text. The cloud computer for that account must already have the `guardian` command installed. Bots on the same account share that computer and its data. This host integration was not exercised (未實測).
@@ -597,11 +600,18 @@ def _outside_paste_markers(guide: str) -> str:
 
 def require_guide_skill_quotes(skill: str, guide: str) -> None:
     """The guide's setup steps quote skill sentences outside the markers. Both copies must match."""
-    outside = _outside_paste_markers(guide)
-    for sentence in _GUIDE_SKILL_QUOTES:
-        if sentence not in skill:
+    begin_at, end_at = _paste_marker_span(guide)
+    fence_start = guide.index("```text\n") + len("```text\n")
+    fence_end = guide.index("\n```", fence_start)
+    setup_lines = (
+        guide[fence_start:begin_at] + guide[end_at + len(_GROK_RULES_END):fence_end]
+    ).splitlines()
+    for sentence, setup_line in _GUIDE_SKILL_QUOTES.items():
+        if sentence not in setup_line:
+            raise ValueError(f"setup quote must contain its skill sentence: {sentence}")
+        if not re.search(r"(?:^|^- |[.!?] )" + re.escape(sentence) + r"(?= |$)", skill, re.MULTILINE):
             raise ValueError(f"skill no longer has a sentence that guide-grok-bot.md quotes: {sentence}")
-        if sentence not in outside:
+        if setup_lines.count(setup_line) != 1:
             raise ValueError(f"guide-grok-bot.md setup steps no longer quote the skill: {sentence}")
 
 
@@ -616,10 +626,26 @@ def splice_grok_paste_rules(guide: str, rules: str) -> str:
     return f"{head}\n{rules.strip()}\n{tail}"
 
 
+def _require_no_symlink(path: Path, top: Path) -> None:
+    """Reject a generated path when it, or any directory between top and it, is a symlink."""
+    for part in (path, *path.parents):
+        if part == top:
+            return
+        if part.is_symlink():
+            raise ValueError(f"generated path is a symlink: {part}")
+    raise ValueError(f"generated path is outside the repository: {path}")
+
+
 def generated_files(root: Path | None = None) -> dict[Path, str]:
     base = project_root() if root is None else Path(root)
-    catalog = load_catalog(base / "src" / "guardian" / "_resources" / "agent-capabilities.json")
     skill_root = base.parent / "skills" / "wallet-guardian"
+    commands_output = skill_root / "references" / "commands.md"
+    grok_output = base.parent / "skills" / "dist" / "grok-bot" / "SKILL.md"
+    guide_path = base / "docs" / "guide-grok-bot.md"
+    # The guide is also an input: reject output symlinks before reading any of them.
+    for path in (commands_output, grok_output, guide_path):
+        _require_no_symlink(path, base.parent)
+    catalog = load_catalog(base / "src" / "guardian" / "_resources" / "agent-capabilities.json")
     skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
     safety = (skill_root / "references" / "safety.md").read_text(encoding="utf-8")
     commands = render_commands(catalog)
@@ -629,7 +655,6 @@ def generated_files(root: Path | None = None) -> dict[Path, str]:
         str(catalog["version"]),
     )
     _require_one_copy(grok)
-    guide_path = base / "docs" / "guide-grok-bot.md"
     guide = splice_grok_paste_rules(guide_path.read_text(encoding="utf-8"), render_grok_paste_rules(skill))
     require_guide_skill_quotes(skill, guide)
     for marker, page in (
@@ -642,8 +667,8 @@ def generated_files(root: Path | None = None) -> dict[Path, str]:
         if grok.count(marker) < 1:
             raise ValueError(f"{page} was not embedded")
     return {
-        skill_root / "references" / "commands.md": commands,
-        base.parent / "skills" / "dist" / "grok-bot" / "SKILL.md": grok,
+        commands_output: commands,
+        grok_output: grok,
         guide_path: guide,
     }
 
@@ -660,13 +685,20 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(str(exc) + "\n")
         return 1
     drifted: list[str] = []
+    if args.check:
+        dist = root.parent / "skills" / "dist"
+        drifted.extend(
+            str(path) for path in sorted(dist.rglob("*"))
+            if (path.is_file() or path.is_symlink()) and path not in files
+        )
     for path, text in files.items():
-        current = path.read_text(encoding="utf-8") if path.is_file() else None
-        if current != text:
+        expected = text.encode("utf-8")
+        current = path.read_bytes() if path.is_file() else None
+        if current != expected:
             drifted.append(str(path))
             if not args.check:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(text, encoding="utf-8", newline="\n")
+                path.write_bytes(expected)
     if drifted and args.check:
         sys.stderr.write("skill drift:\n" + "\n".join(drifted) + "\n")
         return 1

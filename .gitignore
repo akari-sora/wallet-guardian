@@ -17,3 +17,6 @@ wallet-guardian/action-client/dist-mode-a/
 *.env
 .omc/
 wallet-guardian/action-client/.wrangler/
+
+# Finder metadata is not part of generated skill distributions.
+skills/dist/**/.DS_Store
