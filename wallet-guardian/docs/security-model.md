@@ -20,7 +20,7 @@ Private files are written mode `0600` and private directories mode `0700` on POS
 
 ## What leaves the machine
 
-Init prints a data-sharing summary before it writes. Each selected source says whether a wallet address is sent, whether the machine hostname is sent (it is not), and which provider receives the call. That summary is not a complete match for the reads below. A keyless Esplora source (no `credential_env`, which is how init writes Bitcoin) is summarized as not queried, with `sends_addresses` false. `run-once` still sends the Bitcoin address when the endpoint is set. The operator confirms with `--yes` or by typing `yes`. Without that confirmation, no config is written.
+Init prints a data-sharing summary before it writes. Each selected source says whether a wallet address is sent, whether the machine hostname is sent (it is not), and which provider receives the call. Bitcoin addresses are sent to the configured Esplora host on keyless and keyed reads. Xpubs are never sent; only the configured address set is queried. The Esplora summary sets `sends_addresses` true and names the host configured through `BITCOIN_MAINNET_URL`; init itself does not query it. The operator confirms with `--yes` or by typing `yes`. Without that confirmation, no config is written.
 
 With the defaults from init:
 

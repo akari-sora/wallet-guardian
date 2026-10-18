@@ -592,7 +592,14 @@ def _share_source(source_id: str, source: Mapping[str, Any]) -> dict[str, Any]:
     credential = source.get("credential_env")
     keyed = isinstance(credential, str)
     endpoint_env = str(source.get("endpoint_env"))
-    if adapter == "tron_grid":
+    if adapter == "esplora":
+        recipient = "the Esplora host named by " + endpoint_env
+        data = (
+            "Bitcoin addresses are sent to the configured Esplora host on keyless and keyed reads. "
+            "Xpubs are never sent; only the configured address set is queried."
+        )
+        sends_addresses = True
+    elif adapter == "tron_grid":
         recipient = "TronGrid at the host named by " + endpoint_env
         data = (
             "Wallet address is sent on keyless and keyed reads. "
@@ -607,6 +614,10 @@ def _share_source(source_id: str, source: Mapping[str, Any]) -> dict[str, Any]:
             "The machine hostname is not sent."
         )
         sends_addresses = True
+    elif adapter == "helius_parsed_events":
+        recipient = "Helius at the host named by " + endpoint_env
+        data = "This source is not called in this build, so the address is not sent, with or without a key."
+        sends_addresses = False
     elif keyed:
         recipient = _provider_name(adapter) + " at the host named by " + endpoint_env
         data = (
