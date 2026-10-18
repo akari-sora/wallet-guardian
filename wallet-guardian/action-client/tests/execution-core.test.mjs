@@ -293,3 +293,78 @@ test("core imports stay inside the core, the S-1a model, and @noble/hashes", () 
     assert.equal(/\bfetch\s*\(|XMLHttpRequest|WebSocket|navigator\.|document\.|localStorage|indexedDB/.test(text), false, name);
   }
 });
+
+// --- F1 (review 21): `revoked` role and permission-style names need a zero rule ---------
+
+const EVIL = OTHER;
+const ME = SELF;
+const MAX = (1n << 256n) - 1n;
+
+/** Load the entry, then build the call. Both steps must happen for the call to be accepted. */
+function loadAndBuild(permission_type, signature, roles, args) {
+  const ctx = createCoreContext({
+    deployments: [{ chain_id: 56, address: TOKEN, permission_type }],
+    allowlist: [entry(permission_type, signature, roles)],
+  });
+  return buildTransaction({ account: ME, chainId: 56, to: TOKEN, signature, args }, ctx);
+}
+
+test("F1: setOperator(EVIL, true) with operator=revoked is refused", () => {
+  assert.throws(
+    () => loadAndBuild("erc721_operator", "setOperator(address operator,bool approved)", { operator: "revoked" }, [EVIL, true]),
+    refusal("revoked_role_without_zero_rule"),
+  );
+});
+
+test("F1: ERC-6909 approve(EVIL, 1, max) with spender=revoked is refused", () => {
+  assert.throws(
+    () => loadAndBuild("erc20_allowance", "approve(address spender,uint256 id,uint256 amount)", { spender: "revoked" }, [EVIL, 1, MAX]),
+    refusal("revoked_role_without_zero_rule"),
+  );
+});
+
+test("F1: withdraw(5, EVIL, ME) with receiver mislabelled revoked is refused", () => {
+  assert.throws(
+    () => loadAndBuild("erc4626_vault", "withdraw(uint256 assets,address receiver,address owner)", { receiver: "revoked", owner: "owner" }, [5, EVIL, ME]),
+    refusal("revoked_role_without_zero_rule"),
+  );
+});
+
+test("F1: permission-style names without a zero rule are refused even without the revoked role", () => {
+  // Counterparty labelled as a registered spender/target (TOKEN is registered), so role checks alone would pass.
+  assert.throws(
+    () => loadAndBuild("erc20_allowance", "approve(address spender,uint256 id,uint256 amount)", { spender: "spender" }, [TOKEN, 1, MAX]),
+    refusal("permission_function_without_zero_rule"),
+  );
+  assert.throws(
+    () => loadAndBuild("erc721_operator", "setOperator(address operator,bool approved)", { operator: "target" }, [TOKEN, true]),
+    refusal("permission_function_without_zero_rule"),
+  );
+  for (const signature of [
+    "approveAll(address spender)",
+    "setApproval(address spender,bool approved)",
+    "setApprovalForAllWithSig(address operator,bool approved,uint256 deadline)",
+    "setOperator(address operator,bool approved)",
+    "setAuthorizationWithSig(address authorized,bool flag,uint256 nonce)",
+    "approveDelegationWithSig(address delegatee,uint256 amount,uint256 deadline)",
+    "setDelegate(address delegate)",
+    "setDelegateApproval(address delegate,bool approved)",
+  ]) {
+    const roles = {};
+    for (const match of signature.matchAll(/address (\w+)/g)) roles[match[1]] = "target";
+    assert.throws(() => loadAllowlist([entry("erc20_allowance", signature, roles)]), refusal("permission_function_without_zero_rule"), signature);
+  }
+});
+
+test("F1: the four revocations with zero rules still load and still refuse non-zero", () => {
+  const cases = [
+    ["erc20_allowance", "approve(address spender,uint256 amount)", { spender: "revoked" }, [EVIL, 0], [EVIL, 1], "nonzero_approve"],
+    ["erc721_operator", "setApprovalForAll(address operator,bool approved)", { operator: "revoked" }, [EVIL, false], [EVIL, true], "approval_for_all_true"],
+    ["aave_debt_token", "approveDelegation(address delegatee,uint256 amount)", { delegatee: "revoked" }, [EVIL, 0], [EVIL, 1], "nonzero_delegation"],
+    ["morpho_like", "setAuthorization(address authorized,bool newIsAuthorized)", { authorized: "revoked" }, [EVIL, false], [EVIL, true], "authorization_true"],
+  ];
+  for (const [type, signature, roles, ok, bad, reason] of cases) {
+    assert.ok(loadAndBuild(type, signature, roles, ok), signature);
+    assert.throws(() => loadAndBuild(type, signature, roles, bad), refusal(reason), signature);
+  }
+});
