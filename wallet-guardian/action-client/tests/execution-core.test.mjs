@@ -349,6 +349,8 @@ test("F1: permission-style names without a zero rule are refused even without th
     "approveDelegationWithSig(address delegatee,uint256 amount,uint256 deadline)",
     "setDelegate(address delegate)",
     "setDelegateApproval(address delegate,bool approved)",
+    "increaseApproval(address spender,uint256 addedValue)",
+    "authorizeOperator(address operator)",
   ]) {
     const roles = {};
     for (const match of signature.matchAll(/address (\w+)/g)) roles[match[1]] = "target";
@@ -368,3 +370,30 @@ test("F1: the four revocations with zero rules still load and still refuse non-z
     assert.throws(() => loadAndBuild(type, signature, roles, bad), refusal(reason), signature);
   }
 });
+
+test("B1: ERC-721 approve requires zero recipient (any tokenId) and refuses approve(attacker, 0)", () => {
+  const ZERO = "0x0000000000000000000000000000000000000000";
+  const sig = "approve(address to,uint256 tokenId)";
+  assert.ok(loadAndBuild("erc721_token", sig, { to: "revoked" }, [ZERO, 0]));
+  assert.ok(loadAndBuild("erc721_token", sig, { to: "revoked" }, [ZERO, 5]));
+  assert.throws(() => loadAndBuild("erc721_token", sig, { to: "revoked" }, [EVIL, 0]), refusal("nonzero_approve"));
+  assert.throws(() => loadAndBuild("erc721_token", sig, { to: "revoked" }, [EVIL, 5]), refusal("nonzero_approve"));
+  assert.throws(() => loadAndBuild("erc4626_vault", sig, { to: "revoked" }, [ZERO, 0]), refusal("revoked_role_without_zero_rule"));
+});
+
+test("load time: non-permission function names whose selector equals approve, setApprovalForAll, or ERC-6909 approve/setOperator are refused", () => {
+  const collisions = [
+    ["c_3a61cb3b6(uint256 a,uint256 b)", "0x095ea7b3"],
+    ["c_2520f4f99(uint256 a,uint256 b)", "0xa22cb465"],
+    ["c_072382414(uint256 a,uint256 b)", parseSignature("approve(address,uint256,uint256)").selector],
+    ["c_00bf30176(uint256 a,uint256 b)", parseSignature("setOperator(address,bool)").selector],
+    ["c_0a5027ed8(uint256 a,uint256 b)", parseSignature("approveDelegation(address,uint256)").selector],
+    ["c_0091550c6(uint256 a,uint256 b)", parseSignature("setAuthorization(address,bool)").selector],
+  ];
+  for (const [signature, expectedSelector] of collisions) {
+    assert.equal(parseSignature(signature).selector, expectedSelector, signature);
+    assert.throws(() => loadAllowlist([entry("erc20_allowance", signature)]), refusal("permission_function_without_zero_rule"), signature);
+  }
+});
+
+

@@ -10,7 +10,7 @@ import { deniedSelectorCategory } from "./deny.mjs";
 import { refuse } from "./errors.mjs";
 import { bytesToHex, hexToBytes, isAddressHex, sameAddressHex } from "./hex.mjs";
 import { isAllowedSendMethod } from "./methods.mjs";
-import { ESCALATION_RULES } from "./rules.mjs";
+import { escalationRule } from "./rules.mjs";
 
 const TX_KEYS = new Set(["from", "to", "data", "value", "chainId"]);
 const EIP7702_KEYS = new Set(["authorizationList", "type"]);
@@ -105,7 +105,7 @@ export function checkTransaction(tx, { account, signature } = {}, context) {
     checkBytes(leaf);
     checkRole(leaf, entry, account, Number(chainId), context);
   }
-  const rule = ESCALATION_RULES[entry.parsed.canonical];
+  const rule = escalationRule(entry.permission_type, entry.parsed.canonical);
   if (rule) rule(values);
   return Object.freeze({
     chainId: Number(chainId),

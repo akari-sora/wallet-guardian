@@ -130,6 +130,15 @@
       ]
     },
     {
+      "id": "revoke_erc721_token_nonzero_id",
+      "to": "nft",
+      "signature": "approve(address to,uint256 tokenId)",
+      "args": [
+        "$zero",
+        "5"
+      ]
+    },
+    {
       "id": "revoke_erc721_operator",
       "to": "nft",
       "signature": "setApprovalForAll(address operator,bool approved)",
@@ -609,11 +618,22 @@
     },
     {
       "category": "erc721_as_erc20",
-      "id": "erc721_approve_nonzero_token_id",
+      "id": "erc721_approve_token_zero_to_attacker",
       "to": "nft",
       "signature": "approve(address to,uint256 tokenId)",
       "args": [
-        "$zero",
+        "$attacker",
+        "0"
+      ],
+      "expect": "nonzero_approve"
+    },
+    {
+      "category": "erc721_as_erc20",
+      "id": "erc721_approve_nonzero_token_to_attacker",
+      "to": "nft",
+      "signature": "approve(address to,uint256 tokenId)",
+      "args": [
+        "$attacker",
         "5"
       ],
       "expect": "nonzero_approve"

@@ -58,16 +58,20 @@ const REQUIRED_CATEGORIES = [
   "transfer_to_other",
   "admin",
   "upgrade",
+  "erc721_as_erc20",
   "signature_mismatch",
   "nonzero_value",
   "to_not_registered",
   "method_not_send",
   "receiver_not_self",
+  "owner_not_self",
+  "eip7702",
 ];
 
 test("vector file covers every required category", () => {
   const present = new Set(VECTORS.vectors.map((item) => item.category));
   for (const category of REQUIRED_CATEGORIES) assert.ok(present.has(category), category);
+  for (const category of present) assert.ok(REQUIRED_CATEGORIES.includes(category), `missing from REQUIRED_CATEGORIES: ${category}`);
   const ids = VECTORS.vectors.map((item) => item.id);
   assert.equal(new Set(ids).size, ids.length, "vector ids are unique");
 });

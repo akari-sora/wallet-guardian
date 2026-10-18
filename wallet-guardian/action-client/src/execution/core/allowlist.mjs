@@ -7,7 +7,7 @@ import { PERMISSION_TYPES, REGISTRY_ROLES, SELF_ROLES } from "../model.mjs";
 import { parseSignature } from "./abi.mjs";
 import { deniedName, deniedSelectorCategory } from "./deny.mjs";
 import { refuse } from "./errors.mjs";
-import { hasZeroRule, isPermissionName } from "./rules.mjs";
+import { hasZeroRule, isPermissionName, isPermissionSelector } from "./rules.mjs";
 
 /**
  * `revoked` is the counterparty of a revocation (§6.2): any address, but the amount must be 0 or false.
@@ -64,12 +64,12 @@ function loadEntry(entry, index) {
     if (!CORE_ROLES.includes(role)) refuse("bad_allowlist", `${label}: role ${role}`);
   }
   // F1: a revoked counterparty is only safe when the amount is forced to 0 or false.
-  if (Object.values(roles).includes(REVOKED_ROLE) && !hasZeroRule(parsed.canonical)) {
-    refuse("revoked_role_without_zero_rule", `${label}: ${parsed.canonical}`);
+  if (Object.values(roles).includes(REVOKED_ROLE) && !hasZeroRule(entry.permission_type, parsed.canonical)) {
+    refuse("revoked_role_without_zero_rule", `${label}: ${entry.permission_type}:${parsed.canonical}`);
   }
-  // F1: approve/setApproval/setOperator/setAuthoriz/approveDelegation/setDelegate need a zero rule.
-  if (isPermissionName(parsed.name) && !hasZeroRule(parsed.canonical)) {
-    refuse("permission_function_without_zero_rule", `${label}: ${parsed.canonical}`);
+  // F1: approve/setApproval/setOperator/setAuthoriz/approveDelegation/setDelegate (by name or selector) need a zero rule.
+  if ((isPermissionName(parsed.name) || isPermissionSelector(parsed.selector)) && !hasZeroRule(entry.permission_type, parsed.canonical)) {
+    refuse("permission_function_without_zero_rule", `${label}: ${entry.permission_type}:${parsed.canonical}`);
   }
   return Object.freeze({
     permission_type: entry.permission_type,

@@ -55,7 +55,7 @@ function inject(client, source) {
 }
 
 test("core marker list covers the decided strings, wider than the page list", () => {
-  for (const marker of ["eth_sendTransaction", "eth_sendRawTransaction", "eth_sign", "eth_signTransaction", "eth_signTypedData_v4", "personal_sign", "wallet_sendCalls", "window.ethereum", "provider.request(", "eth_requestAccounts"]) {
+  for (const marker of ["eth_sendTransaction", "eth_sendRawTransaction", "eth_sign", "eth_signTransaction", "eth_signTypedData_v4", "personal_sign", "wallet_sendCalls", "wallet_signAuthorization", "window.ethereum", "provider.request(", "eth_requestAccounts"]) {
     assert.ok(scanCoreText(`x = "${marker}"`).length > 0, marker);
   }
   assert.equal(scanText('x = "personal_sign"').length, 0, "page list stays as it was");

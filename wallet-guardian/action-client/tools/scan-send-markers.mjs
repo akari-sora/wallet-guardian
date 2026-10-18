@@ -40,7 +40,7 @@ export function scanText(text) {
 }
 
 /** Wider list for the client core: any wallet provider, signing, or send capability. */
-export const CORE_MARKER = /eth_sendTransaction|eth_sendRawTransaction|eth_sign\w*|personal_sign|wallet_sendCalls|eth_requestAccounts|window\.ethereum|\.request\(|testOnlyAllowWalletRequest|noBroadcast|request-policy-allow/g;
+export const CORE_MARKER = /eth_sendTransaction|eth_sendRawTransaction|eth_sign\w*|personal_sign|wallet_sendCalls|wallet_signAuthorization|eth_requestAccounts|window\.ethereum|\.request\(|testOnlyAllowWalletRequest|noBroadcast|request-policy-allow/g;
 
 export const CORE_DIGEST_FILE = "wg-core.digest.json";
 
