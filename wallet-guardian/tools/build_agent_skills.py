@@ -607,6 +607,8 @@ def require_guide_skill_quotes(skill: str, guide: str) -> None:
         guide[fence_start:begin_at] + guide[end_at + len(_GROK_RULES_END):fence_end]
     ).splitlines()
     for sentence, setup_line in _GUIDE_SKILL_QUOTES.items():
+        if sentence not in setup_line:
+            raise ValueError(f"setup quote must contain its skill sentence: {sentence}")
         if not re.search(r"(?:^|^- |[.!?] )" + re.escape(sentence) + r"(?= |$)", skill, re.MULTILINE):
             raise ValueError(f"skill no longer has a sentence that guide-grok-bot.md quotes: {sentence}")
         if setup_lines.count(setup_line) != 1:
@@ -626,8 +628,15 @@ def splice_grok_paste_rules(guide: str, rules: str) -> str:
 
 def generated_files(root: Path | None = None) -> dict[Path, str]:
     base = project_root() if root is None else Path(root)
-    catalog = load_catalog(base / "src" / "guardian" / "_resources" / "agent-capabilities.json")
     skill_root = base.parent / "skills" / "wallet-guardian"
+    commands_output = skill_root / "references" / "commands.md"
+    grok_output = base.parent / "skills" / "dist" / "grok-bot" / "SKILL.md"
+    guide_path = base / "docs" / "guide-grok-bot.md"
+    # The guide is also an input: reject output symlinks before reading any of them.
+    for path in (commands_output, grok_output, guide_path):
+        if path.is_symlink():
+            raise ValueError(f"generated path is a symlink: {path}")
+    catalog = load_catalog(base / "src" / "guardian" / "_resources" / "agent-capabilities.json")
     skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
     safety = (skill_root / "references" / "safety.md").read_text(encoding="utf-8")
     commands = render_commands(catalog)
@@ -637,7 +646,6 @@ def generated_files(root: Path | None = None) -> dict[Path, str]:
         str(catalog["version"]),
     )
     _require_one_copy(grok)
-    guide_path = base / "docs" / "guide-grok-bot.md"
     guide = splice_grok_paste_rules(guide_path.read_text(encoding="utf-8"), render_grok_paste_rules(skill))
     require_guide_skill_quotes(skill, guide)
     for marker, page in (
@@ -650,8 +658,8 @@ def generated_files(root: Path | None = None) -> dict[Path, str]:
         if grok.count(marker) < 1:
             raise ValueError(f"{page} was not embedded")
     return {
-        skill_root / "references" / "commands.md": commands,
-        base.parent / "skills" / "dist" / "grok-bot" / "SKILL.md": grok,
+        commands_output: commands,
+        grok_output: grok,
         guide_path: guide,
     }
 
