@@ -10,11 +10,16 @@ _ANCHOR = {
     "BLOCKSCOUT_BASE_API_KEY": "blockscout",
     "BLOCKSCOUT_OPTIMISM_API_KEY": "blockscout",
     "COINGECKO_API_KEY": "coingecko",
+    "DEBANK_ACCESS_KEY": "keys",
     "ETHERSCAN_API_KEY": "etherscan",
     "GOPLUS_API_KEY": "goplus",
     "HELIUS_API_KEY": "helius",
     "NODEREAL_API_KEY": "nodereal",
     "OFAC_SLS_FEED": "ofac",
+    "ROUTESCAN_API_KEY": "routescan",
+    "TENDERLY_ACCESS_KEY": "keys",
+    "TRON_PRO_API_KEY": "service-changes",
+    "ZERION_API_KEY": "keys",
 }
 
 

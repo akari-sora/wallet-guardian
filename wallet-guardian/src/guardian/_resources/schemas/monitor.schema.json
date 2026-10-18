@@ -218,6 +218,7 @@
             "enum": [
               "evm_rpc",
               "etherscan_v2",
+              "routescan",
               "blockscout",
               "nodereal_transfers",
               "alchemy_transfers",

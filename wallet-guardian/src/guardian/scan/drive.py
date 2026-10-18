@@ -36,7 +36,7 @@ from guardian.sources.nodereal import NodeRealClient
 # Used when polling.round_deadline_seconds is omitted. See docs/mcm-live-01r.md.
 DEFAULT_ROUND_DEADLINE_SECONDS = 180
 
-_INDEXERS = frozenset({"alchemy_transfers", "blockscout", "etherscan_v2", "nodereal_transfers"})
+_INDEXERS = frozenset({"alchemy_transfers", "blockscout", "etherscan_v2", "routescan", "nodereal_transfers"})
 _SOURCE_REFUSALS = frozenset({
     "alchemy_chain_not_supported",
     "bot_challenge",
@@ -50,6 +50,7 @@ _INDEXER_METHOD = {
     "alchemy_transfers": "alchemy_getAssetTransfers",
     "blockscout": "account/txlist",
     "etherscan_v2": "account/txlist",
+    "routescan": "account/txlist",
     "nodereal_transfers": "nr_getAssetTransfers",
 }
 _LOG_CAPABILITIES = ("history.token", "permissions.standard")
@@ -417,7 +418,7 @@ def history_external(scan: ScanContext, private_inputs: Any, wallet_id: str, add
         # PRO without a key still calls once so a 402 payment response becomes credential_missing,
         # then the keyless instance is next. Other keyed sources do not call.
         pro_without_key = missing_key and adapter == "blockscout" and credential_name == "BLOCKSCOUT_API_KEY"
-        if missing_key and not pro_without_key:
+        if missing_key and not pro_without_key and adapter != "routescan":
             if refusal not in {"bot_challenge", "plan_not_supported"}:
                 refusal = "credential_missing"
                 refusal_adapter = str(adapter)
@@ -579,7 +580,7 @@ def _run_indexer(scan, source_id, source, adapter, wallet_id, address, stored, p
     page_size = _source_int(scan, "page_size", 1000, source_id=source_id)
     chunks, origin = _indexer_chunks(scan, source, stored)
     limited = _LimitedTransport(scan.transport, scan, source_id)
-    if adapter == "etherscan_v2":
+    if adapter in {"etherscan_v2", "routescan"}:
         client = _etherscan(scan, source_id, source, limited)
         native = _walk_pages(scan, chunks, origin, wallet_id, "history.native_external", source_id, True, lambda start, end: _safe_history(client, scan.chain_id, "txlist", address, start, end, stored))
         _remember_plan(plan_cache, source_id, scan.network, native.refusal)
@@ -1075,10 +1076,12 @@ def _blockscout_pro(source) -> bool:
 
 
 def _etherscan(scan, source_id, source, transport=None) -> EtherscanClient:
-    name = source.get("credential_env") if isinstance(source.get("credential_env"), str) else "ETHERSCAN_API_KEY"
+    default_name = "ROUTESCAN_API_KEY" if source.get("adapter") == "routescan" else "ETHERSCAN_API_KEY"
+    name = source.get("credential_env") if isinstance(source.get("credential_env"), str) else default_name
     secret = _secret(scan, name)
     return EtherscanClient(
         transport or scan.transport, source_id, credential=secret, credential_env=name, clock=scan.clock, sleep=_sleep(scan, source_id),
+        adapter=source.get("adapter", "etherscan_v2"),
     )
 
 

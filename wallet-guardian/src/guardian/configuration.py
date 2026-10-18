@@ -59,6 +59,7 @@ _USERINFO = re.compile(r"^[a-z][a-z0-9+.-]*://[^\s/]+@", re.IGNORECASE)
 _ADAPTER_FAMILY = {
     "evm_rpc": "evm",
     "etherscan_v2": "evm",
+    "routescan": "evm",
     "blockscout": "evm",
     "nodereal_transfers": "evm",
     "alchemy_transfers": "evm",
@@ -438,7 +439,7 @@ def _source_status(document: dict[str, Any], profile: dict[str, str], environ: M
             status[source_id] = SourceStatus(source_id, source["adapter"], source["enabled"] is True, False, "not_required", None)
             continue
         present = _credential_present(credential, profile, environ)
-        if not present and source.get("adapter") == "coingecko":
+        if not present and source.get("adapter") in {"coingecko", "routescan"}:
             # The public tier needs no key. A missing demo key is a lower limit, not a gap.
             status[source_id] = SourceStatus(
                 source_id, source["adapter"], source["enabled"] is True, False, "keyless", None,

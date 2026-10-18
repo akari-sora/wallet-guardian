@@ -867,6 +867,7 @@ def _mcm_coverage(args: argparse.Namespace) -> tuple[dict, int]:
         "rows": rows,
         "status": "ok",
         "credentials": fields["credentials"],
+        "endpoints": fields["endpoints"],
         "resolver": fields["resolver"],
         "connectivity": fields["connectivity"],
         "egress_qualification": fields["egress_qualification"],

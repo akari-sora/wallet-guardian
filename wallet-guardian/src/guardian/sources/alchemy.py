@@ -1,8 +1,8 @@
 """Alchemy Transfers reads for Base. Approval logs are not this path.
 
-The endpoint URL comes from ``ALCHEMY_TRANSFERS_URL``. Alchemy puts the key in
-that URL, so this module never appends ``ALCHEMY_API_KEY`` and never logs the
-URL. ``alchemy_getAssetTransfers`` is 120 compute units per call in Alchemy's
+The transport derives the Base endpoint from ``ALCHEMY_API_KEY`` unless
+``ALCHEMY_TRANSFERS_URL`` overrides it. This module never appends a key and
+never logs the URL. ``alchemy_getAssetTransfers`` is 120 compute units per call in Alchemy's
 published table; that cost is an estimate, not a live quota reading.
 
 Free-tier ``eth_getLogs`` is 10 blocks. This adapter does not call it.

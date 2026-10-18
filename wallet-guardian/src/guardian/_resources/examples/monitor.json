@@ -242,6 +242,13 @@
       "budget_group": "base-logs-drpc",
       "enabled": false,
       "range_limit": 100
+    },
+    "routescan": {
+      "adapter": "routescan",
+      "endpoint_env": "ROUTESCAN_API_BASE",
+      "credential_env": "ROUTESCAN_API_KEY",
+      "budget_group": "routescan-account",
+      "enabled": true
     }
   },
   "routing": [
@@ -271,6 +278,7 @@
       "capability": "history.native_external",
       "source_ids": [
         "etherscan",
+        "routescan",
         "blockscout-eth-public",
         "rpc-ethereum-mainnet"
       ]
@@ -472,6 +480,7 @@
       "capability": "history.native_external",
       "source_ids": [
         "etherscan",
+        "routescan",
         "rpc-avalanche-c"
       ]
     },
@@ -694,6 +703,12 @@
       "max_concurrency": 1,
       "max_requests_per_day": 10000,
       "retry_attempts": 3
+    },
+    "routescan-account": {
+      "max_rps": 1,
+      "max_concurrency": 1,
+      "max_requests_per_day": 10000,
+      "retry_attempts": 2
     }
   },
   "plugins": [

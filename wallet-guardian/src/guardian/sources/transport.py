@@ -13,11 +13,12 @@ import ipaddress
 import os
 import socket
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 
 from guardian.configuration import MaskedSecret
+from guardian.credentials import CredentialResolution, resolve_named
 from guardian.errors import ConfigError, GuardianError, SecurityError
 from guardian.security.redact import redact
 from guardian.security.ssrf import validate_url
@@ -60,10 +61,11 @@ class TransportError(GuardianError):
 class RegisteredSource:
     source_id: str
     adapter: str
-    endpoint: str
+    endpoint: str = field(repr=False)
     budget_group: str
     allow_private_network: bool
     credential: MaskedSecret | None = None
+    endpoint_provenance: dict[str, Any] | None = None
 
 
 @dataclass
@@ -415,13 +417,15 @@ def build_endpoint_registry(
         env_name = source.get("endpoint_env")
         if not isinstance(env_name, str):
             raise ConfigError("endpoint_env must be an env var name")
+        endpoint = resolve_source_endpoint(source, secrets, environ)
         registered[source_id] = RegisteredSource(
             source_id=source_id,
             adapter=str(source.get("adapter", "")),
-            endpoint=_lookup_endpoint(env_name, secrets, environ),
+            endpoint=endpoint.reveal(),
             budget_group=str(source.get("budget_group", "")),
             allow_private_network=_private_flag(local_profiles.get(source_id)),
             credential=_lookup_credential(source.get("credential_env"), secrets, environ),
+            endpoint_provenance=endpoint.provenance(),
         )
     return EndpointRegistry(registered)
 
@@ -431,12 +435,22 @@ def assert_no_public_local_flag(document: Mapping[str, Any]) -> None:
         raise SecurityError("public_local_profile", reason="public_local_profile")
 
 
-def _lookup_endpoint(env_name: str, secrets: Mapping[str, str], environ: Mapping[str, str]) -> str:
-    for pool in (secrets, environ):
-        value = pool.get(env_name)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
+def resolve_source_endpoint(
+    source: Mapping[str, Any], secrets: Mapping[str, str], environ: Mapping[str, str],
+) -> CredentialResolution:
+    """Resolve an explicit endpoint, or the Base-only Alchemy key fallback."""
+    env_name = source.get("endpoint_env")
+    if not isinstance(env_name, str):
+        raise ConfigError("endpoint_env must be an env var name")
+    endpoint = resolve_named(env_name, secrets, environ)
+    if not endpoint.present and source.get("adapter") == "alchemy_transfers" and env_name == "ALCHEMY_TRANSFERS_URL":
+        key = resolve_named("ALCHEMY_API_KEY", secrets, environ)
+        if key.present:
+            return CredentialResolution(
+                env_name, "derived_from_ALCHEMY_API_KEY", True, key.shadowed,
+                "https://base-mainnet.g.alchemy.com/v2/" + key.reveal(),
+            )
+    return endpoint
 
 
 def _lookup_credential(env_name: Any, secrets: Mapping[str, str], environ: Mapping[str, str]) -> MaskedSecret | None:
@@ -802,4 +816,3 @@ def _contains_key(value: Any, key: str) -> bool:
     if isinstance(value, list):
         return any(_contains_key(item, key) for item in value)
     return False
-

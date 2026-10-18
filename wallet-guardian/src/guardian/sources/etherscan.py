@@ -1,4 +1,4 @@
-"""Etherscan V2 reads over the existing read-only transport.
+"""Etherscan-compatible history reads over the existing read-only transport.
 
 The API key is a query parameter supplied by the caller. This module does not
 log it. A free-plan refusal is BLOCKED, not an empty wallet. A failed or
@@ -109,6 +109,8 @@ def plan_not_supported(body: Any) -> bool:
         return False
     if "max rate limit reached" in text:
         return False
+    if "chain not supported" in text:
+        return True
     if "not support" in text and ("free" in text or "plan" in text):
         return True
     return False
@@ -127,7 +129,7 @@ class _Counter:
 
 
 class EtherscanClient:
-    """GET /v2/api. Module and action are enforced by the transport policy."""
+    """Shared pagination for Etherscan V2 and optional-key Routescan history."""
 
     def __init__(
         self,
@@ -136,12 +138,16 @@ class EtherscanClient:
         *,
         credential: str,
         credential_env: str = "ETHERSCAN_API_KEY",
+        adapter: str = "etherscan_v2",
         clock: Callable[[], float] | None = None,
         sleep: Callable[[float], None] | None = None,
         random: Callable[[], float] | None = None,
     ) -> None:
-        if not isinstance(credential, str) or not credential:
+        if adapter not in {"etherscan_v2", "routescan"}:
+            raise ValueError("adapter")
+        if not isinstance(credential, str) or (not credential and adapter != "routescan"):
             raise ValueError("credential_missing")
+        self.adapter = adapter
         self.transport = transport
         self.source_id = source_id
         self.credential_env = credential_env
@@ -171,7 +177,6 @@ class EtherscanClient:
         query = {
             "action": action,
             "address": address,
-            "apikey": self._credential,
             "chainid": str(chain_id),
             "endblock": str(end_block),
             "module": module,
@@ -180,11 +185,16 @@ class EtherscanClient:
             "sort": "asc",
             "startblock": str(start_block),
         }
+        if self._credential:
+            query["apikey"] = self._credential
+        path = "/v2/api"
+        if self.adapter == "routescan":
+            path = f"/v2/network/mainnet/evm/{chain_id}/etherscan/api"
         return Operation(
             protocol="rest",
-            adapter="etherscan_v2",
+            adapter=self.adapter,
             http_method="GET",
-            path="/v2/api",
+            path=path,
             query=query,
         )
 
